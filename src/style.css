@@ -1638,12 +1638,64 @@ input:checked + .slider-knob:before {
   animation: spinClockwise 0.5s linear infinite;
 }
 
+
 @keyframes coreGlowPulse {
   0% {
     box-shadow: 0 0 15px rgba(168, 85, 247, 0.3);
   }
   100% {
     box-shadow: 0 0 35px rgba(168, 85, 247, 0.85), 0 0 15px rgba(0, 240, 255, 0.5);
+  }
+}
+
+/* Waking State Animations */
+.core-container.waking .core-outer {
+  animation: spinClockwise 0.6s linear infinite, coreWakeFlash 0.6s ease-out infinite alternate;
+}
+.core-container.waking .core-middle {
+  animation: spinCounterClockwise 0.4s linear infinite;
+}
+.core-container.waking .core-inner {
+  animation: spinClockwise 0.25s linear infinite;
+}
+.core-container.waking .core-center {
+  animation: coreWakeFlashCenter 0.6s ease-out infinite alternate;
+}
+
+@keyframes coreWakeFlash {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 10px rgba(0, 240, 255, 0.3);
+  }
+  100% {
+    transform: scale(1.05);
+    box-shadow: 0 0 35px rgba(0, 240, 255, 0.9), 0 0 20px rgba(168, 85, 247, 0.7);
+  }
+}
+
+@keyframes coreWakeFlashCenter {
+  0% {
+    transform: scale(0.9);
+    box-shadow: 0 0 15px var(--purple-neon);
+  }
+  100% {
+    transform: scale(1.2);
+    box-shadow: 0 0 45px #ffffff, 0 0 25px var(--cyan-neon);
+  }
+}
+
+.alexa-mode .core-container.waking .core-center {
+  animation: coreWakeFlashCenterAlexa 0.6s ease-out infinite alternate;
+}
+
+@keyframes coreWakeFlashCenterAlexa {
+  0% {
+    transform: scale(0.9);
+    box-shadow: 0 0 15px #0055ff;
+  }
+  100% {
+    transform: scale(1.2);
+    box-shadow: 0 0 45px #ffffff, 0 0 25px #00f0ff;
   }
 }
 

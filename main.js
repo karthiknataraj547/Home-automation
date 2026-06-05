@@ -25,6 +25,7 @@ const playlist = [
 let currentTrackIndex = 0;
 let isPlaying = false;
 let isPassiveListenEnabled = true;
+let isWakingUp = false;
 let currentWeatherCity = "";
 let activeFollowUp = null;
 let activePlatform = "Spotify";
@@ -297,6 +298,7 @@ function bindUIEvents() {
       if (coreBtn && !window.speechSynthesis.speaking && !voice.isLongConversation && !voice.isListeningForWakeWord) {
         coreBtn.classList.remove('listening');
         coreBtn.classList.remove('processing');
+        coreBtn.classList.remove('waking');
       }
 
       if (voice.isListeningForWakeWord) {
@@ -395,18 +397,28 @@ function bindUIEvents() {
       playFuturisticBeep();
     }
     
-    diag.logToTerminal("[AI CORE] Wake word 'LUKAS' recognized. Activating voice command link...", "info");
+    diag.logToTerminal("[AI CORE] Wake word 'LUKAS' recognized. Waking up core...", "info");
     
     const coreBtn = document.getElementById('lukasCoreBtn');
     if (coreBtn) {
-      coreBtn.classList.add('listening');
+      coreBtn.classList.add('waking');
+      coreBtn.classList.remove('listening');
       coreBtn.classList.remove('processing');
     }
 
+    voiceStatusText.textContent = isAlexa ? 'ALEXA AWAKE' : 'LUKAS AWAKE';
+    voiceStatusText.style.color = 'var(--cyan-neon)';
+
+    isWakingUp = true;
+    const greeting = isAlexa ? "Yes?" : "Yes, Commander?";
+    
+    // Display greeting bubble
+    appendChatBubble(greeting, 'assistant');
+    
+    // Speak the greeting vocally
     setTimeout(() => {
-      voice.startListeningForCommand();
-      startSilenceTimeout();
-    }, 450);
+      voice.speak(greeting);
+    }, 150);
   };
 
   voice.onSpeechStart = () => {
@@ -421,9 +433,26 @@ function bindUIEvents() {
     audioPlayer.volume = 0.35; // Restore music volume
     
     const coreBtn = document.getElementById('lukasCoreBtn');
+
+    if (isWakingUp) {
+      isWakingUp = false;
+      diag.logToTerminal("[AI CORE] Voice greeting finished. Listening for command...", "info");
+      
+      if (coreBtn) {
+        coreBtn.classList.remove('waking');
+        coreBtn.classList.add('listening');
+        coreBtn.classList.remove('processing');
+      }
+      
+      voice.startListeningForCommand();
+      startSilenceTimeout();
+      return;
+    }
+
     if (coreBtn && !voice.isLongConversation && !voice.isListeningForWakeWord) {
       coreBtn.classList.remove('listening');
       coreBtn.classList.remove('processing');
+      coreBtn.classList.remove('waking');
     }
 
     // In continuous mode, SpeechRecognition will restart automatically due to voice.js onend handler.
@@ -442,7 +471,8 @@ function bindUIEvents() {
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
     const coreBtn = document.getElementById('lukasCoreBtn');
     
-    if (voice.isListening) {
+    if (voice.isListening || isWakingUp) {
+      isWakingUp = false;
       isPassiveListenEnabled = false;
       voice.stopListeningForCommand();
       clearSilenceTimeout();
@@ -458,6 +488,7 @@ function bindUIEvents() {
       if (coreBtn) {
         coreBtn.classList.remove('listening');
         coreBtn.classList.remove('processing');
+        coreBtn.classList.remove('waking');
       }
     } else {
       isPassiveListenEnabled = true;
@@ -473,6 +504,7 @@ function bindUIEvents() {
       if (coreBtn) {
         coreBtn.classList.add('listening');
         coreBtn.classList.remove('processing');
+        coreBtn.classList.remove('waking');
       }
     }
   });
