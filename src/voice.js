@@ -17,6 +17,16 @@ class LukasVoiceController {
     this.isLongConversation = false;
     this.speakingText = '';
     
+    // safe start/stop state machine variables
+    this.isRecognitionActive = false;
+    this.isStopping = false;
+    this.pendingStart = false;
+    
+    // Robust command listening variables
+    this.isCommandListeningActive = false;
+    this.accumulatedSpeechText = "";
+    this.lastSessionTranscript = "";
+
     this.onSpeechStart = null;
     this.onSpeechEnd = null;
     this.onCommandRecognized = null;
@@ -64,24 +74,40 @@ class LukasVoiceController {
       this.recognition.lang = 'en-US';
 
       this.recognition.onstart = () => {
-        this.isListening = this.isLongConversation || !this.isListeningForWakeWord;
+        this.isRecognitionActive = true;
+        this.isListening = this.isLongConversation || this.isCommandListeningActive || !this.isListeningForWakeWord;
         if (this.onRecognitionStateChange) {
-          this.onRecognitionStateChange(this.isListeningForWakeWord ? 'wakeword' : (this.isLongConversation ? 'command' : 'off'));
+          if (this.isListeningForWakeWord) {
+            this.onRecognitionStateChange('wakeword');
+          } else if (this.isListening || this.isCommandListeningActive || this.isLongConversation) {
+            this.onRecognitionStateChange('command');
+          } else {
+            this.onRecognitionStateChange('off');
+          }
         }
       };
 
       this.recognition.onend = () => {
-        this.isListening = false;
-        if (this.onRecognitionStateChange) {
-          this.onRecognitionStateChange('off');
-        }
+        this.isRecognitionActive = false;
+        this.isStopping = false;
         
-        // Auto-restart if in wake-word mode or long conversation mode and stopped
-        if (this.isListeningForWakeWord || this.isLongConversation) {
-          try {
-            this.recognition.start();
-          } catch (e) {
-            // Already active or busy
+        // Handle pending state-machine start actions cleanly
+        if (this.pendingStart) {
+          this.pendingStart = false;
+          this.startRecognitionInternal();
+        } else if (this.isCommandListeningActive) {
+          // Save the current session's last transcript before restarting
+          if (this.lastSessionTranscript) {
+            this.accumulatedSpeechText = (this.accumulatedSpeechText + " " + this.lastSessionTranscript).trim();
+            this.lastSessionTranscript = "";
+          }
+          this.startRecognitionInternal();
+        } else if (this.isListeningForWakeWord || this.isLongConversation) {
+          this.startRecognitionInternal();
+        } else {
+          this.isListening = false;
+          if (this.onRecognitionStateChange) {
+            this.onRecognitionStateChange('off');
           }
         }
       };
@@ -89,11 +115,13 @@ class LukasVoiceController {
       this.recognition.onerror = (event) => {
         console.error("Speech recognition error:", event.error);
         
-        // Ignore noise/no-speech errors to avoid breaking continuous loops
-        if (event.error === 'no-speech' && (this.isListeningForWakeWord || this.isLongConversation)) {
+        // Ignore noise/no-speech errors to avoid breaking loops
+        if (event.error === 'no-speech' && (this.isListeningForWakeWord || this.isLongConversation || this.isCommandListeningActive)) {
           return; 
         }
 
+        // For other serious errors (blocked mic, no audio capture, etc.)
+        this.isCommandListeningActive = false;
         this.isListening = false;
         if (this.onRecognitionStateChange) {
           this.onRecognitionStateChange('off', event.error);
@@ -130,16 +158,25 @@ class LukasVoiceController {
           }
         }
 
+        // Keep track of the current session's latest transcript
+        this.lastSessionTranscript = fullTranscript;
+
+        // If we are accumulating transcripts across restarts
+        let displayTranscript = fullTranscript;
+        if (this.isCommandListeningActive && this.accumulatedSpeechText) {
+          displayTranscript = (this.accumulatedSpeechText + " " + fullTranscript).trim();
+        }
+
         // Trigger real-time interim speech detection callback
         if (this.onSpeechDetected) {
-          this.onSpeechDetected(fullTranscript);
+          this.onSpeechDetected(displayTranscript);
         }
 
         if (isFinal) {
-          console.log(`Speech recognized (final): "${fullTranscript}"`);
+          console.log(`Speech recognized (final): "${displayTranscript}"`);
           if (this.isListeningForWakeWord) {
-            const lowerText = fullTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-            if (lowerText.includes('lukas') || lowerText.includes('lucas') || lowerText.includes('lookas') || lowerText.includes('wake up')) {
+            const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+            if (lowerText.includes('lukas') || lowerText.includes('lucas') || lowerText.includes('lookas') || lowerText.includes('wake up') || lowerText.includes('alexa')) {
               console.log("Wake word detected!");
               this.stopWakeWordListener();
               if (this.onWakeWordDetected) {
@@ -149,12 +186,12 @@ class LukasVoiceController {
               console.log("Stop command detected during passive listening.");
               this.stopWakeWordListener();
               if (this.onCommandRecognized) {
-                this.onCommandRecognized(fullTranscript);
+                this.onCommandRecognized(displayTranscript);
               }
             }
           } else {
             if (this.onCommandRecognized) {
-              this.onCommandRecognized(fullTranscript);
+              this.onCommandRecognized(displayTranscript);
             }
           }
         }
@@ -164,28 +201,44 @@ class LukasVoiceController {
     }
   }
 
-  // Continuous background listener for "Lukas"
+  // Safe wrapper to prevent duplicate starts
+  startRecognitionInternal() {
+    if (this.isRecognitionActive) return;
+    try {
+      this.recognition.start();
+      this.isRecognitionActive = true;
+    } catch (e) {
+      console.warn("Failed to start speech recognition:", e);
+    }
+  }
+
+  // Safe wrapper to avoid overlap requests
+  stopRecognitionInternal() {
+    if (this.isRecognitionActive && !this.isStopping) {
+      this.isStopping = true;
+      try {
+        this.recognition.stop();
+      } catch (e) {}
+    }
+  }
+
+  // Continuous background listener for "Lukas" / "Alexa"
   startWakeWordListener() {
     if (!this.recognition) return;
     this.isListeningForWakeWord = true;
     if (this.synth) this.synth.cancel();
-    try {
-      this.recognition.start();
-    } catch (e) {
-      // Already active
+    
+    if (this.isStopping) {
+      this.pendingStart = true;
+    } else {
+      this.startRecognitionInternal();
     }
   }
 
   // Stop background listener
   stopWakeWordListener() {
     this.isListeningForWakeWord = false;
-    if (this.recognition) {
-      try {
-        this.recognition.stop();
-      } catch (e) {
-        // Already stopped
-      }
-    }
+    this.stopRecognitionInternal();
   }
 
   // Toggle vocal feedback output
@@ -262,7 +315,7 @@ class LukasVoiceController {
     }
 
     if (this.isListening) {
-      this.recognition.stop();
+      this.stopListeningForCommand();
       return false;
     }
 
@@ -270,21 +323,11 @@ class LukasVoiceController {
       this.isListeningForWakeWord = false;
     }
 
-    try {
-      if (this.synth) this.synth.cancel();
-      this.recognition.stop();
-    } catch (e) {}
-
-    setTimeout(() => {
-      try {
-        this.recognition.start();
-      } catch (err) {
-        console.error("Failed to start speech recognition:", err);
-      }
-    }, 150);
-
+    if (this.synth) this.synth.cancel();
+    this.startListeningForCommand();
     return true;
   }
+
   setVolume(vol) {
     this.vocalVolume = Math.max(0.0, Math.min(1.0, vol));
     localStorage.setItem('lukas_vocal_volume', this.vocalVolume);
@@ -298,20 +341,27 @@ class LukasVoiceController {
   startListeningForCommand() {
     this.isLongConversation = false;
     this.isListeningForWakeWord = false;
+    this.isCommandListeningActive = true;
+    this.accumulatedSpeechText = "";
+    this.lastSessionTranscript = "";
     if (this.synth) this.synth.cancel();
-    try {
-      this.recognition.start();
-    } catch (e) {}
+    
+    if (this.isStopping) {
+      this.pendingStart = true;
+    } else if (this.isRecognitionActive) {
+      // Stop first to force resetting the results array of the previous session
+      this.stopRecognitionInternal();
+      this.pendingStart = true;
+    } else {
+      this.startRecognitionInternal();
+    }
   }
 
   stopListeningForCommand() {
     this.isLongConversation = false;
     this.isListeningForWakeWord = false;
-    if (this.recognition) {
-      try {
-        this.recognition.stop();
-      } catch (e) {}
-    }
+    this.isCommandListeningActive = false;
+    this.stopRecognitionInternal();
   }
 }
 

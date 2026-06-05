@@ -368,15 +368,15 @@ function bindUIEvents() {
     
     accumulatedTranscript = transcript;
     
-    // Wait for 5 seconds of silence after the last word recognized before proceeding
+    // Wait for 3 seconds of silence after the last word recognized before proceeding
     proceedTimeout = setTimeout(() => {
       if (accumulatedTranscript.trim()) {
-        diag.logToTerminal(`[AI CORE] 5 seconds of silence detected after speech. Proceeding with command: "${accumulatedTranscript}"`, "info");
+        diag.logToTerminal(`[AI CORE] 3 seconds of silence detected after speech. Proceeding with command: "${accumulatedTranscript}"`, "info");
         voice.stopListeningForCommand();
         processCommand(accumulatedTranscript, 'voice');
         accumulatedTranscript = "";
       }
-    }, 5000);
+    }, 3000);
   }
 
   voice.onSpeechDetected = (transcript) => {
