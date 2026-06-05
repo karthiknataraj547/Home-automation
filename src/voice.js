@@ -22,6 +22,7 @@ class LukasVoiceController {
     this.onCommandRecognized = null;
     this.onRecognitionStateChange = null;
     this.onWakeWordDetected = null;
+    this.onSpeechDetected = null;
     
     this.preferredVoice = null;
     
@@ -58,7 +59,7 @@ class LukasVoiceController {
 
     try {
       this.recognition = new this.SpeechRecognition();
-      this.recognition.continuous = false;
+      this.recognition.continuous = true;
       this.recognition.interimResults = true; // Enabled interim results for fast interruption!
       this.recognition.lang = 'en-US';
 
@@ -100,12 +101,17 @@ class LukasVoiceController {
       };
 
       this.recognition.onresult = (event) => {
-        const resultText = event.results[event.resultIndex][0].transcript;
+        let fullTranscript = "";
+        for (let i = 0; i < event.results.length; i++) {
+          fullTranscript += event.results[i][0].transcript + " ";
+        }
+        fullTranscript = fullTranscript.trim();
+        
         const isFinal = event.results[event.resultIndex].isFinal;
         
         // Interrupt check while speaking
         if (this.synth && this.synth.speaking) {
-          const userSpeech = resultText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+          const userSpeech = fullTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
           const isEcho = this.speakingText && (this.speakingText.includes(userSpeech) || userSpeech.includes(this.speakingText));
           if (!isEcho && userSpeech.length > 2) {
             console.log(`[INTERRUPT] User spoke during vocalization: "${userSpeech}"`);
@@ -115,19 +121,24 @@ class LukasVoiceController {
             // Trigger speech end animations
             if (this.onSpeechEnd) this.onSpeechEnd();
             
-            if (isFinal) {
-              if (this.onCommandRecognized) {
-                this.onCommandRecognized(resultText);
-              }
-            }
+            // Stop and restart recognition to reset state
+            try { this.recognition.stop(); } catch(e) {}
+            setTimeout(() => {
+              try { this.recognition.start(); } catch(e) {}
+            }, 100);
             return;
           }
         }
 
+        // Trigger real-time interim speech detection callback
+        if (this.onSpeechDetected) {
+          this.onSpeechDetected(fullTranscript);
+        }
+
         if (isFinal) {
-          console.log(`Speech recognized: "${resultText}"`);
+          console.log(`Speech recognized (final): "${fullTranscript}"`);
           if (this.isListeningForWakeWord) {
-            const lowerText = resultText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+            const lowerText = fullTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
             if (lowerText.includes('lukas') || lowerText.includes('lucas') || lowerText.includes('lookas') || lowerText.includes('wake up')) {
               console.log("Wake word detected!");
               this.stopWakeWordListener();
@@ -138,12 +149,12 @@ class LukasVoiceController {
               console.log("Stop command detected during passive listening.");
               this.stopWakeWordListener();
               if (this.onCommandRecognized) {
-                this.onCommandRecognized(resultText);
+                this.onCommandRecognized(fullTranscript);
               }
             }
           } else {
             if (this.onCommandRecognized) {
-              this.onCommandRecognized(resultText);
+              this.onCommandRecognized(fullTranscript);
             }
           }
         }

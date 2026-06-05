@@ -325,8 +325,66 @@ function bindUIEvents() {
     }
   };
 
+  let noCommandTimeout = null;
+  let proceedTimeout = null;
+  let accumulatedTranscript = "";
+
+  function clearSilenceTimeout() {
+    if (noCommandTimeout) {
+      clearTimeout(noCommandTimeout);
+      noCommandTimeout = null;
+    }
+  }
+
+  function startSilenceTimeout() {
+    clearSilenceTimeout();
+    if (proceedTimeout) clearTimeout(proceedTimeout);
+    accumulatedTranscript = "";
+
+    noCommandTimeout = setTimeout(() => {
+      diag.logToTerminal("[AI CORE] 5 seconds of silence. No command detected.", "warn");
+      voice.stopListeningForCommand();
+      
+      const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
+      if (isAlexa) {
+        playAlexaErrorChime();
+      } else {
+        playShutdownBeep();
+      }
+      
+      voice.speak("I didn't get any command");
+      
+      const coreBtn = document.getElementById('lukasCoreBtn');
+      if (coreBtn) {
+        coreBtn.classList.remove('listening');
+        coreBtn.classList.remove('processing');
+      }
+    }, 5000);
+  }
+
+  function handleVoiceInput(transcript) {
+    clearSilenceTimeout();
+    if (proceedTimeout) clearTimeout(proceedTimeout);
+    
+    accumulatedTranscript = transcript;
+    
+    // Wait for 5 seconds of silence after the last word recognized before proceeding
+    proceedTimeout = setTimeout(() => {
+      if (accumulatedTranscript.trim()) {
+        diag.logToTerminal(`[AI CORE] 5 seconds of silence detected after speech. Proceeding with command: "${accumulatedTranscript}"`, "info");
+        voice.stopListeningForCommand();
+        processCommand(accumulatedTranscript, 'voice');
+        accumulatedTranscript = "";
+      }
+    }, 5000);
+  }
+
+  voice.onSpeechDetected = (transcript) => {
+    handleVoiceInput(transcript);
+  };
+
   voice.onCommandRecognized = (transcript) => {
-    processCommand(transcript, 'voice');
+    handleVoiceInput(transcript);
   };
 
   voice.onWakeWordDetected = () => {
@@ -347,6 +405,7 @@ function bindUIEvents() {
 
     setTimeout(() => {
       voice.startListeningForCommand();
+      startSilenceTimeout();
     }, 450);
   };
 
@@ -386,6 +445,10 @@ function bindUIEvents() {
     if (voice.isListening) {
       isPassiveListenEnabled = false;
       voice.stopListeningForCommand();
+      clearSilenceTimeout();
+      if (proceedTimeout) clearTimeout(proceedTimeout);
+      accumulatedTranscript = "";
+      
       if (isAlexa) {
         playAlexaErrorChime();
       } else {
@@ -399,6 +462,8 @@ function bindUIEvents() {
     } else {
       isPassiveListenEnabled = true;
       voice.startListeningForCommand();
+      startSilenceTimeout();
+      
       if (isAlexa) {
         playAlexaWakeChime();
       } else {
@@ -2468,6 +2533,16 @@ Mappings Guide:
 
 // 5. Intelligent rule-based command interpreter
 async function processCommand(rawCommand, source) {
+  // Clear any active voice capturing timeouts immediately
+  if (typeof noCommandTimeout !== 'undefined' && noCommandTimeout) {
+    clearTimeout(noCommandTimeout);
+    noCommandTimeout = null;
+  }
+  if (typeof proceedTimeout !== 'undefined' && proceedTimeout) {
+    clearTimeout(proceedTimeout);
+    proceedTimeout = null;
+  }
+
   const cmd = rawCommand.toLowerCase().trim();
   appendChatBubble(rawCommand, 'user');
   diag.spikeCPU();
