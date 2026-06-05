@@ -5,6 +5,7 @@ import LukasAutomationHub, { DEVICES, ROUTINES } from './src/automation.js';
 import LukasCCTVManager from './src/cctv.js';
 import LukasDiagnosticsHub from './src/diagnostics.js';
 import { fingerprintDevice, fingerprintBLE } from './src/deviceKnowledgeBase.js';
+import { loginUser, registerUser, isAuthenticated, logoutUser } from './src/auth.js';
 
 // Instantiate core hubs
 const voice = new LukasVoiceController();
@@ -340,8 +341,11 @@ const mediaArtistText = document.getElementById('mediaArtistText');
 const mediaArtNode = document.getElementById('mediaArtNode');
 const mediaPlayIcon = document.getElementById('mediaPlayIcon');
 
-// Initialize modules
-document.addEventListener('DOMContentLoaded', () => {
+// Initialize dashboard core components (invoked upon verified clearance)
+function initializeDashboard() {
+  const appContainer = document.getElementById('appContainer');
+  if (appContainer) appContainer.style.display = 'block';
+
   initClock();
   diag.initGauges();
   diag.initChartTooltip();
@@ -394,11 +398,20 @@ document.addEventListener('DOMContentLoaded', () => {
   connectLiveCamera();
   wireProbeButton();
 
+  // Run cinematic boot sequence then initial greeting
+  bootSequenceAnimation();
+}
+
+// Initialize modules on DOM load
+document.addEventListener('DOMContentLoaded', () => {
   // Initialize Jarvis particle canvas background
   initParticleCanvas();
 
-  // Run cinematic boot sequence then initial greeting
-  bootSequenceAnimation();
+  // Initialize light/dark theme rules
+  initTheme();
+
+  // Initialize terminal security authentication
+  initAuth();
 });
 
 // Cinematic Boot Sequence
@@ -4804,4 +4817,154 @@ function syncDashboardCustomDeviceStates() {
       }
     }
   });
+}
+
+// Theme Initialization and Toggle
+function initTheme() {
+  const savedTheme = localStorage.getItem('lukas_theme') || 'dark';
+  const body = document.body;
+  const themeBtn = document.getElementById('themeToggleBtn');
+  
+  if (savedTheme === 'light') {
+    body.classList.add('light-theme');
+    if (themeBtn) themeBtn.innerHTML = '<i class="fa-solid fa-sun"></i> THEME';
+  } else {
+    body.classList.remove('light-theme');
+    if (themeBtn) themeBtn.innerHTML = '<i class="fa-solid fa-moon"></i> THEME';
+  }
+
+  if (themeBtn) {
+    themeBtn.addEventListener('click', () => {
+      body.classList.toggle('light-theme');
+      const isLight = body.classList.contains('light-theme');
+      localStorage.setItem('lukas_theme', isLight ? 'light' : 'dark');
+      themeBtn.innerHTML = isLight ? '<i class="fa-solid fa-sun"></i> THEME' : '<i class="fa-solid fa-moon"></i> THEME';
+      
+      // Update terminal log
+      if (typeof diag !== 'undefined' && diag.logToTerminal) {
+        diag.logToTerminal(`[SYSTEM] Visual mode switch: ${isLight ? 'LIGHT DIRECTIVE' : 'DARK DIRECTIVE'}`, 'info');
+      }
+    });
+  }
+}
+
+// Authentication Screen Logic
+function initAuth() {
+  const authTerminal = document.getElementById('authTerminal');
+  const appContainer = document.getElementById('appContainer');
+  const authForm = document.getElementById('authForm');
+  const authUsername = document.getElementById('authUsername');
+  const authPassword = document.getElementById('authPassword');
+  const authStatusBar = document.getElementById('authStatusBar');
+  const authSubmitBtn = document.getElementById('authSubmitBtn');
+  const authTogglePrompt = document.getElementById('authTogglePrompt');
+  const authToggleModeBtn = document.getElementById('authToggleModeBtn');
+  const logoutBtn = document.getElementById('logoutBtn');
+
+  let isLoginMode = true;
+
+  // Logout listener
+  if (logoutBtn) {
+    logoutBtn.addEventListener('click', () => {
+      logoutUser();
+      if (typeof diag !== 'undefined' && diag.logToTerminal) {
+        diag.logToTerminal("[SYSTEM] Terminal clearance revoked. Logging out...", "warn");
+      }
+      location.reload();
+    });
+  }
+
+  // If already authenticated, bypass login
+  if (isAuthenticated()) {
+    if (authTerminal) authTerminal.style.display = 'none';
+    initializeDashboard();
+    return;
+  }
+
+  // Otherwise show login terminal
+  if (authTerminal) authTerminal.style.display = 'flex';
+  if (appContainer) appContainer.style.display = 'none';
+
+  // Toggle mode
+  if (authToggleModeBtn) {
+    authToggleModeBtn.addEventListener('click', () => {
+      isLoginMode = !isLoginMode;
+      authUsername.value = '';
+      authPassword.value = '';
+      authStatusBar.className = 'auth-status-bar';
+      
+      if (isLoginMode) {
+        authSubmitBtn.innerHTML = '<i class="fa-solid fa-unlock-keyhole"></i> INITIATE DECRYPTION';
+        authTogglePrompt.textContent = 'No profile registered?';
+        authToggleModeBtn.textContent = 'CREATE TERMINAL PROFILE';
+        authStatusBar.innerHTML = '<span class="pulse-indicator"></span> STANDBY FOR ID VERIFICATION';
+      } else {
+        authSubmitBtn.innerHTML = '<i class="fa-solid fa-user-plus"></i> REGISTER ACCESS PROFILE';
+        authTogglePrompt.textContent = 'Profile already exists?';
+        authToggleModeBtn.textContent = 'SIGN IN TERMINAL';
+        authStatusBar.innerHTML = '<span class="pulse-indicator"></span> REGISTRATION PORT ONLINE';
+      }
+    });
+  }
+
+  // Handle submit
+  if (authForm) {
+    authForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const user = authUsername.value.trim();
+      const pass = authPassword.value;
+      
+      if (!user || !pass) return;
+
+      authStatusBar.innerHTML = '<span class="pulse-indicator"></span> PROCESSING SECURITY DECRYPT...';
+      authStatusBar.className = 'auth-status-bar';
+
+      if (isLoginMode) {
+        const res = await loginUser(user, pass);
+        if (res.success) {
+          authStatusBar.className = 'auth-status-bar success';
+          authStatusBar.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${res.message.toUpperCase()}`;
+          
+          setTimeout(() => {
+            // Fade out auth terminal
+            authTerminal.style.transition = 'opacity 0.4s ease, transform 0.4s ease';
+            authTerminal.style.opacity = '0';
+            authTerminal.style.transform = 'scale(1.02)';
+            
+            setTimeout(() => {
+              authTerminal.style.display = 'none';
+              initializeDashboard();
+            }, 400);
+          }, 800);
+        } else {
+          authStatusBar.className = 'auth-status-bar error';
+          authStatusBar.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> ${res.message.toUpperCase()}`;
+          playAlexaErrorChime();
+        }
+      } else {
+        // Sign Up mode
+        const res = await registerUser(user, pass);
+        if (res.success) {
+          authStatusBar.className = 'auth-status-bar success';
+          authStatusBar.innerHTML = `<i class="fa-solid fa-circle-check"></i> ${res.message.toUpperCase()}`;
+          
+          // Switch back to login mode
+          setTimeout(() => {
+            isLoginMode = true;
+            authSubmitBtn.innerHTML = '<i class="fa-solid fa-unlock-keyhole"></i> INITIATE DECRYPTION';
+            authTogglePrompt.textContent = 'No profile registered?';
+            authToggleModeBtn.textContent = 'CREATE TERMINAL PROFILE';
+            authUsername.value = user;
+            authPassword.value = '';
+            authStatusBar.className = 'auth-status-bar success';
+            authStatusBar.innerHTML = '<i class="fa-solid fa-circle-check"></i> PROFILE CREATED. ENTER KEYPHRASE.';
+          }, 1500);
+        } else {
+          authStatusBar.className = 'auth-status-bar error';
+          authStatusBar.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> ${res.message.toUpperCase()}`;
+          playAlexaErrorChime();
+        }
+      }
+    });
+  }
 }

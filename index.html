@@ -19,12 +19,15 @@
   <div class="hud-corner hud-corner-bl"></div>
   <div class="hud-corner hud-corner-br"></div>
 
+    <div id="appContainer" style="display: none;">
     <header>
       <div class="brand-section">
         <div class="pulse-indicator" id="statusPulse"></div>
         <h1>LUKAS</h1>
         <span class="version">CORE v4.8.2</span>
         <button id="openNodeManagerBtn" class="btn-node-manager" style="margin-left: 1rem; background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.3); color: #d8b4fe; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;" onmouseover="this.style.background='var(--purple-neon)'; this.style.color='var(--color-bg)';" onmouseout="this.style.background='rgba(168, 85, 247, 0.1)'; this.style.color='#d8b4fe';"><i class="fa-solid fa-gears"></i> SYSTEM SETTINGS</button>
+        <button id="themeToggleBtn" class="btn-node-manager" style="margin-left: 0.5rem; background: rgba(0, 240, 255, 0.1); border: 1px solid rgba(0, 240, 255, 0.3); color: #99f6ff; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;"><i class="fa-solid fa-moon"></i> THEME</button>
+        <button id="logoutBtn" class="btn-node-manager" style="margin-left: 0.5rem; background: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.3); color: #fecdd3; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;"><i class="fa-solid fa-sign-out"></i> LOGOUT</button>
       </div>
       
       <div class="system-status">
@@ -942,6 +945,50 @@
           </div>
         </div>
 
+      </div>
+    </div>
+
+    </div> <!-- end appContainer -->
+
+    <!-- Holographic Auth Terminal Overlay -->
+    <div id="authTerminal" class="auth-terminal-container">
+      <div class="auth-card">
+        <!-- Corner Brackets for the auth terminal card -->
+        <div class="auth-card-corner acc-tl"></div>
+        <div class="auth-card-corner acc-tr"></div>
+        <div class="auth-card-corner acc-bl"></div>
+        <div class="auth-card-corner acc-br"></div>
+
+        <div class="auth-logo">
+          <i class="fa-solid fa-shield-halved auth-shield"></i>
+          <h2>TERMINAL ACCESS</h2>
+          <span class="auth-subtitle">SECURITY INTEGRITY GATEWAY</span>
+        </div>
+
+        <div class="auth-status-bar" id="authStatusBar">
+          <span class="pulse-indicator"></span> STANDBY FOR ID VERIFICATION
+        </div>
+
+        <form id="authForm" autocomplete="off" onsubmit="return false;">
+          <div class="input-group">
+            <label for="authUsername"><i class="fa-solid fa-user-ninja"></i> IDENTITY SIGNATURE</label>
+            <input type="text" id="authUsername" placeholder="Enter identifier..." required />
+          </div>
+
+          <div class="input-group">
+            <label for="authPassword"><i class="fa-solid fa-key"></i> ACCESS KEYPHRASE</label>
+            <input type="password" id="authPassword" placeholder="Enter keyphrase..." required />
+          </div>
+
+          <button type="submit" id="authSubmitBtn" class="auth-submit-btn">
+            <i class="fa-solid fa-unlock-keyhole"></i> INITIATE DECRYPTION
+          </button>
+        </form>
+
+        <div class="auth-toggle-area">
+          <span id="authTogglePrompt">No clearance profile registered?</span>
+          <button id="authToggleModeBtn" class="auth-toggle-link">CREATE TERMINAL PROFILE</button>
+        </div>
       </div>
     </div>
 
