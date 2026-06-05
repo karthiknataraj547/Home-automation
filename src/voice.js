@@ -168,7 +168,7 @@ class LukasVoiceController {
         }
 
         // Trigger real-time interim speech detection callback
-        if (this.onSpeechDetected) {
+        if (!this.isListeningForWakeWord && this.onSpeechDetected) {
           this.onSpeechDetected(displayTranscript);
         }
 
