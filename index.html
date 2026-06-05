@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/public/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LUKAS // AI Home Automation & Assistant</title>
+    <!-- FontAwesome for high-tech icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <!-- hls.js for in-browser HLS playback (camera feed) -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
+  </head>
+  <body>
+    <header>
+      <div class="brand-section">
+        <div class="pulse-indicator" id="statusPulse"></div>
+        <h1>LUKAS</h1>
+        <span class="version">CORE v4.8.2</span>
+        <button id="openNodeManagerBtn" class="btn-node-manager" style="margin-left: 1rem; background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.3); color: #d8b4fe; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;" onmouseover="this.style.background='var(--purple-neon)'; this.style.color='var(--color-bg)';" onmouseout="this.style.background='rgba(168, 85, 247, 0.1)'; this.style.color='#d8b4fe';"><i class="fa-solid fa-gears"></i> SYSTEM SETTINGS</button>
+      </div>
+      
+      <div class="system-status">
+        <div class="status-item">
+          <span class="status-label">Local Time</span>
+          <span class="status-value" id="systemClock">00:00:00</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">Network Sync</span>
+          <span class="status-value normal" id="netSyncStatus">SECURE</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">AI Matrix Load</span>
+          <span class="status-value normal" id="matrixLoadVal">1.2 TFLOPs</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">System Shield</span>
+          <span class="status-value normal" id="shieldStatus">98.4%</span>
+        </div>
+      </div>
+    </header>
+
+    <div class="dashboard-container">
+      <!-- Left Panel: Lukas Assistant & Audio -->
+      <aside class="panel-column">
+        <!-- Interactive Assistant Core -->
+        <section class="widget core-widget">
+          <div class="widget-title">
+            <span><i class="fa-solid fa-microchip"></i> LUKAS MAIN CORE</span>
+            <span id="voiceStatusText" style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--cyan-neon);">IDLE</span>
+          </div>
+          
+          <div class="core-container" id="lukasCoreBtn" title="Click to trigger voice activation">
+            <div class="core-ring core-outer"></div>
+            <div class="core-ring core-middle"></div>
+            <div class="core-ring core-inner"></div>
+            <div class="core-center" id="coreCenterNode"></div>
+          </div>
+          
+          <div class="core-waveform" id="audioWaveform">
+            <div class="wave-bar" style="animation-delay: 0.1s"></div>
+            <div class="wave-bar" style="animation-delay: 0.3s"></div>
+            <div class="wave-bar" style="animation-delay: 0.5s"></div>
+            <div class="wave-bar" style="animation-delay: 0.2s"></div>
+            <div class="wave-bar" style="animation-delay: 0.4s"></div>
+            <div class="wave-bar" style="animation-delay: 0.6s"></div>
+            <div class="wave-bar" style="animation-delay: 0.1s"></div>
+            <div class="wave-bar" style="animation-delay: 0.3s"></div>
+            <div class="wave-bar" style="animation-delay: 0.5s"></div>
+          </div>
+        </section>
+
+        <!-- Conversational Interface -->
+        <section class="widget chat-widget">
+          <div class="widget-title">
+            <span><i class="fa-regular fa-comment-dots"></i> CONSOLE DIALOGUE</span>
+            <span style="font-size: 0.65rem; color: #64748b;" id="speechSupportMsg">WebSpeech Active</span>
+          </div>
+          <div class="chat-messages" id="chatHistory">
+            <div class="chat-bubble system">
+              LUKAS System Initialize... Core subroutines online. Ready for command.
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <input type="text" class="chat-input" id="chatInputField" placeholder="Initiate directive..." />
+            <button class="btn-icon" id="micBtn" title="Activate voice transcription">
+              <i class="fa-solid fa-microphone"></i>
+            </button>
+            <button class="btn-icon" id="audioToggleBtn" title="Mute/Unmute vocalization">
+              <i class="fa-solid fa-volume-high"></i>
+            </button>
+          </div>
+        </section>
+      </aside>
+
+      <!-- Center Panel: Climate, Automations & Routines -->
+      <main class="main-dashboard">
+        <!-- Climate and Environment Card -->
+        <section class="widget">
+          <div class="widget-title">
+            <span><i class="fa-solid fa-temperature-half"></i> ECO-CLIMATE CONTROLLER</span>
+            <span style="font-family: var(--font-mono); font-size: 0.7rem; color: var(--emerald-neon);">TARGET TEMPERATURE RESIDUALS</span>
+          </div>
+          <div class="climate-grid">
+            <div class="thermostat-widget">
+              <div class="thermostat-dial-container">
+                <svg class="thermostat-svg" width="120" height="120">
+                  <defs>
+                    <linearGradient id="climateGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                      <stop offset="0%" stop-color="#3b82f6" />
+                      <stop offset="50%" stop-color="#10b981" />
+                      <stop offset="100%" stop-color="#ef4444" />
+                    </linearGradient>
+                  </defs>
+                  <circle class="thermostat-track" cx="60" cy="60" r="50"></circle>
+                  <circle class="thermostat-value-arc" id="tempDialArc" cx="60" cy="60" r="50" stroke-dasharray="314.16" stroke-dashoffset="157.08"></circle>
+                </svg>
+                <div class="thermostat-info">
+                  <div class="thermostat-number"><span id="targetTempText">22</span><span class="thermostat-degree">Â°C</span></div>
+                  <div class="thermostat-mode" id="thermostatModeLabel">COOL</div>
+                </div>
+              </div>
+              <div class="thermostat-controls">
+                <button class="btn-temp" id="tempDownBtn">-</button>
+                <button class="btn-temp" id="tempUpBtn">+</button>
+              </div>
+            </div>
+            
+            <div class="climate-status-panel">
+              <div class="climate-card">
+                <span class="climate-card-label">Indoor Sensor</span>
+                <span class="climate-card-val" id="indoorTempText">22.4Â°C</span>
+              </div>
+              <div class="climate-card" id="weatherDisplayCard" style="cursor: pointer;" title="Click to refresh local weather">
+                <span class="climate-card-label" id="weatherLocationLabel">Outdoor Weather</span>
+                <span class="climate-card-val" id="weatherDetailsText" style="color: var(--cyan-neon); font-size: 0.85rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Loading...</span>
+              </div>
+              <div class="climate-card">
+                <span class="climate-card-label">Air Purity</span>
+                <span class="climate-card-val" id="airQualityText" style="color: var(--emerald-neon);">98 AQI</span>
+              </div>
+              <div class="climate-modes">
+                <button class="btn-mode active" data-mode="cool">Cool</button>
+                <button class="btn-mode" data-mode="heat">Heat</button>
+                <button class="btn-mode" data-mode="eco">Eco Mode</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Automation Cards -->
+        <section class="widget scrollable" style="display: flex; flex-direction: column;">
+          <div class="widget-title">
+            <span><i class="fa-solid fa-sliders"></i> DYNAMIC ZONE AUTOMATION</span>
+            <span style="font-size: 0.65rem; color: #64748b;">ACTIVE LIGHTS: <span id="activeLightsCount">1/3</span></span>
+          </div>
+          
+          <div class="automation-zones">
+            <!-- Living Room -->
+            <div class="zone-card active" id="zoneLivingRoom" style="--zone-color: #00f0ff; --zone-color-glow: rgba(0, 240, 255, 0.15)">
+              <div class="zone-header">
+                <span class="zone-title">LIVING ROOM</span>
+                <i class="fa-solid fa-couch zone-icon"></i>
+              </div>
+              <div class="zone-body">
+                <div class="control-row">
+                  <span class="control-label">Ambient Lighting</span>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="lightSwitchLiving" checked />
+                    <span class="slider-knob"></span>
+                  </label>
+                </div>
+                <div class="control-row">
+                  <span class="control-label">Brightness</span>
+                  <input type="range" class="range-slider" id="dimmerLiving" min="10" max="100" value="80" />
+                </div>
+                <div class="control-row">
+                  <span class="control-label">RGB Spectrum</span>
+                  <div class="color-picker-wrapper">
+                    <input type="color" class="color-input" id="colorLiving" value="#00f0ff" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Bedroom -->
+            <div class="zone-card" id="zoneBedroom" style="--zone-color: #a855f7; --zone-color-glow: rgba(168, 85, 247, 0.15)">
+              <div class="zone-header">
+                <span class="zone-title">BEDROOM</span>
+                <i class="fa-solid fa-bed zone-icon"></i>
+              </div>
+              <div class="zone-body">
+                <div class="control-row">
+                  <span class="control-label">Lighting System</span>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="lightSwitchBedroom" />
+                    <span class="slider-knob"></span>
+                  </label>
+                </div>
+                <div class="control-row">
+                  <span class="control-label">Brightness</span>
+                  <input type="range" class="range-slider" id="dimmerBedroom" min="10" max="100" value="50" />
+                </div>
+                <div class="control-row">
+                  <span class="control-label">RGB Spectrum</span>
+                  <div class="color-picker-wrapper">
+                    <input type="color" class="color-input" id="colorBedroom" value="#a855f7" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Kitchen -->
+            <div class="zone-card" id="zoneKitchen" style="--zone-color: #10b981; --zone-color-glow: rgba(16, 185, 129, 0.15)">
+              <div class="zone-header">
+                <span class="zone-title">KITCHEN</span>
+                <i class="fa-solid fa-kitchen-set zone-icon"></i>
+              </div>
+              <div class="zone-body">
+                <div class="control-row">
+                  <span class="control-label">Smart Lighting</span>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="lightSwitchKitchen" />
+                    <span class="slider-knob"></span>
+                  </label>
+                </div>
+                <div class="control-row">
+                  <span class="control-label">Brightness</span>
+                  <input type="range" class="range-slider" id="dimmerKitchen" min="10" max="100" value="60" />
+                </div>
+                <div class="control-row">
+                  <span class="control-label">RGB Spectrum</span>
+                  <div class="color-picker-wrapper">
+                    <input type="color" class="color-input" id="colorKitchen" value="#10b981" />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Security Zone / Outdoor -->
+            <div class="zone-card active" id="zoneOutdoor" style="--zone-color: #f43f5e; --zone-color-glow: rgba(244, 63, 94, 0.15)">
+              <div class="zone-header">
+                <span class="zone-title">OUTDOOR & GATE</span>
+                <i class="fa-solid fa-shield-halved zone-icon"></i>
+              </div>
+              <div class="zone-body">
+                <div class="control-row">
+                  <span class="control-label">Smart Lock</span>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="doorLockOutdoor" checked />
+                    <span class="slider-knob"></span>
+                  </label>
+                </div>
+                <div class="control-row">
+                  <span class="control-label">Floodlights</span>
+                  <label class="toggle-switch">
+                    <input type="checkbox" id="floodlightsOutdoor" />
+                    <span class="slider-knob"></span>
+                  </label>
+                </div>
+                <div class="control-row">
+                  <span class="control-label">Gate Access</span>
+                  <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--rose-neon);" id="lockStatusText">LOCKED</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Center Bottom: Routines & Audio Widget -->
+        <div class="center-bottom-grid">
+          <!-- Routines Control -->
+          <section class="widget routines-widget">
+            <div class="widget-title">
+              <span><i class="fa-solid fa-wand-magic-sparkles"></i> SMART AUTOMATION ROUTINES</span>
+            </div>
+            <div class="routines-grid">
+              <button class="btn-routine" id="routineMorningBtn" data-routine="morning">
+                <i class="fa-solid fa-sun"></i> Morning
+              </button>
+              <button class="btn-routine" id="routineCinemaBtn" data-routine="cinema">
+                <i class="fa-solid fa-film"></i> Cinema
+              </button>
+              <button class="btn-routine" id="routineEcoBtn" data-routine="eco">
+                <i class="fa-solid fa-leaf"></i> Eco Mode
+              </button>
+              <button class="btn-routine lockdown" id="routineLockdownBtn" data-routine="lockdown">
+                <i class="fa-solid fa-skull-crossbones"></i> Lockdown
+              </button>
+            </div>
+          </section>
+
+          <!-- Entertainment Widget -->
+          <section class="widget media-widget">
+            <div class="widget-title">
+              <span><i class="fa-solid fa-compact-disc"></i> ENTERTAINMENT ZONE</span>
+              <span id="mediaSourceText" style="font-size: 0.65rem; color: #64748b;">SPOTIFY</span>
+            </div>
+            <div class="media-container" style="flex-direction: column; gap: 0.6rem; align-items: stretch;">
+              <div style="display: flex; align-items: center; gap: 0.75rem; width: 100%;">
+                <div class="media-art" id="mediaArtNode">
+                  <i class="fa-solid fa-music"></i>
+                </div>
+                <div class="media-info" style="flex: 1;">
+                  <div class="media-title" id="mediaTitleText">Ambient Horizon</div>
+                  <div class="media-artist" id="mediaArtistText">Lukas Synth Engine</div>
+                </div>
+                <div class="media-controls">
+                  <button class="btn-media" id="mediaPrevBtn" title="Previous Track">
+                    <i class="fa-solid fa-backward"></i>
+                  </button>
+                  <button class="btn-media play-pause" id="mediaPlayBtn" title="Play/Pause">
+                    <i class="fa-solid fa-play" id="mediaPlayIcon"></i>
+                  </button>
+                  <button class="btn-media" id="mediaNextBtn" title="Next Track">
+                    <i class="fa-solid fa-forward"></i>
+                  </button>
+                </div>
+              </div>
+              <!-- Music Platforms Router -->
+              <div class="media-platforms-router" style="display: flex; justify-content: space-between; align-items: center; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 0.4rem;">
+                <span style="font-family: var(--font-mono); font-size: 0.55rem; color: #64748b;">ROUTE PLAYBACK:</span>
+                <div style="display: flex; gap: 0.6rem;">
+                  <button class="platform-btn active" data-platform="spotify" title="Route via Spotify" style="background:transparent; border:none; color:#1DB954; font-size:0.85rem; cursor:pointer; opacity:1; transition:all 0.2s;"><i class="fa-brands fa-spotify"></i></button>
+                  <button class="platform-btn" data-platform="apple" title="Route via Apple Play" style="background:transparent; border:none; color:#FC3C44; font-size:0.85rem; cursor:pointer; opacity:0.4; transition:all 0.2s;"><i class="fa-brands fa-apple"></i></button>
+                  <button class="platform-btn" data-platform="amazon" title="Route via Amazon Music" style="background:transparent; border:none; color:#00A8E1; font-size:0.85rem; cursor:pointer; opacity:0.4; transition:all 0.2s;"><i class="fa-brands fa-amazon"></i></button>
+                  <button class="platform-btn" data-platform="youtube" title="Route via YouTube Music" style="background:transparent; border:none; color:#FF0000; font-size:0.85rem; cursor:pointer; opacity:0.4; transition:all 0.2s;"><i class="fa-brands fa-youtube"></i></button>
+                </div>
+              </div>
+
+              <!-- Custom Audio Stream Input -->
+              <div class="custom-stream-row" style="display: flex; gap: 0.4rem; border-top: 1px dashed rgba(255,255,255,0.06); padding-top: 0.5rem; align-items: center;">
+                <input type="text" id="customAudioUrlInput" placeholder="Paste direct MP3 or stream URL..." style="flex: 1; background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); color: #fff; border-radius: 4px; padding: 0.35rem 0.5rem; font-size: 0.6rem; font-family: var(--font-mono); height: 26px;" />
+                <button id="loadCustomAudioBtn" class="btn-routine" style="padding: 0.35rem 0.6rem; font-size: 0.55rem; border-color: var(--cyan-neon); color: var(--cyan-neon); height: 26px; white-space: nowrap; display: flex; align-items: center; gap: 0.25rem; cursor: pointer;">
+                  <i class="fa-solid fa-play"></i> STREAM
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </main>
+
+      <!-- Right Panel: CCTV Network & System Diagnostics -->
+      <aside class="panel-column">
+        <!-- CCTV Surveillance feeds -->
+        <section class="widget cctv-widget">
+          <div class="widget-title">
+            <span><i class="fa-solid fa-video"></i> MATRIX SURVEILLANCE FEED</span>
+            <span style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--rose-neon);" id="cctvAlertText">CAMS: NORMAL</span>
+          </div>
+
+          <!-- CAM 01: Real EseeCloud IP Camera live HLS feed -->
+          <div style="position: relative; width: 100%; height: 190px; background: #000; border-radius: 6px; overflow: hidden; border: 1px solid rgba(0,240,255,0.12); margin-bottom: 0.6rem;">
+            <!-- Overlay header -->
+            <div class="cctv-overlay" style="display:flex; justify-content:space-between; align-items:center; padding: 0.3rem 0.5rem;">
+              <span class="cctv-cam-name">CAM 01 // ESEECLOUD LIVE</span>
+              <span id="cam1StatusBadge" style="font-family:var(--font-mono); font-size:0.55rem; background: rgba(0,0,0,0.5); padding: 2px 6px; border-radius: 3px; color: #94a3b8;"><span class="cctv-rec-dot" style="background:#94a3b8;"></span> CONNECTING...</span>
+            </div>
+
+            <!-- Actual HLS video -->
+            <video id="cctvLive1"
+              autoplay playsinline muted
+              style="width:100%; height:160px; display:block; object-fit:cover; background:#000;">
+            </video>
+
+            <!-- Loading / offline placeholder shown when video is not ready -->
+            <div id="cam1Placeholder" style="position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; background: linear-gradient(135deg, #0a0a1a 0%, #0d1117 100%); z-index:5;">
+              <div id="cam1PlaceholderIcon" style="font-size:2rem; color:#334155; margin-bottom:0.5rem;"><i class="fa-solid fa-video-slash"></i></div>
+              <div id="cam1PlaceholderText" style="font-family:var(--font-mono); font-size:0.6rem; color:#475569; text-align:center; max-width:90%; line-height:1.5;">STREAM OFFLINE<br>Use Settings â†’ CCTV Config to connect</div>
+              <!-- Probe button -->
+              <button id="cam1ProbeBtn" style="margin-top:0.75rem; background:rgba(0,240,255,0.08); border:1px solid rgba(0,240,255,0.2); color:var(--cyan-neon); font-family:var(--font-mono); font-size:0.55rem; padding:0.3rem 0.75rem; border-radius:4px; cursor:pointer; letter-spacing:0.05em;">
+                <i class="fa-solid fa-satellite-dish"></i> AUTO-PROBE CAMERA
+              </button>
+              <a href="https://v.dvr163.com/#/" target="_blank" style="margin-top:0.5rem; font-family:var(--font-mono); font-size:0.52rem; color:#64748b; text-decoration:underline;">Open EseeCloud Web Portal (v.dvr163.com) ↗</a>
+            </div>
+            <div class="cctv-scanline" style="z-index:6; pointer-events:none;"></div>
+          </div>
+
+          <!-- Cams 2-4: Simulated grid -->
+          <div class="cctv-grid" style="grid-template-columns: repeat(3,1fr); gap: 0.35rem;">
+            <div class="cctv-camera-feed" data-camera="2" style="height:80px;">
+              <div class="cctv-overlay"><span class="cctv-cam-name" style="font-size:0.5rem;">CAM 02 // LIVING</span><span><span class="cctv-rec-dot"></span></span></div>
+              <canvas class="cctv-canvas" id="cctvCam2"></canvas>
+              <div class="cctv-scanline"></div>
+            </div>
+            <div class="cctv-camera-feed" data-camera="3" style="height:80px;">
+              <div class="cctv-overlay"><span class="cctv-cam-name" style="font-size:0.5rem;">CAM 03 // YARD</span><span><span class="cctv-rec-dot"></span></span></div>
+              <canvas class="cctv-canvas" id="cctvCam3"></canvas>
+              <div class="cctv-scanline"></div>
+            </div>
+            <div class="cctv-camera-feed" data-camera="4" style="height:80px;">
+              <div class="cctv-overlay"><span class="cctv-cam-name" style="font-size:0.5rem;">CAM 04 // VAULT</span><span><span class="cctv-rec-dot"></span></span></div>
+              <canvas class="cctv-canvas" id="cctvCam4"></canvas>
+              <div class="cctv-scanline"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- System Diagnostics and Gauge Matrix -->
+        <section class="widget diagnostics-widget">
+          <div class="widget-title">
+            <span><i class="fa-solid fa-gauge-high"></i> SYSTEM DIAGNOSTICS & ENCRYPT</span>
+            <span style="font-family: var(--font-mono); font-size: 0.65rem; color: var(--cyan-neon);" id="diagStatusText">STABLE</span>
+          </div>
+          
+          <div class="diagnostics-grid">
+            <!-- CPU Gauge -->
+            <div class="gauge-card">
+              <div class="gauge-chart-container">
+                <svg class="gauge-svg" width="45" height="45">
+                  <circle class="gauge-bg-circle" cx="22.5" cy="22.5" r="20"></circle>
+                  <circle class="gauge-value-circle" id="cpuGaugeArc" cx="22.5" cy="22.5" r="20" style="--gauge-color: var(--cyan-neon)"></circle>
+                </svg>
+                <div class="gauge-text" id="cpuGaugeText">15%</div>
+              </div>
+              <div class="gauge-info">
+                <span class="gauge-label">CPU Load</span>
+                <span class="gauge-val" id="cpuDetailText">4.2 GHz</span>
+              </div>
+            </div>
+
+            <!-- Memory Gauge -->
+            <div class="gauge-card">
+              <div class="gauge-chart-container">
+                <svg class="gauge-svg" width="45" height="45">
+                  <circle class="gauge-bg-circle" cx="22.5" cy="22.5" r="20"></circle>
+                  <circle class="gauge-value-circle" id="ramGaugeArc" cx="22.5" cy="22.5" r="20" style="--gauge-color: var(--purple-neon)"></circle>
+                </svg>
+                <div class="gauge-text" id="ramGaugeText">42%</div>
+              </div>
+              <div class="gauge-info">
+                <span class="gauge-label">RAM Usage</span>
+                <span class="gauge-val" id="ramDetailText">6.7 GB</span>
+              </div>
+            </div>
+
+            <!-- Temperature Gauge -->
+            <div class="gauge-card">
+              <div class="gauge-chart-container">
+                <svg class="gauge-svg" width="45" height="45">
+                  <circle class="gauge-bg-circle" cx="22.5" cy="22.5" r="20"></circle>
+                  <circle class="gauge-value-circle" id="tempGaugeArc" cx="22.5" cy="22.5" r="20" style="--gauge-color: var(--amber-neon)"></circle>
+                </svg>
+                <div class="gauge-text" id="tempGaugeText">48Â°</div>
+              </div>
+              <div class="gauge-info">
+                <span class="gauge-label">Core Temp</span>
+                <span class="gauge-val" id="tempDetailText">48.2Â°C</span>
+              </div>
+            </div>
+
+            <!-- Encryption & Security Gauge -->
+            <div class="gauge-card">
+              <div class="gauge-chart-container">
+                <svg class="gauge-svg" width="45" height="45">
+                  <circle class="gauge-bg-circle" cx="22.5" cy="22.5" r="20"></circle>
+                  <circle class="gauge-value-circle" id="securityGaugeArc" cx="22.5" cy="22.5" r="20" style="--gauge-color: var(--emerald-neon)"></circle>
+                </svg>
+                <div class="gauge-text" id="securityGaugeText">SEC</div>
+              </div>
+              <div class="gauge-info">
+                <span class="gauge-label">Shield Integrity</span>
+                <span class="gauge-val" id="securityDetailText">SHA-512</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Terminal output logger -->
+          <div class="terminal-console" id="terminalLogContainer">
+            <div class="terminal-line"><span class="terminal-prompt">&gt;</span> LUKAS OS Bootloader Loaded.</div>
+            <div class="terminal-line"><span class="terminal-prompt">&gt;</span> System diagnostic checks: 100% OK.</div>
+            <div class="terminal-line"><span class="terminal-prompt">&gt;</span> Secure tunnel established to home automation hub.</div>
+            <div class="terminal-line"><span class="terminal-prompt">&gt;</span> Monitoring active channels for command...<span class="terminal-cursor"></span></div>
+          </div>
+        </section>
+      </aside>
+    </div>
+
+    <!-- Power Analytics Dashboard in the Footer (SVG energy plot) -->
+    <div style="padding: 0 1.25rem 1.25rem 1.25rem;">
+      <section class="widget">
+        <div class="widget-title">
+          <span><i class="fa-solid fa-bolt"></i> REAL-TIME SOLAR ENERGY GENERATION VS HOME CONSUMPTION</span>
+          <span style="font-family: var(--font-mono); font-size: 0.75rem; color: var(--emerald-neon);" id="solarStatusText">NET SUPPLY: +1.48 kW (ECO ACTIVE)</span>
+        </div>
+        <div class="energy-chart-container" id="energyChartContainer">
+          <div class="energy-chart-tooltip" id="chartTooltip"></div>
+          <svg class="energy-svg" viewBox="0 0 1000 80" preserveAspectRatio="none">
+            <!-- Grid lines -->
+            <line x1="0" y1="20" x2="1000" y2="20" stroke="rgba(255,255,255,0.03)" stroke-width="1"></line>
+            <line x1="0" y1="40" x2="1000" y2="40" stroke="rgba(255,255,255,0.03)" stroke-width="1"></line>
+            <line x1="0" y1="60" x2="1000" y2="60" stroke="rgba(255,255,255,0.03)" stroke-width="1"></line>
+            
+            <!-- Shaded area for Solar Power -->
+            <path id="solarAreaPath" d="" fill="rgba(16, 185, 129, 0.08)"></path>
+            <!-- Solar Generation Line -->
+            <path id="solarLinePath" d="" fill="none" stroke="var(--emerald-neon)" stroke-width="2" stroke-linecap="round"></path>
+            
+            <!-- Shaded area for Consumption -->
+            <path id="consumerAreaPath" d="" fill="rgba(0, 240, 255, 0.08)"></path>
+            <!-- Consumer Draw Line -->
+            <path id="consumerLinePath" d="" fill="none" stroke="var(--cyan-neon)" stroke-width="2" stroke-dasharray="3 3"></path>
+            
+            <!-- Hover scan line -->
+            <line id="chartScanLine" x1="0" y1="0" x2="0" y2="80" stroke="rgba(168, 85, 247, 0.5)" stroke-width="1.5" style="display:none;"></line>
+          </svg>
+        </div>
+      </section>
+    </div>
+
+    <!-- Node Registry Manager Modal -->
+    <div id="nodeManagerModal" class="modal-overlay" style="display: none;">
+      <div class="modal-content widget" style="max-width:900px; width:96vw;">
+        <div class="widget-title">
+          <span><i class="fa-solid fa-gears"></i> LUKAS SYSTEM SETTINGS & NODE REGISTRY</span>
+          <button id="closeNodeManagerBtn" class="btn-icon" style="color: var(--rose-neon); cursor: pointer; background: transparent; border: none; font-size: 1.1rem;"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+
+        <!-- ================== REGISTRY & SYSTEM PREFERENCES ================== -->
+        <!-- ================== REGISTRY & SYSTEM PREFERENCES ================== -->
+        <div id="nodeTabContainer" class="node-manager-grid">
+
+          <!-- LEFT COLUMN: SYSTEM COCKPIT & PREFERENCES -->
+          <div class="node-form-section" style="display:flex; flex-direction:column; gap:0.8rem;">
+            
+            <!-- SECTION 1: Accent Customizer -->
+            <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem;">
+              <div class="sub-widget-title" style="margin-bottom:0.6rem; color:#fff; display:flex; align-items:center; gap:0.4rem;">
+                <i class="fa-solid fa-palette" style="color:var(--cyan-neon);"></i> CYBER ACCENT THEME
+              </div>
+              <div style="display:flex; flex-wrap:wrap; gap:0.4rem;">
+                <button class="theme-accent-btn active" data-theme="cyan" style="flex:1; min-width:80px; padding:0.4rem; font-size:0.58rem; font-family:var(--font-mono); font-weight:bold; border-radius:4px; border:1px solid var(--cyan-neon); background:rgba(0,240,255,0.12); color:var(--cyan-neon); cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.25rem; transition:all 0.2s;">
+                  <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#00f0ff; box-shadow:0 0 4px #00f0ff;"></span> CYAN
+                </button>
+                <button class="theme-accent-btn" data-theme="purple" style="flex:1; min-width:80px; padding:0.4rem; font-size:0.58rem; font-family:var(--font-mono); font-weight:bold; border-radius:4px; border:1px solid rgba(168,85,247,0.3); background:rgba(168,85,247,0.05); color:#94a3b8; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.25rem; transition:all 0.2s;">
+                  <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#a855f7;"></span> PURPLE
+                </button>
+                <button class="theme-accent-btn" data-theme="rose" style="flex:1; min-width:80px; padding:0.4rem; font-size:0.58rem; font-family:var(--font-mono); font-weight:bold; border-radius:4px; border:1px solid rgba(244,63,94,0.3); background:rgba(244,63,94,0.05); color:#94a3b8; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.25rem; transition:all 0.2s;">
+                  <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#f43f5e;"></span> ROSE
+                </button>
+                <button class="theme-accent-btn" data-theme="emerald" style="flex:1; min-width:80px; padding:0.4rem; font-size:0.58rem; font-family:var(--font-mono); font-weight:bold; border-radius:4px; border:1px solid rgba(16,185,129,0.3); background:rgba(16,185,129,0.05); color:#94a3b8; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.25rem; transition:all 0.2s;">
+                  <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#10b981;"></span> EMERALD
+                </button>
+                <button class="theme-accent-btn" data-theme="amber" style="flex:1; min-width:80px; padding:0.4rem; font-size:0.58rem; font-family:var(--font-mono); font-weight:bold; border-radius:4px; border:1px solid rgba(245,158,11,0.3); background:rgba(245,158,11,0.05); color:#94a3b8; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:0.25rem; transition:all 0.2s;">
+                  <span style="display:inline-block; width:6px; height:6px; border-radius:50%; background:#f59e0b;"></span> AMBER
+                </button>
+              </div>
+            </div>
+
+            <!-- SECTION 2: Voice & Vocal Settings -->
+            <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem; display:flex; flex-direction:column; gap:0.6rem;">
+              <div class="sub-widget-title" style="color:#fff; display:flex; align-items:center; gap:0.4rem;">
+                <i class="fa-solid fa-volume-high" style="color:var(--cyan-neon);"></i> VOCAL & SPEECH SETTINGS
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label for="sysVolumeRange" style="font-size:0.58rem; color:#64748b; margin-bottom:0.25rem; display:block;">Assistant Vocal Volume</label>
+                <div style="display:flex; align-items:center; gap:0.8rem;">
+                  <input type="range" class="range-slider" id="sysVolumeRange" min="0" max="100" value="80" style="flex:1;" />
+                  <span id="sysVolumeLabel" style="font-family:var(--font-mono); font-size:0.7rem; color:var(--cyan-neon); width:35px; text-align:right;">80%</span>
+                </div>
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label for="sysSpeechRate" style="font-size:0.58rem; color:#64748b; margin-bottom:0.25rem; display:block;">Voice Reading Speed</label>
+                <div style="display:flex; align-items:center; gap:0.8rem;">
+                  <input type="range" class="range-slider" id="sysSpeechRate" min="5" max="20" value="10" style="flex:1;" />
+                  <span id="sysSpeechRateLabel" style="font-family:var(--font-mono); font-size:0.7rem; color:var(--cyan-neon); width:35px; text-align:right;">1.0x</span>
+                </div>
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label for="assistantPersonaSelect" style="font-size:0.58rem; color:#64748b; margin-bottom:0.25rem; display:block;">Assistant Persona Style</label>
+                <select id="assistantPersonaSelect" class="node-select-custom" style="width:100%; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08); color:#fff; border-radius:4px; padding:0.3rem 0.5rem; font-size:0.65rem; height:28px; font-family:var(--font-sans);">
+                  <option value="lukas">Lukas Core (Default Cyberpunk)</option>
+                  <option value="alexa">Alexa Persona (Premium Smart Home)</option>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom:0; display:flex; align-items:center; gap:0.5rem; margin-top:0.15rem;">
+                <input type="checkbox" id="briefModeCheckbox" style="cursor:pointer; width:13px; height:13px; accent-color:var(--cyan-neon);" />
+                <label for="briefModeCheckbox" style="font-size:0.6rem; color:#cbd5e1; cursor:pointer; user-select:none;">Enable Alexa Brief Mode (Chime response)</label>
+              </div>
+              <div class="form-group" style="margin-bottom:0; margin-top:0.4rem;">
+                <label for="geminiApiKeyInput" style="font-size:0.58rem; color:#64748b; margin-bottom:0.25rem; display:block;">Gemini API Key (Free AI intent parser)</label>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                  <input type="password" id="geminiApiKeyInput" placeholder="Paste your free Gemini API Key here..." class="node-input-custom" style="flex:1; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08); color:#fff; border-radius:4px; padding:0.3rem 0.5rem; font-size:0.65rem; height:28px; font-family:var(--font-sans);" />
+                  <button id="saveGeminiApiKeyBtn" class="btn-routine" style="padding:0 0.5rem; font-size:0.55rem; background:rgba(0,240,255,0.08); border-color:var(--cyan-neon); color:var(--cyan-neon); font-weight:bold; cursor:pointer; height:28px; display:flex; align-items:center; justify-content:center;">SAVE</button>
+                </div>
+                <div style="font-size:0.52rem; color:#64748b; margin-top:0.15rem; line-height:1.2;">
+                  Optional. Get a free API key from <a href="https://aistudio.google.com" target="_blank" style="color:var(--cyan-neon); text-decoration:underline;">Google AI Studio</a> to enable advanced free AI command parsing.
+                </div>
+              </div>
+            </div>
+
+            <!-- SECTION 3: Gateway Diagnostics Cockpit -->
+            <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem; display:flex; flex-direction:column; gap:0.5rem;">
+              <div class="sub-widget-title" style="color:#fff; display:flex; align-items:center; gap:0.4rem; margin-bottom:0.2rem;">
+                <i class="fa-solid fa-circle-nodes" style="color:var(--cyan-neon);"></i> GATEWAY DIAGNOSTICS
+              </div>
+              <div style="font-family:var(--font-mono); font-size:0.58rem; color:#94a3b8; display:flex; flex-direction:column; gap:0.35rem; background:rgba(0,0,0,0.3); border:1px solid rgba(255,255,255,0.04); padding:0.5rem; border-radius:4px;">
+                <div style="display:flex; justify-content:space-between;">
+                  <span>GATEWAY HOST:</span>
+                  <span style="color:#fff;">LOCALHOST:3000</span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                  <span>SYSTEM LATENCY:</span>
+                  <span style="color:var(--emerald-neon);" id="sysLatencyVal">-- ms</span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                  <span>WEBRTC ACTIVE:</span>
+                  <span style="color:var(--emerald-neon);" id="sysWebRtcVal">ONLINE</span>
+                </div>
+                <div style="display:flex; justify-content:space-between;">
+                  <span>CORES UPTIME:</span>
+                  <span style="color:#fff;" id="sysUptimeVal">00h 00m 00s</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- SECTION 4: Data Purge & Reboot Controls -->
+            <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem; display:flex; flex-direction:column; gap:0.5rem;">
+              <div class="sub-widget-title" style="color:#fff; display:flex; align-items:center; gap:0.4rem;">
+                <i class="fa-solid fa-triangle-exclamation" style="color:var(--rose-neon);"></i> MAINTENANCE CONTROL
+              </div>
+              <div style="display:flex; gap:0.4rem;">
+                <button id="clearRegistryBtn" class="btn-routine lockdown" style="flex:1; border-color:rgba(244,63,94,0.4); color:#fda4af; font-size:0.58rem; padding:0.4rem 0.2rem; cursor:pointer;">
+                  <i class="fa-solid fa-trash-arrow-up"></i> RESET REGISTRY
+                </button>
+                <button id="restartServerBtn" class="btn-routine" style="flex:1; border-color:var(--purple-neon); color:#d8b4fe; font-size:0.58rem; padding:0.4rem 0.2rem; cursor:pointer;">
+                  <i class="fa-solid fa-rotate"></i> REBOOT SERVER
+                </button>
+              </div>
+              <div style="font-size:0.52rem; color:#64748b; line-height:1.3; text-align:center;">
+                ⚠️ Reboot restarts proxy streams. Reset wipes registered nodes.
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT COLUMN: ACTIVE REGISTRY & CCTV FEED -->
+          <div class="node-list-section" style="display:flex; flex-direction:column; gap:0.8rem;">
+            
+            <!-- CCTV & Stream Config block -->
+            <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.06); border-radius:6px; padding:0.75rem;">
+              <div style="font-family:var(--font-mono); font-size:0.65rem; color:#fff; user-select:none; display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem;">
+                <span style="font-family:var(--font-title); font-size:0.7rem; letter-spacing:1px; color:#fff; display:flex; align-items:center; gap:0.4rem;">
+                  <i class="fa-solid fa-video" style="color:var(--purple-neon);"></i> CCTV STREAM & CLOUD GATEWAY CONFIG
+                </span>
+                <span id="cameraStatusBadge" class="node-net-badge" style="background:rgba(244,63,94,0.08); border-color:rgba(244,63,94,0.15); color:var(--rose-neon); font-size:0.5rem; font-weight:bold;">OFFLINE</span>
+              </div>
+              <form id="cctvConfigForm" class="node-form" onsubmit="return false;" style="display:grid; grid-template-columns: 1fr 1fr; gap:0.5rem;">
+                <div class="form-group" style="margin-bottom:0;">
+                  <label for="cctvIpInput" style="font-size:0.55rem; color:#64748b;">Camera IP Address</label>
+                  <input type="text" id="cctvIpInput" placeholder="e.g. 192.168.1.3" value="192.168.1.3" required style="padding:0.3rem 0.5rem; font-size:0.65rem;" />
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label for="cctvUserInput" style="font-size:0.55rem; color:#64748b;">Username (or Cloud Email)</label>
+                  <input type="text" id="cctvUserInput" placeholder="e.g. admin" value="admin" required style="padding:0.3rem 0.5rem; font-size:0.65rem;" />
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label for="cctvPassInput" style="font-size:0.55rem; color:#64748b;">Password (or Cloud Pass)</label>
+                  <input type="password" id="cctvPassInput" placeholder="Enter credentials" style="padding:0.3rem 0.5rem; font-size:0.65rem;" />
+                </div>
+                <div class="form-group" style="margin-bottom:0;">
+                  <label for="cctvPathSelect" style="font-size:0.55rem; color:#64748b;">RTSP Stream Path</label>
+                  <select id="cctvPathSelect" class="node-select-custom" style="width:100%; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08); color:#fff; border-radius:4px; padding:0.3rem 0.5rem; font-size:0.65rem; height:26px;">
+                    <option value="onvif2">EseeCloud Substream (onvif2)</option>
+                    <option value="ch0_0.264">EseeCloud Mainstream (ch0_0.264)</option>
+                    <option value="onvif1">EseeCloud Alternate (onvif1)</option>
+                    <option value="h264Preview_01_main">Hikvision Mainstream (h264Preview_01_main)</option>
+                    <option value="cam/realmonitor?channel=1&subtype=0">Dahua / Lorex / Amcrest (realmonitor)</option>
+                    <option value="live/ch0">Wyze Cam (live/ch0)</option>
+                  </select>
+                </div>
+                <div style="grid-column: span 2; display:flex; gap:0.5rem; align-items:center; margin-top:0.3rem;">
+                  <button type="submit" class="btn-routine" style="flex:1; background:rgba(168,85,247,0.08); border-color:var(--purple-neon); color:#d8b4fe; padding:0.35rem; font-size:0.6rem; display:flex; align-items:center; justify-content:center; gap:0.4rem; height:28px;">
+                    <i class="fa-solid fa-satellite-dish"></i> SAVE & START FEED
+                  </button>
+                </div>
+              </form>
+              <div id="cctvStatusMsg" style="font-family:var(--font-mono); font-size:0.6rem; color:var(--emerald-neon); border:1px dashed rgba(16,185,129,0.15); padding:0.4rem; border-radius:4px; display:none; margin-top:0.4rem;"></div>
+            </div>
+
+            <!-- Active Registry & Wizard Section -->
+            <div style="flex:1; display:flex; flex-direction:column; gap:0.6rem; background:rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.04); border-radius:6px; padding:0.75rem; overflow:hidden;">
+              <div class="sub-widget-title" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.1rem; width:100%;">
+                <span id="registryTitleText" style="font-family:var(--font-title); font-size:0.7rem; color:#fff; display:flex; align-items:center; gap:0.4rem;"><i class="fa-solid fa-cubes" style="color:var(--cyan-neon);"></i> ACTIVE REGISTERED NODES</span>
+                <div style="display:flex; align-items:center; gap:0.4rem;" id="registryHeaderControls">
+                  <button id="startPairingWizardBtn" class="btn-routine" style="padding:0.25rem 0.5rem; font-size:0.55rem; background:rgba(0,240,255,0.08); border-color:var(--cyan-neon); color:var(--cyan-neon); font-weight:bold; cursor:pointer; display:flex; align-items:center; gap:0.25rem;">
+                    <i class="fa-solid fa-plus-circle"></i> ADD DEVICE
+                  </button>
+                  <span id="nodesCountBadge" class="node-net-badge">0 NODES</span>
+                </div>
+              </div>
+
+              <!-- Active Registry Section View -->
+              <div id="settingsRegistryView" style="display:flex; flex-direction:column; gap:0.6rem; flex:1; overflow:hidden;">
+                <!-- Search Filter bar -->
+                <div style="position:relative; width:100%;">
+                  <i class="fa-solid fa-magnifying-glass" style="position:absolute; left:0.5rem; top:50%; transform:translateY(-50%); font-size:0.6rem; color:#475569;"></i>
+                  <input type="text" id="registrySearchInput" placeholder="Filter devices by name, zone, or protocol..." style="width:100%; padding:0.3rem 0.5rem 0.3rem 1.4rem; font-size:0.65rem; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08); border-radius:4px; color:#fff; font-family:var(--font-mono);" />
+                </div>
+                
+                <!-- Scrollable device list -->
+                <div class="active-nodes-list" id="activeNodesList" style="max-height: 280px;">
+                  <!-- Cards inserted dynamically -->
+                </div>
+              </div>
+
+              <!-- Device Pairing Wizard Section View (Hidden by default) -->
+              <div id="settingsWizardView" style="display:none; flex-direction:column; gap:0.6rem; flex:1; overflow:hidden; background:rgba(255,255,255,0.01); border:1px dashed rgba(255,255,255,0.05); padding:0.6rem; border-radius:6px;">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.2rem;">
+                  <button id="cancelWizardBtn" class="btn-routine" style="padding:0.2rem 0.4rem; font-size:0.55rem; border-color:rgba(255,255,255,0.15); color:#94a3b8; cursor:pointer;">
+                    <i class="fa-solid fa-chevron-left"></i> BACK TO REGISTRY
+                  </button>
+                  <div style="font-family:var(--font-mono); font-size:0.55rem; color:#64748b;" id="wizardStepIndicator">STEP 1 OF 4</div>
+                </div>
+
+                <!-- Wizard Progress Bar -->
+                <div style="width:100%; height:4px; background:rgba(255,255,255,0.05); border-radius:2px; overflow:hidden; margin-bottom:0.4rem;">
+                  <div id="wizardProgressBar" style="width:25%; height:100%; background:var(--cyan-neon); transition:width 0.3s ease; box-shadow:0 0 8px var(--cyan-neon);"></div>
+                </div>
+
+                <!-- STEP 1: Choose Brand -->
+                <div id="wizardStep1" class="wizard-step" style="display:flex; flex-direction:column; gap:0.5rem; flex:1; overflow-y:auto;">
+                  <div style="font-size:0.6rem; color:#cbd5e1; font-family:var(--font-mono); text-transform:uppercase; margin-bottom:0.2rem;">Choose Device Brand / Platform:</div>
+                  <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:0.4rem;" id="brandSelectorGrid">
+                    <!-- Wipro -->
+                    <div class="brand-select-card" data-brand="wipro" style="background:rgba(29,78,216,0.04); border:1px solid rgba(29,78,216,0.2); border-radius:6px; padding:0.5rem; cursor:pointer; text-align:center; transition:all 0.2s;" onmouseover="this.style.background='rgba(29,78,216,0.12)'; this.style.borderColor='#1d4ed8';" onmouseout="this.style.background='rgba(29,78,216,0.04)'; this.style.borderColor='rgba(29,78,216,0.2)';">
+                      <div style="font-size:1.2rem; color:#3b82f6; margin-bottom:0.25rem;"><i class="fa-solid fa-lightbulb"></i></div>
+                      <div style="font-family:var(--font-title); font-size:0.58rem; color:#fff; font-weight:bold; letter-spacing:0.5px;">WIPRO SMART</div>
+                      <div style="font-size:0.5rem; color:#64748b; margin-top:2px;">Smart lights & bulbs</div>
+                    </div>
+                    <!-- EseeCloud -->
+                    <div class="brand-select-card" data-brand="eseecloud" style="background:rgba(168,85,247,0.04); border:1px solid rgba(168,85,247,0.2); border-radius:6px; padding:0.5rem; cursor:pointer; text-align:center; transition:all 0.2s;" onmouseover="this.style.background='rgba(168,85,247,0.12)'; this.style.borderColor='#a855f7';" onmouseout="this.style.background='rgba(168,85,247,0.04)'; this.style.borderColor='rgba(168,85,247,0.2)';">
+                      <div style="font-size:1.2rem; color:#c084fc; margin-bottom:0.25rem;"><i class="fa-solid fa-video"></i></div>
+                      <div style="font-family:var(--font-title); font-size:0.58rem; color:#fff; font-weight:bold; letter-spacing:0.5px;">ESEECLOUD / IP PRO</div>
+                      <div style="font-size:0.5rem; color:#64748b; margin-top:2px;">IP cameras & P2P streams</div>
+                    </div>
+                    <!-- Jio -->
+                    <div class="brand-select-card" data-brand="jio" style="background:rgba(2,132,199,0.04); border:1px solid rgba(2,132,199,0.2); border-radius:6px; padding:0.5rem; cursor:pointer; text-align:center; transition:all 0.2s;" onmouseover="this.style.background='rgba(2,132,199,0.12)'; this.style.borderColor='#0284c7';" onmouseout="this.style.background='rgba(2,132,199,0.04)'; this.style.borderColor='rgba(2,132,199,0.2)';">
+                      <div style="font-size:1.2rem; color:#38bdf8; margin-bottom:0.25rem;"><i class="fa-solid fa-house-signal"></i></div>
+                      <div style="font-family:var(--font-title); font-size:0.58rem; color:#fff; font-weight:bold; letter-spacing:0.5px;">JIO HOME</div>
+                      <div style="font-size:0.5rem; color:#64748b; margin-top:2px;">Plugs, switches & routers</div>
+                    </div>
+                    <!-- Google Nest -->
+                    <div class="brand-select-card" data-brand="nest" style="background:rgba(66,133,244,0.04); border:1px solid rgba(66,133,244,0.2); border-radius:6px; padding:0.5rem; cursor:pointer; text-align:center; transition:all 0.2s;" onmouseover="this.style.background='rgba(66,133,244,0.12)'; this.style.borderColor='#4285f4';" onmouseout="this.style.background='rgba(66,133,244,0.04)'; this.style.borderColor='rgba(66,133,244,0.2)';">
+                      <div style="font-size:1.2rem; color:#60a5fa; margin-bottom:0.25rem;"><i class="fa-brands fa-google"></i></div>
+                      <div style="font-family:var(--font-title); font-size:0.58rem; color:#fff; font-weight:bold; letter-spacing:0.5px;">GOOGLE NEST</div>
+                      <div style="font-size:0.5rem; color:#64748b; margin-top:2px;">Nest speakers & hubs</div>
+                    </div>
+                    <!-- Tuya -->
+                    <div class="brand-select-card" data-brand="tuya" style="background:rgba(249,115,22,0.04); border:1px solid rgba(249,115,22,0.2); border-radius:6px; padding:0.5rem; cursor:pointer; text-align:center; transition:all 0.2s;" onmouseover="this.style.background='rgba(249,115,22,0.12)'; this.style.borderColor='#f97316';" onmouseout="this.style.background='rgba(249,115,22,0.04)'; this.style.borderColor='rgba(249,115,22,0.2)';">
+                      <div style="font-size:1.2rem; color:#fb923c; margin-bottom:0.25rem;"><i class="fa-solid fa-plug"></i></div>
+                      <div style="font-family:var(--font-title); font-size:0.58rem; color:#fff; font-weight:bold; letter-spacing:0.5px;">SMART LIFE / TUYA</div>
+                      <div style="font-size:0.5rem; color:#64748b; margin-top:2px;">Smart plugs & multi-sensors</div>
+                    </div>
+                    <!-- Philips Hue -->
+                    <div class="brand-select-card" data-brand="hue" style="background:rgba(234,179,8,0.04); border:1px solid rgba(234,179,8,0.2); border-radius:6px; padding:0.5rem; cursor:pointer; text-align:center; transition:all 0.2s;" onmouseover="this.style.background='rgba(234,179,8,0.12)'; this.style.borderColor='#eab308';" onmouseout="this.style.background='rgba(234,179,8,0.04)'; this.style.borderColor='rgba(234,179,8,0.2)';">
+                      <div style="font-size:1.2rem; color:#facc15; margin-bottom:0.25rem;"><i class="fa-solid fa-circle-dot"></i></div>
+                      <div style="font-family:var(--font-title); font-size:0.58rem; color:#fff; font-weight:bold; letter-spacing:0.5px;">PHILIPS HUE</div>
+                      <div style="font-size:0.5rem; color:#64748b; margin-top:2px;">Zigbee bulbs & bridges</div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- STEP 2: Configure Details -->
+                <div id="wizardStep2" class="wizard-step" style="display:none; flex-direction:column; gap:0.6rem; flex:1; overflow-y:auto;">
+                  <div style="display:flex; align-items:center; gap:0.5rem; background:rgba(0,240,255,0.04); border:1px dashed rgba(0,240,255,0.15); padding:0.45rem; border-radius:4px;">
+                    <div style="font-size:1rem; color:var(--cyan-neon);"><i class="fa-solid fa-circle-info"></i></div>
+                    <div style="font-size:0.52rem; color:#94a3b8; line-height:1.3;" id="wizardPairingGuide">Turn on your device and ensure it is on the same local subnet to connect.</div>
+                  </div>
+                  
+                  <form id="wizardPairForm" class="node-form" onsubmit="return false;" style="display:flex; flex-direction:column; gap:0.5rem;">
+                    <!-- Brand indicator -->
+                    <div style="font-family:var(--font-mono); font-size:0.55rem; color:#64748b; text-transform:uppercase;">PAIRING PLATFORM: <span id="wizardActiveBrandLabel" style="color:var(--cyan-neon); font-weight:bold;">WIPRO</span></div>
+                    
+                    <div class="form-group" style="margin-bottom:0;">
+                      <label for="wizardDeviceName" style="font-size:0.55rem; color:#64748b;">Device Custom Label</label>
+                      <input type="text" id="wizardDeviceName" placeholder="e.g. Living Room Lamp" required style="padding:0.35rem 0.5rem; font-size:0.68rem;" />
+                    </div>
+                    
+                    <!-- Dynamic Fields Container -->
+                    <div id="wizardDynamicFields" style="display:flex; flex-direction:column; gap:0.5rem;">
+                      <!-- Injected dynamically via JS -->
+                    </div>
+
+                    <button type="submit" id="wizardPairSubmitBtn" class="btn-routine" style="background:rgba(0,240,255,0.08); border-color:var(--cyan-neon); color:var(--cyan-neon); font-weight:bold; letter-spacing:0.5px; padding:0.4rem; font-size:0.6rem; margin-top:0.4rem; display:flex; align-items:center; justify-content:center; gap:0.3rem; height:28px;">
+                      <i class="fa-solid fa-link"></i> INITIATE SECURE PAIRING
+                    </button>
+                  </form>
+                </div>
+
+                <!-- STEP 3: Pairing Handshake Loader -->
+                <div id="wizardStep3" class="wizard-step" style="display:none; flex-direction:column; align-items:center; justify-content:center; gap:0.8rem; flex:1; text-align:center; padding:1rem;">
+                  <div style="position:relative; width:60px; height:60px; display:flex; align-items:center; justify-content:center;">
+                    <!-- Glowing radar-like ring -->
+                    <div style="position:absolute; width:100%; height:100%; border-radius:50%; border:2px solid var(--cyan-neon); animation: radarPulse 1.5s infinite; opacity:0.6;"></div>
+                    <div style="font-size:1.8rem; color:var(--cyan-neon);" id="wizardPairingIcon"><i class="fa-solid fa-network-wired fa-spin"></i></div>
+                  </div>
+                  <div style="font-family:var(--font-title); font-size:0.65rem; color:#fff; font-weight:bold; letter-spacing:1px;" id="wizardPairingStatusText">ESTABLISHING SECURE HANDSHAKE...</div>
+                  
+                  <!-- Micro Progress bar -->
+                  <div style="width:80%; height:3px; background:rgba(255,255,255,0.05); border-radius:1.5px; overflow:hidden;">
+                    <div id="wizardPairingMicroProgress" style="width:10%; height:100%; background:var(--cyan-neon); transition:width 0.2s;"></div>
+                  </div>
+                  
+                  <!-- Handshake terminal logs -->
+                  <div style="width:100%; font-family:var(--font-mono); font-size:0.52rem; color:#64748b; background:rgba(0,0,0,0.4); border:1px solid rgba(255,255,255,0.03); padding:0.4rem; border-radius:4px; text-align:left; height:70px; overflow-y:auto; line-height:1.4; white-space:pre-wrap;" id="wizardPairingLog">
+[SYSTEM] Initializing pairing engine...
+[BLE] Scanning for broadcast channels...
+                  </div>
+                </div>
+
+                <!-- STEP 4: Success & Room Picker -->
+                <div id="wizardStep4" class="wizard-step" style="display:none; flex-direction:column; gap:0.6rem; flex:1; overflow-y:auto; padding:0.4rem;">
+                  <div style="text-align:center; padding:0.4rem 0;">
+                    <div style="font-size:2.2rem; color:var(--emerald-neon); text-shadow:0 0 10px rgba(16,185,129,0.3); margin-bottom:0.25rem;"><i class="fa-solid fa-circle-check"></i></div>
+                    <div style="font-family:var(--font-title); font-size:0.65rem; color:#fff; font-weight:bold; letter-spacing:1px;">SECURE LINK COMPLETED!</div>
+                    <div style="font-size:0.52rem; color:#94a3b8; margin-top:2px;">Device added successfully. Assign it to a zone:</div>
+                  </div>
+
+                  <div class="form-group" style="margin-bottom:0.2rem;">
+                    <label for="wizardZoneSelect" style="font-size:0.55rem; color:#64748b;">Assign Location Zone</label>
+                    <select id="wizardZoneSelect" class="node-select-custom" style="width:100%; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08); color:#fff; border-radius:4px; padding:0.35rem 0.5rem; font-size:0.68rem; height:28px;">
+                      <option value="Living Room">Living Room</option>
+                      <option value="Bedroom">Bedroom</option>
+                      <option value="Kitchen">Kitchen</option>
+                      <option value="Outdoor">Outdoor</option>
+                    </select>
+                  </div>
+
+                  <!-- Device Preview Card -->
+                  <div style="background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.05); padding:0.5rem; border-radius:4px; display:flex; align-items:center; gap:0.6rem; margin-top:0.2rem;">
+                    <div id="wizardPreviewIcon" style="font-size:1.1rem; color:var(--cyan-neon);"><i class="fa-solid fa-cube"></i></div>
+                    <div style="display:flex; flex-direction:column; gap:1px; flex:1;">
+                      <span id="wizardPreviewName" style="font-family:var(--font-sans); font-size:0.68rem; color:#fff; font-weight:bold;">Wipro Bulb</span>
+                      <span id="wizardPreviewMeta" style="font-family:var(--font-mono); font-size:0.52rem; color:#64748b;">WiFi • 192.168.1.55</span>
+                    </div>
+                  </div>
+
+                  <button id="wizardCompleteBtn" class="btn-routine" style="background:rgba(16,185,129,0.1); border-color:var(--emerald-neon); color:var(--emerald-neon); font-weight:bold; letter-spacing:0.5px; padding:0.45rem; font-size:0.62rem; margin-top:0.4rem; display:flex; align-items:center; justify-content:center; gap:0.3rem; height:30px; cursor:pointer;">
+                    <i class="fa-solid fa-house-chimney-user"></i> COMPLETE INTEGRATION
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- EseeCloud Viewer Popup (injected dynamically) -->
+
+    <!-- Puter.js SDK for browser-native keyless AI chat -->
+    <script src="https://js.puter.com/v2/"></script>
+    <!-- Main javascript file -->
+    <script type="module" src="/main.js"></script>
+  </body>
+</html>
