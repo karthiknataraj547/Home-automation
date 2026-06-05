@@ -2310,98 +2310,324 @@ input:checked + .slider-knob:before {
 
 /* ═══════════════════ LIGHT/DARK THEME OVERRIDES ═══════════════════ */
 body.light-theme {
-  --color-bg: #f1f5f9;
-  --color-grid: rgba(0, 180, 255, 0.06);
-  --glass-bg: rgba(255, 255, 255, 0.88);
-  --glass-border: rgba(0, 180, 255, 0.22);
-  --glass-border-focus: rgba(0, 180, 255, 0.55);
-  color: #1e293b;
+  --color-bg: #f8fafc;
+  --color-grid: rgba(2, 132, 199, 0.05);
+  --glass-bg: rgba(255, 255, 255, 0.82);
+  --glass-border: rgba(14, 165, 233, 0.18);
+  --glass-border-focus: rgba(14, 165, 233, 0.45);
+  color: #334155;
 }
 
 body.light-theme::before {
   background:
-    radial-gradient(ellipse 80% 50% at 20% 10%, rgba(0,240,255,0.08) 0%, transparent 60%),
-    radial-gradient(ellipse 60% 40% at 80% 90%, rgba(168,85,247,0.08) 0%, transparent 55%),
-    radial-gradient(ellipse 50% 60% at 50% 50%, rgba(255,255,255,0.85) 0%, transparent 70%);
+    radial-gradient(ellipse 80% 50% at 20% 10%, rgba(14, 165, 233, 0.1) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 90%, rgba(168, 85, 247, 0.1) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 60% at 50% 50%, rgba(255, 255, 255, 0.95) 0%, transparent 70%);
 }
 
+/* Base Widget & Headers */
 body.light-theme .widget {
   background: rgba(255, 255, 255, 0.85);
-  border-color: rgba(0, 180, 255, 0.22);
+  border-color: rgba(14, 165, 233, 0.16);
   color: #1e293b;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.04);
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.05);
+  backdrop-filter: blur(16px);
 }
 
 body.light-theme .widget-title {
-  border-bottom-color: rgba(0, 180, 255, 0.15);
+  border-bottom-color: rgba(14, 165, 233, 0.14);
   color: #0f172a;
+}
+
+body.light-theme .widget-title span:first-child {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+body.light-theme .widget-title span:last-child {
+  color: #0284c7 !important;
 }
 
 body.light-theme h1, 
 body.light-theme h2, 
-body.light-theme h3 {
+body.light-theme h3,
+body.light-theme h4 {
   color: #0f172a;
 }
 
-body.light-theme .chat-bubble.assistant {
-  background: rgba(0, 240, 255, 0.08);
+/* Core Orb Panel adjustments */
+body.light-theme .core-widget {
+  background: rgba(255, 255, 255, 0.85);
+}
+body.light-theme .core-container {
+  background: radial-gradient(circle at center, rgba(14, 165, 233, 0.08) 0%, rgba(255,255,255,0.8) 60%, rgba(255,255,255,0.9) 100%);
+  box-shadow: 0 10px 30px rgba(2, 132, 199, 0.08);
+}
+body.light-theme .core-far-outer {
+  border-color: rgba(2, 132, 199, 0.15);
+  box-shadow: 0 0 15px rgba(2, 132, 199, 0.05);
+}
+
+/* Zone Automation Cards */
+body.light-theme .zone-card {
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  color: #334155;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.01);
+}
+
+body.light-theme .zone-card.active {
+  background: rgba(255, 255, 255, 0.95);
+  border-color: var(--zone-color, #0ea5e9);
+  box-shadow: 0 8px 25px var(--zone-color-glow, rgba(14, 165, 233, 0.18));
+}
+
+body.light-theme .zone-title {
   color: #0f172a;
-  border-color: rgba(0, 240, 255, 0.25);
+}
+
+body.light-theme .zone-icon {
+  color: #64748b;
+}
+
+body.light-theme .zone-card.active .zone-icon {
+  color: var(--zone-color, #0ea5e9);
+}
+
+body.light-theme .control-label {
+  color: #475569;
+  font-weight: 500;
+}
+
+body.light-theme .range-slider {
+  background: #cbd5e1;
+}
+
+/* Toggle Switch */
+body.light-theme .toggle-switch .slider-knob {
+  background: #cbd5e1;
+}
+
+/* Climate Controller Cards & Buttons */
+body.light-theme .climate-card {
+  background: rgba(255, 255, 255, 0.75);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+body.light-theme .climate-card-label {
+  color: #64748b;
+}
+
+body.light-theme .climate-card-val {
+  color: #0f172a;
+}
+
+body.light-theme .btn-mode {
+  background: rgba(255, 255, 255, 0.85);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  color: #475569;
+  font-weight: bold;
+}
+
+body.light-theme .btn-mode:hover {
+  background: rgba(14, 165, 233, 0.08);
+  color: #0ea5e9;
+  border-color: rgba(14, 165, 233, 0.25);
+}
+
+body.light-theme .btn-mode.active {
+  background: #0ea5e9 !important;
+  color: #ffffff !important;
+  border-color: #0ea5e9;
+  box-shadow: 0 4px 12px rgba(14, 165, 233, 0.25);
+}
+
+body.light-theme .btn-temp {
+  background: rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  color: #0f172a;
+}
+
+body.light-theme .btn-temp:hover {
+  background: #0ea5e9;
+  color: #ffffff;
+  border-color: #0ea5e9;
+}
+
+body.light-theme .thermostat-number {
+  color: #0f172a;
+}
+
+body.light-theme .thermostat-mode {
+  color: #64748b;
+}
+
+body.light-theme .thermostat-track {
+  stroke: #e2e8f0;
+}
+
+/* Chat & Console Dialogue */
+body.light-theme .chat-bubble.assistant {
+  background: rgba(14, 165, 233, 0.08);
+  color: #0f172a;
+  border-color: rgba(14, 165, 233, 0.18);
 }
 
 body.light-theme .chat-bubble.user {
   background: rgba(168, 85, 247, 0.08);
   color: #0f172a;
-  border-color: rgba(168, 85, 247, 0.25);
+  border-color: rgba(168, 85, 247, 0.18);
 }
 
 body.light-theme .chat-input,
 body.light-theme input[type="text"],
 body.light-theme input[type="password"] {
   background: rgba(255, 255, 255, 0.95);
-  border-color: rgba(0, 180, 255, 0.25);
+  border-color: rgba(15, 23, 42, 0.12);
   color: #0f172a;
 }
 
+body.light-theme .chat-input:focus,
+body.light-theme input[type="text"]:focus,
+body.light-theme input[type="password"]:focus {
+  border-color: #0ea5e9;
+  box-shadow: 0 0 10px rgba(14, 165, 233, 0.18);
+}
+
 body.light-theme .btn-icon {
-  background: rgba(0, 240, 255, 0.08);
-  border-color: rgba(0, 240, 255, 0.25);
-  color: #007788;
+  background: rgba(14, 165, 233, 0.06);
+  border-color: rgba(14, 165, 233, 0.16);
+  color: #0284c7;
+}
+
+body.light-theme .btn-icon:hover {
+  background: #0ea5e9;
+  color: #ffffff;
 }
 
 body.light-theme .terminal-log {
   background: rgba(255, 255, 255, 0.9);
   color: #0f172a;
-  border-color: rgba(0, 240, 255, 0.2);
+  border-color: rgba(15, 23, 42, 0.08);
+}
+
+/* Header & Status Tickers */
+body.light-theme header {
+  background: rgba(255, 255, 255, 0.75);
+  border-bottom: 1px solid rgba(14, 165, 233, 0.14);
 }
 
 body.light-theme #jarvisStatusBar {
-  background: rgba(255, 255, 255, 0.9);
-  border-bottom: 1px solid rgba(0, 240, 255, 0.25);
-  color: #1e293b;
+  background: rgba(255, 255, 255, 0.85);
+  border-bottom: 1px solid rgba(14, 165, 233, 0.14);
+  color: #334155;
 }
 
 body.light-theme .jarvis-badge {
-  background: rgba(0, 240, 255, 0.15);
-  color: #008899;
+  background: rgba(14, 165, 233, 0.12);
+  color: #0284c7;
 }
 
+/* System Settings / Routine Buttons */
+body.light-theme .btn-node-manager,
+body.light-theme .btn-routine {
+  background: rgba(255, 255, 255, 0.85) !important;
+  border-color: rgba(15, 23, 42, 0.1) !important;
+  color: #334155 !important;
+}
+
+body.light-theme .btn-node-manager:hover,
+body.light-theme .btn-routine:hover {
+  background: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .btn-routine.active {
+  background: #0ea5e9 !important;
+  color: #ffffff !important;
+  border-color: #0ea5e9 !important;
+  box-shadow: 0 4px 12px rgba(14, 165, 233, 0.25);
+}
+
+body.light-theme .btn-node-manager#logoutBtn {
+  background: rgba(244, 63, 94, 0.06) !important;
+  border-color: rgba(244, 63, 94, 0.25) !important;
+  color: #e11d48 !important;
+}
+body.light-theme .btn-node-manager#logoutBtn:hover {
+  background: #e11d48 !important;
+  color: #ffffff !important;
+}
+
+/* CCTV Stream Panels */
+body.light-theme #cam1Placeholder {
+  background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%) !important;
+}
+body.light-theme #cam1PlaceholderIcon {
+  color: #0ea5e9 !important;
+}
+body.light-theme #cam1PlaceholderText {
+  color: #334155 !important;
+}
+body.light-theme #cam1ProbeBtn {
+  background: rgba(14, 165, 233, 0.08) !important;
+  border-color: rgba(14, 165, 233, 0.25) !important;
+  color: #0284c7 !important;
+}
+body.light-theme #cam1ProbeBtn:hover {
+  background: #0ea5e9 !important;
+  color: #ffffff !important;
+}
+body.light-theme .cctv-cam-name {
+  color: #0f172a;
+  font-weight: bold;
+}
+body.light-theme .cctv-overlay {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border-bottom: 1px solid rgba(14, 165, 233, 0.12);
+}
+
+/* System Diagnostics / Gauge elements */
+body.light-theme .gauge-card {
+  background: rgba(255, 255, 255, 0.65);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+body.light-theme .gauge-bg-circle {
+  stroke: #e2e8f0;
+}
+body.light-theme .gauge-text {
+  color: #0f172a;
+}
+body.light-theme .gauge-label {
+  color: #64748b;
+}
+body.light-theme .gauge-val {
+  color: #0f172a;
+}
+
+/* Reminders & Task Items */
 body.light-theme .reminder-item {
-  background: rgba(0, 180, 255, 0.05);
-  border-color: rgba(0, 180, 255, 0.15);
-  color: #1e293b;
+  background: rgba(255, 255, 255, 0.8);
+  border-color: rgba(14, 165, 233, 0.15);
+  color: #334155;
 }
 
-body.light-theme .routine-card,
-body.light-theme .device-card {
-  background: rgba(255, 255, 255, 0.85);
-  border-color: rgba(0, 180, 255, 0.15);
-  color: #1e293b;
+body.light-theme .reminder-item .ri-text .ri-label {
+  color: #0f172a;
+}
+
+body.light-theme .reminder-item .ri-delete {
+  color: #64748b;
+}
+
+body.light-theme .reminder-item .ri-delete:hover {
+  color: #e11d48;
 }
 
 body.light-theme .text-primary {
   color: #1e293b;
 }
+
 
 /* ═══════════════════ HOLOGRAPHIC AUTH SCREEN ═══════════════════ */
 .auth-terminal-container {
