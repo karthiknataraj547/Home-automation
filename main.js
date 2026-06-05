@@ -197,11 +197,84 @@ document.addEventListener('DOMContentLoaded', () => {
   connectLiveCamera();
   wireProbeButton();
 
-  // Initial greeting
+  // Initialize Jarvis particle canvas background
+  initParticleCanvas();
+
+  // Run cinematic boot sequence then initial greeting
+  bootSequenceAnimation();
+});
+
+// Cinematic Boot Sequence
+function bootSequenceAnimation() {
+  const lines = [
+    { text: "[BOOT] LUKAS Core Runtime v4.8.2 initializing...", delay: 300 },
+    { text: "[INIT] Neural command parser: ONLINE", delay: 700 },
+    { text: "[INIT] Quantum encryption mesh: ACTIVE", delay: 1100 },
+    { text: "[INIT] Home automation hub: ARMED", delay: 1500 },
+    { text: "[INIT] Voice recognition engine: LISTENING", delay: 1900 },
+    { text: "[READY] All subsystems nominal. Standing by, Commander.", delay: 2400 }
+  ];
+  const diag = window.__lukasDiag;
+  lines.forEach(({ text, delay }) => {
+    setTimeout(() => {
+      const termEl = document.getElementById('terminalLogContainer');
+      if (termEl) {
+        const line = document.createElement('div');
+        line.className = 'terminal-line info';
+        line.style.animation = 'bootScan 0.3s ease-out';
+        line.innerHTML = `<span class="terminal-prompt">&gt;</span> ${text}`;
+        termEl.appendChild(line);
+        termEl.scrollTop = termEl.scrollHeight;
+      }
+    }, delay);
+  });
+  // Initial assistant greeting after boot completes
   setTimeout(() => {
     handleAssistantResponse("Lukas Core initialized. Systems are secure and operational on port 3000. How can I assist you, Commander?");
-  }, 1000);
-});
+  }, 2900);
+}
+
+// Particle Canvas Background System
+function initParticleCanvas() {
+  const canvas = document.getElementById('jarvisParticleCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  const particles = Array.from({ length: 70 }, () => ({
+    x: Math.random() * canvas.width,
+    y: Math.random() * canvas.height,
+    r: Math.random() * 1.2 + 0.3,
+    dx: (Math.random() - 0.5) * 0.25,
+    dy: (Math.random() - 0.5) * 0.25,
+    alpha: Math.random() * 0.5 + 0.1,
+    hue: Math.random() > 0.6 ? 180 : 270 // cyan or purple
+  }));
+
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    particles.forEach(p => {
+      p.x += p.dx;
+      p.y += p.dy;
+      if (p.x < 0) p.x = canvas.width;
+      if (p.x > canvas.width) p.x = 0;
+      if (p.y < 0) p.y = canvas.height;
+      if (p.y > canvas.height) p.y = 0;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fillStyle = `hsla(${p.hue}, 100%, 70%, ${p.alpha})`;
+      ctx.fill();
+    });
+    requestAnimationFrame(draw);
+  }
+  draw();
+}
 
 // 1. Digital System Clock
 function initClock() {
@@ -369,6 +442,13 @@ function bindUIEvents() {
     if (proceedTimeout) clearTimeout(proceedTimeout);
     
     accumulatedTranscript = transcript;
+
+    // Update live transcript overlay in real-time
+    const liveEl = document.getElementById('liveTranscript');
+    if (liveEl && transcript.trim()) {
+      liveEl.textContent = transcript;
+      liveEl.classList.add('visible');
+    }
     
     // Wait for 3 seconds of silence after the last word recognized before proceeding
     proceedTimeout = setTimeout(() => {
@@ -377,6 +457,8 @@ function bindUIEvents() {
         voice.stopListeningForCommand();
         processCommand(accumulatedTranscript, 'voice');
         accumulatedTranscript = "";
+        // Hide live transcript
+        if (liveEl) liveEl.classList.remove('visible');
       }
     }, 3000);
   }
@@ -416,9 +498,7 @@ function bindUIEvents() {
     appendChatBubble(greeting, 'assistant');
     
     // Speak the greeting vocally
-    setTimeout(() => {
-      voice.speak(greeting);
-    }, 150);
+    voice.speak(greeting);
   };
 
   voice.onSpeechStart = () => {
@@ -2342,10 +2422,25 @@ function wireProbeButton() {
 
 // 4. Chat Dialogue append
 function appendChatBubble(text, sender, linkUrl) {
+  // Create row wrapper with avatar
+  const row = document.createElement('div');
+  row.className = `chat-bubble-row${sender === 'user' ? ' user-row' : ''}`;
+
+  // Avatar badge
+  if (sender !== 'system') {
+    const avatar = document.createElement('div');
+    avatar.className = `chat-avatar ${sender === 'assistant' ? 'lukas-avatar' : 'user-avatar'}`;
+    avatar.innerHTML = sender === 'assistant'
+      ? '<i class="fa-solid fa-microchip"></i>'
+      : '<i class="fa-solid fa-user"></i>';
+    row.appendChild(avatar);
+  }
+
+  // Bubble itself
   const bubble = document.createElement('div');
   bubble.className = `chat-bubble ${sender}`;
   bubble.textContent = text;
-  
+
   if (linkUrl) {
     const link = document.createElement('a');
     link.href = linkUrl;
@@ -2354,15 +2449,14 @@ function appendChatBubble(text, sender, linkUrl) {
     link.innerHTML = ' <i class="fa-solid fa-arrow-up-right-from-square"></i> Source';
     bubble.appendChild(link);
   }
-  
-  chatHistory.appendChild(bubble);
+
+  row.appendChild(bubble);
+  chatHistory.appendChild(row);
   chatHistory.scrollTop = chatHistory.scrollHeight;
 
-  // Cap chat history length at 30 bubbles
-  const bubbles = chatHistory.querySelectorAll('.chat-bubble');
-  if (bubbles.length > 30) {
-    bubbles[0].remove();
-  }
+  // Cap chat history length at 30 rows
+  const rows = chatHistory.querySelectorAll('.chat-bubble-row, .chat-bubble.system');
+  if (rows.length > 30) rows[0].remove();
 }
 
 // Helper to coordinate weather response display, vocal synthesis and Nest/Alexa style dialog fallbacks
@@ -2932,10 +3026,8 @@ async function processCommand(rawCommand, source) {
       
       if (matchedCity) {
         diag.logToTerminal(`[FOLLOW-UP] User accepted recommendation. Checking weather in ${matchedCity}...`, "info");
-        setTimeout(async () => {
-          const data = await fetchRealTimeWeather(matchedCity);
-          handleWeatherResponse(data);
-        }, 200);
+        const data = await fetchRealTimeWeather(matchedCity);
+        handleWeatherResponse(data);
         return;
       } else if (cmd.includes("no") || cmd.includes("stop") || cmd.includes("never mind") || cmd.includes("cancel")) {
         handleAssistantResponse("I don't have information about that, Commander.");
@@ -2944,23 +3036,19 @@ async function processCommand(rawCommand, source) {
     } else if (followUp.type === "search_fallback") {
       if (cmd.includes("diagnostic") || cmd.includes("health") || cmd.includes("system") || cmd.includes("status")) {
         diag.logToTerminal("[FOLLOW-UP] User selected diagnostics check.", "info");
-        setTimeout(() => {
-          processCommand("run system diagnostics", "voice");
-        }, 200);
+        processCommand("run system diagnostics", "voice");
         return;
       } else if (cmd.includes("wiki") || cmd.includes("wikipedia") || cmd.includes("broad") || cmd.includes("search")) {
         diag.logToTerminal(`[FOLLOW-UP] User selected broad Wikipedia search for "${followUp.originalQuery}".`, "info");
-        setTimeout(async () => {
-          const result = await searchInternet(followUp.originalQuery);
-          if (result) {
-            const sentences = result.summary.split(/[.!?]+/);
-            const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(".") + ".";
-            appendChatBubble(`${result.title}: ${result.summary}`, 'assistant', result.url);
-            voice.speak(speechSummary);
-          } else {
-            handleAssistantResponse("I attempted a secondary index query, but it failed to yield any records.");
-          }
-        }, 200);
+        const result = await searchInternet(followUp.originalQuery);
+        if (result) {
+          const sentences = result.summary.split(/[.!?]+/);
+          const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(".") + ".";
+          appendChatBubble(`${result.title}: ${result.summary}`, 'assistant', result.url);
+          voice.speak(speechSummary);
+        } else {
+          handleAssistantResponse("I attempted a secondary index query, but it failed to yield any records.");
+        }
         return;
       } else if (cmd.includes("no") || cmd.includes("stop") || cmd.includes("never mind") || cmd.includes("cancel")) {
         handleAssistantResponse("I don't have information about that, Commander.");
@@ -2969,9 +3057,7 @@ async function processCommand(rawCommand, source) {
     }
   }
   
-  setTimeout(() => {
-    diag.logToTerminal("[AI CORE] Parsing token patterns & entities...", "info");
-  }, 100);
+  diag.logToTerminal("[AI CORE] Parsing token patterns & entities...", "info");
 
   // TIME / DATE COMMAND INTENT
   let isTimeQuery = false;
@@ -3123,9 +3209,7 @@ async function processCommand(rawCommand, source) {
   }
 
   if (isSearchQuery) {
-    setTimeout(() => {
-      diag.logToTerminal(`[INTERNET SEARCH] Querying Wikipedia databases for "${searchQuery}"...`, "info");
-    }, 150);
+    diag.logToTerminal(`[INTERNET SEARCH] Querying Wikipedia databases for "${searchQuery}"...`, "info");
     
     const result = await searchInternet(searchQuery);
     if (result) {
@@ -3135,29 +3219,24 @@ async function processCommand(rawCommand, source) {
       const sentences = result.summary.split(/[.!?]+/);
       const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(".") + ".";
       
-      setTimeout(() => {
-        diag.logToTerminal(`[LUKAS REPLY] "${speechSummary}"`, 'info');
-        appendChatBubble(`${result.title}: ${result.summary}`, 'assistant', result.url);
-        voice.stopWakeWordListener();
-        voice.speak(speechSummary);
-      }, 300);
+      diag.logToTerminal(`[LUKAS REPLY] "${speechSummary}"`, 'info');
+      appendChatBubble(`${result.title}: ${result.summary}`, 'assistant', result.url);
+      voice.stopWakeWordListener();
+      voice.speak(speechSummary);
     } else {
-      setTimeout(() => {
-        handleAssistantResponse(`I searched the internet for "${searchQuery}", but couldn't locate any matching records.`);
-      }, 300);
+      handleAssistantResponse(`I searched the internet for "${searchQuery}", but couldn't locate any matching records.`);
     }
     return;
   }
 
-  setTimeout(() => {
-    // Parser Rules
-    let responseText = "";
-    let handledBySearch = false;
-    let isControlAction = false;
+  // Parser Rules
+  let responseText = "";
+  let handledBySearch = false;
+  let isControlAction = false;
 
-    // Check if command references a dynamically registered device
-    let dynamicMatch = null;
-    const isGlobalCommand = cmd.includes('all') || cmd.includes('every') || cmd.includes('entire') || cmd.includes('house');
+  // Check if command references a dynamically registered device
+  let dynamicMatch = null;
+  const isGlobalCommand = cmd.includes('all') || cmd.includes('every') || cmd.includes('entire') || cmd.includes('house');
     
     if (!isGlobalCommand) {
       for (const dev of home.dynamicDevices) {
@@ -3584,7 +3663,6 @@ async function processCommand(rawCommand, source) {
     if (!handledBySearch) {
       handleAssistantResponse(responseText, isControlAction);
     }
-  }, 400);
 }
 
 // Helper for Wikipedia search fallback
@@ -3629,21 +3707,17 @@ function handleAssistantResponse(text, isSmartHomeAction = false) {
     
     // Resume listening standby if passive listening is active
     voice.stopWakeWordListener();
-    setTimeout(() => {
-      if (isPassiveListenEnabled && !voice.isLongConversation) {
-        voice.startWakeWordListener();
-      }
-    }, 1000);
+    if (isPassiveListenEnabled && !voice.isLongConversation) {
+      voice.startWakeWordListener();
+    }
     return;
   }
 
-  setTimeout(() => {
-    diag.logToTerminal(`[LUKAS REPLY] "${text}"`, 'info');
-    appendChatBubble(text, 'assistant');
-    // Stop wake word listening while vocalizing to avoid self-triggering
-    voice.stopWakeWordListener();
-    voice.speak(text);
-  }, 300);
+  diag.logToTerminal(`[LUKAS REPLY] "${text}"`, 'info');
+  appendChatBubble(text, 'assistant');
+  // Stop wake word listening while vocalizing to avoid self-triggering
+  voice.stopWakeWordListener();
+  voice.speak(text);
 }
 
 function playFuturisticBeep() {

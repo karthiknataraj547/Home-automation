@@ -11,6 +11,14 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
   </head>
   <body>
+  <!-- Holographic particle canvas -->
+  <canvas id="jarvisParticleCanvas"></canvas>
+  <!-- HUD Corner Brackets -->
+  <div class="hud-corner hud-corner-tl"></div>
+  <div class="hud-corner hud-corner-tr"></div>
+  <div class="hud-corner hud-corner-bl"></div>
+  <div class="hud-corner hud-corner-br"></div>
+
     <header>
       <div class="brand-section">
         <div class="pulse-indicator" id="statusPulse"></div>
@@ -39,6 +47,33 @@
       </div>
     </header>
 
+    <!-- Jarvis System Status Ticker Bar -->
+    <div id="jarvisStatusBar">
+      <div class="jarvis-badge">&#9670; LUKAS ONLINE</div>
+      <div class="jarvis-hex-indicator"></div>
+      <div class="jarvis-ticker-wrap">
+        <div class="jarvis-ticker" id="jarvisTicker">
+          <span class="active">&#9679; NEURAL CORE: ACTIVE</span>
+          <span>&#9632; QUANTUM ENCRYPTION: ENABLED</span>
+          <span class="active">&#9679; HOME AUTOMATION: ARMED</span>
+          <span>&#9632; NETWORK INTEGRITY: 98.4%</span>
+          <span class="active">&#9679; AI MATRIX: OPTIMAL</span>
+          <span>&#9632; SENSOR ARRAY: NOMINAL</span>
+          <span class="active">&#9679; SECURITY GRID: SECURE</span>
+          <span>&#9632; BIOMETRIC SCAN: IDLE</span>
+          <!-- Duplicate for seamless loop -->
+          <span class="active">&#9679; NEURAL CORE: ACTIVE</span>
+          <span>&#9632; QUANTUM ENCRYPTION: ENABLED</span>
+          <span class="active">&#9679; HOME AUTOMATION: ARMED</span>
+          <span>&#9632; NETWORK INTEGRITY: 98.4%</span>
+          <span class="active">&#9679; AI MATRIX: OPTIMAL</span>
+          <span>&#9632; SENSOR ARRAY: NOMINAL</span>
+          <span class="active">&#9679; SECURITY GRID: SECURE</span>
+          <span>&#9632; BIOMETRIC SCAN: IDLE</span>
+        </div>
+      </div>
+    </div>
+
     <div class="dashboard-container">
       <!-- Left Panel: Lukas Assistant & Audio -->
       <aside class="panel-column">
@@ -50,22 +85,56 @@
           </div>
           
           <div class="core-container" id="lukasCoreBtn" title="Click to trigger voice activation">
+            <!-- Scanner beam arc -->
+            <svg id="coreScanBeam" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <defs>
+                <linearGradient id="scanGradient" x1="0" y1="0" x2="1" y2="0">
+                  <stop offset="0%" stop-color="rgba(0,240,255,0)" />
+                  <stop offset="70%" stop-color="rgba(0,240,255,0.8)" />
+                  <stop offset="100%" stop-color="rgba(0,240,255,0)" />
+                </linearGradient>
+              </defs>
+              <path d="M 100 100 L 100 4" stroke="url(#scanGradient)" stroke-width="1.5" stroke-linecap="round" opacity="0.9"/>
+              <path d="M 100 100 L 180 50" stroke="url(#scanGradient)" stroke-width="0.8" stroke-linecap="round" opacity="0.4"/>
+            </svg>
+            <!-- 5-ring system -->
+            <div class="core-ring core-far-outer"></div>
             <div class="core-ring core-outer"></div>
             <div class="core-ring core-middle"></div>
             <div class="core-ring core-inner"></div>
-            <div class="core-center" id="coreCenterNode"></div>
+            <div class="core-ring core-nano"></div>
+            <!-- Core center with SVG hex-grid -->
+            <div class="core-center" id="coreCenterNode">
+              <svg id="coreHexGrid" viewBox="0 0 52 52" xmlns="http://www.w3.org/2000/svg">
+                <g stroke="rgba(0,240,255,0.6)" stroke-width="0.4" fill="none">
+                  <polygon points="26,4 36,10 36,22 26,28 16,22 16,10" />
+                  <polygon points="26,24 36,30 36,42 26,48 16,42 16,30" />
+                  <polygon points="8,14 18,20 18,32 8,38 -2,32 -2,20" />
+                  <polygon points="44,14 54,20 54,32 44,38 34,32 34,20" />
+                </g>
+              </svg>
+            </div>
+            <!-- Live transcript overlay -->
+            <div id="liveTranscript"></div>
           </div>
           
           <div class="core-waveform" id="audioWaveform">
-            <div class="wave-bar" style="animation-delay: 0.1s"></div>
-            <div class="wave-bar" style="animation-delay: 0.3s"></div>
-            <div class="wave-bar" style="animation-delay: 0.5s"></div>
-            <div class="wave-bar" style="animation-delay: 0.2s"></div>
-            <div class="wave-bar" style="animation-delay: 0.4s"></div>
-            <div class="wave-bar" style="animation-delay: 0.6s"></div>
-            <div class="wave-bar" style="animation-delay: 0.1s"></div>
-            <div class="wave-bar" style="animation-delay: 0.3s"></div>
-            <div class="wave-bar" style="animation-delay: 0.5s"></div>
+            <div class="wave-bar" style="animation-delay:0.0s"></div>
+            <div class="wave-bar" style="animation-delay:0.1s"></div>
+            <div class="wave-bar" style="animation-delay:0.2s"></div>
+            <div class="wave-bar" style="animation-delay:0.3s"></div>
+            <div class="wave-bar" style="animation-delay:0.4s"></div>
+            <div class="wave-bar" style="animation-delay:0.5s"></div>
+            <div class="wave-bar" style="animation-delay:0.15s"></div>
+            <div class="wave-bar" style="animation-delay:0.25s"></div>
+            <div class="wave-bar" style="animation-delay:0.35s"></div>
+            <div class="wave-bar" style="animation-delay:0.45s"></div>
+            <div class="wave-bar" style="animation-delay:0.55s"></div>
+            <div class="wave-bar" style="animation-delay:0.05s"></div>
+            <div class="wave-bar" style="animation-delay:0.6s"></div>
+            <div class="wave-bar" style="animation-delay:0.7s"></div>
+            <div class="wave-bar" style="animation-delay:0.12s"></div>
+            <div class="wave-bar" style="animation-delay:0.22s"></div>
           </div>
         </section>
 
