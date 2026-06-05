@@ -159,7 +159,37 @@
             </button>
           </div>
         </section>
+
+        <!-- Reminders & Tasks Widget -->
+        <section class="widget reminders-widget" id="remindersWidget">
+          <div class="widget-title">
+            <span><i class="fa-solid fa-bell"></i> REMINDERS &amp; TASKS</span>
+            <span id="reminderCount" style="font-family:var(--font-mono);font-size:0.65rem;color:var(--amber-neon, #ffb41e);">0 ACTIVE</span>
+          </div>
+          <div id="reminderList" class="reminder-list">
+            <div class="reminder-empty" id="reminderEmpty">
+              <i class="fa-regular fa-bell-slash"></i>
+              <span>No active reminders. Say <em>"Lukas, set a reminder"</em></span>
+            </div>
+          </div>
+          <div class="reminder-add-row">
+            <input type="text" id="reminderTextInput" class="chat-input" placeholder="Quick add reminder..." style="font-size:0.75rem;height:32px;" />
+            <button class="btn-icon" id="reminderAddBtn" title="Add reminder" style="height:32px;width:32px;">
+              <i class="fa-solid fa-plus"></i>
+            </button>
+          </div>
+        </section>
       </aside>
+
+      <!-- Reminder Toast Notification -->
+      <div id="reminderToast" class="reminder-toast">
+        <div class="reminder-toast-icon"><i class="fa-solid fa-bell"></i></div>
+        <div class="reminder-toast-body">
+          <div class="reminder-toast-title">REMINDER</div>
+          <div class="reminder-toast-text" id="reminderToastText"></div>
+        </div>
+        <button class="reminder-toast-close" id="reminderToastClose"><i class="fa-solid fa-xmark"></i></button>
+      </div>
 
       <!-- Center Panel: Climate, Automations & Routines -->
       <main class="main-dashboard">

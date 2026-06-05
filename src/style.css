@@ -2147,4 +2147,163 @@ input:checked + .slider-knob:before {
   }
 }
 
+/* ═══════════════════ REMINDERS & TASKS WIDGET ═══════════════════ */
+.reminders-widget {
+  max-height: 280px;
+  display: flex;
+  flex-direction: column;
+}
+.reminder-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 180px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--cyan-neon) transparent;
+}
+.reminder-empty {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.72rem;
+  color: rgba(255,255,255,0.3);
+  padding: 12px 6px;
+  font-family: var(--font-mono);
+}
+.reminder-empty i { font-size: 1rem; opacity: 0.4; }
+.reminder-empty em { color: var(--cyan-neon); font-style: normal; }
 
+.reminder-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: rgba(0,240,255,0.04);
+  border: 1px solid rgba(0,240,255,0.1);
+  border-radius: 8px;
+  font-size: 0.72rem;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  position: relative;
+  transition: all 0.3s ease;
+  animation: reminderSlideIn 0.35s ease-out;
+}
+.reminder-item:hover {
+  background: rgba(0,240,255,0.08);
+  border-color: rgba(0,240,255,0.25);
+}
+.reminder-item .ri-icon {
+  color: var(--amber-neon);
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+.reminder-item .ri-text {
+  flex: 1;
+  line-height: 1.3;
+}
+.reminder-item .ri-text .ri-label {
+  display: block;
+  color: var(--text-primary);
+  font-size: 0.72rem;
+}
+.reminder-item .ri-text .ri-time {
+  display: block;
+  color: var(--cyan-neon);
+  font-size: 0.62rem;
+  margin-top: 2px;
+  opacity: 0.7;
+}
+.reminder-item .ri-delete {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.25);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 2px 4px;
+  transition: color 0.2s;
+  flex-shrink: 0;
+}
+.reminder-item .ri-delete:hover { color: #ff4466; }
+.reminder-item.firing {
+  border-color: var(--amber-neon);
+  background: rgba(255,180,30,0.12);
+  animation: reminderPulse 0.6s ease-in-out infinite alternate;
+}
+@keyframes reminderSlideIn {
+  from { opacity: 0; transform: translateX(-12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes reminderPulse {
+  from { box-shadow: 0 0 8px rgba(255,180,30,0.2); }
+  to { box-shadow: 0 0 20px rgba(255,180,30,0.5); }
+}
+
+.reminder-add-row {
+  display: flex;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(0,240,255,0.06);
+  margin-top: 4px;
+}
+.reminder-add-row .chat-input { flex: 1; }
+
+/* ═══════════════════ REMINDER TOAST NOTIFICATION ═══════════════════ */
+.reminder-toast {
+  position: fixed;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(-120%);
+  z-index: 99999;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 16px 22px;
+  background: linear-gradient(135deg, rgba(20,20,40,0.97), rgba(10,10,30,0.98));
+  border: 1px solid var(--amber-neon);
+  border-radius: 14px;
+  box-shadow: 0 0 40px rgba(255,180,30,0.35), 0 8px 32px rgba(0,0,0,0.5);
+  backdrop-filter: blur(20px);
+  min-width: 320px;
+  max-width: 500px;
+  transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease;
+  opacity: 0;
+}
+.reminder-toast.visible {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+}
+.reminder-toast-icon {
+  font-size: 1.5rem;
+  color: var(--amber-neon);
+  animation: toastBell 0.6s ease-in-out infinite alternate;
+}
+@keyframes toastBell {
+  from { transform: rotate(-12deg); }
+  to { transform: rotate(12deg); }
+}
+.reminder-toast-title {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: 2px;
+  color: var(--amber-neon);
+  text-transform: uppercase;
+}
+.reminder-toast-text {
+  font-size: 0.88rem;
+  color: var(--text-primary);
+  margin-top: 3px;
+  line-height: 1.3;
+}
+.reminder-toast-close {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.4);
+  font-size: 1rem;
+  cursor: pointer;
+  padding: 4px 6px;
+  transition: color 0.2s;
+}
+.reminder-toast-close:hover { color: #ff4466; }

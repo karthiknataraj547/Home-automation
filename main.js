@@ -31,6 +31,202 @@ let activeFollowUp = null;
 let activePlatform = "Spotify";
 let tuyaConfigured = false;
 
+// ═══════════════════ REMINDER & TASK ENGINE ═══════════════════
+let lukasReminders = JSON.parse(localStorage.getItem('lukas_reminders') || '[]');
+let reminderTimers = new Map();
+
+function saveReminders() {
+  localStorage.setItem('lukas_reminders', JSON.stringify(lukasReminders));
+  renderReminders();
+}
+
+function renderReminders() {
+  const list = document.getElementById('reminderList');
+  const countEl = document.getElementById('reminderCount');
+  const emptyEl = document.getElementById('reminderEmpty');
+  if (!list) return;
+
+  // Clear existing items (keep empty placeholder)
+  list.querySelectorAll('.reminder-item').forEach(el => el.remove());
+
+  const active = lukasReminders.filter(r => !r.fired);
+  if (countEl) countEl.textContent = `${active.length} ACTIVE`;
+  if (emptyEl) emptyEl.style.display = lukasReminders.length === 0 ? 'flex' : 'none';
+
+  lukasReminders.forEach((rem, idx) => {
+    const div = document.createElement('div');
+    div.className = 'reminder-item' + (rem.fired ? ' firing' : '');
+    const fireDate = new Date(rem.fireAt);
+    const timeStr = fireDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const dateStr = fireDate.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    div.innerHTML = `
+      <i class="fa-solid ${rem.fired ? 'fa-bell' : 'fa-clock'} ri-icon"></i>
+      <div class="ri-text">
+        <span class="ri-label">${rem.text}</span>
+        <span class="ri-time">${rem.fired ? '✓ FIRED' : `⏰ ${timeStr} · ${dateStr}`}</span>
+      </div>
+      <button class="ri-delete" data-idx="${idx}" title="Delete"><i class="fa-solid fa-trash-can"></i></button>
+    `;
+    div.querySelector('.ri-delete').addEventListener('click', () => {
+      deleteReminder(idx);
+    });
+    list.appendChild(div);
+  });
+}
+
+function scheduleReminder(idx) {
+  const rem = lukasReminders[idx];
+  if (!rem || rem.fired) return;
+  const ms = new Date(rem.fireAt).getTime() - Date.now();
+  if (ms <= 0) {
+    fireReminder(idx);
+    return;
+  }
+  const timer = setTimeout(() => fireReminder(idx), ms);
+  reminderTimers.set(idx, timer);
+}
+
+function fireReminder(idx) {
+  const rem = lukasReminders[idx];
+  if (!rem || rem.fired) return;
+  rem.fired = true;
+  saveReminders();
+  reminderTimers.delete(idx);
+
+  // Show toast
+  showReminderToast(rem.text);
+
+  // Voice alert
+  if (typeof voice !== 'undefined') {
+    voice.speak(`Commander, reminder: ${rem.text}`);
+  }
+
+  // Log to terminal
+  if (typeof diag !== 'undefined') {
+    diag.logToTerminal(`[REMINDER] ⏰ FIRED: "${rem.text}"`, 'warn');
+  }
+}
+
+function showReminderToast(text) {
+  const toast = document.getElementById('reminderToast');
+  const toastText = document.getElementById('reminderToastText');
+  if (!toast || !toastText) return;
+  toastText.textContent = text;
+  toast.style.display = 'flex';
+  requestAnimationFrame(() => toast.classList.add('visible'));
+  // Auto-dismiss after 10 seconds
+  setTimeout(() => dismissReminderToast(), 10000);
+}
+
+function dismissReminderToast() {
+  const toast = document.getElementById('reminderToast');
+  if (!toast) return;
+  toast.classList.remove('visible');
+  setTimeout(() => { toast.style.display = 'none'; }, 500);
+}
+
+function deleteReminder(idx) {
+  if (reminderTimers.has(idx)) {
+    clearTimeout(reminderTimers.get(idx));
+    reminderTimers.delete(idx);
+  }
+  lukasReminders.splice(idx, 1);
+  saveReminders();
+  // Re-schedule all since indices shifted
+  reminderTimers.forEach((t) => clearTimeout(t));
+  reminderTimers.clear();
+  lukasReminders.forEach((r, i) => { if (!r.fired) scheduleReminder(i); });
+}
+
+function addReminder(text, fireAt) {
+  const rem = { text, fireAt: fireAt.toISOString(), fired: false, createdAt: new Date().toISOString() };
+  lukasReminders.push(rem);
+  const idx = lukasReminders.length - 1;
+  saveReminders();
+  scheduleReminder(idx);
+  return rem;
+}
+
+function parseReminderTime(cmd) {
+  const now = new Date();
+  
+  // "in X minutes/hours/seconds"
+  const inMatch = cmd.match(/(?:in|after)\s+(\d+)\s*(second|sec|minute|min|hour|hr)s?/i);
+  if (inMatch) {
+    const val = parseInt(inMatch[1]);
+    const unit = inMatch[2].toLowerCase();
+    const ms = unit.startsWith('sec') ? val * 1000 : unit.startsWith('min') ? val * 60000 : val * 3600000;
+    return new Date(now.getTime() + ms);
+  }
+  
+  // "at HH:MM" or "at H AM/PM"
+  const atMatch = cmd.match(/at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i);
+  if (atMatch) {
+    let h = parseInt(atMatch[1]);
+    const m = atMatch[2] ? parseInt(atMatch[2]) : 0;
+    const ampm = atMatch[3];
+    if (ampm) {
+      if (ampm.toLowerCase() === 'pm' && h < 12) h += 12;
+      if (ampm.toLowerCase() === 'am' && h === 12) h = 0;
+    }
+    const target = new Date(now);
+    target.setHours(h, m, 0, 0);
+    if (target <= now) target.setDate(target.getDate() + 1); // Next day
+    return target;
+  }
+  
+  return null;
+}
+
+function extractReminderText(cmd) {
+  // Remove time phrases and trigger phrases to get the reminder label
+  let text = cmd
+    .replace(/(?:set|create|add|make|schedule)\s*(?:a|an)?\s*(?:reminder|task|alarm|timer)/i, '')
+    .replace(/(?:in|after)\s+\d+\s*(?:seconds?|secs?|minutes?|mins?|hours?|hrs?)/i, '')
+    .replace(/at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?/i, '')
+    .replace(/(?:to|for|that|about)\s*/i, '')
+    .replace(/remind\s*me\s*(?:to|that|about)?/i, '')
+    .trim();
+  
+  // Capitalize first letter
+  if (text.length > 0) {
+    text = text.charAt(0).toUpperCase() + text.slice(1);
+  }
+  return text || 'Reminder';
+}
+
+// Initialize reminders on load
+function initReminders() {
+  renderReminders();
+  lukasReminders.forEach((r, i) => { if (!r.fired) scheduleReminder(i); });
+  
+  // Toast close button
+  const closeBtn = document.getElementById('reminderToastClose');
+  if (closeBtn) closeBtn.addEventListener('click', dismissReminderToast);
+  
+  // Quick-add input
+  const addBtn = document.getElementById('reminderAddBtn');
+  const addInput = document.getElementById('reminderTextInput');
+  if (addBtn && addInput) {
+    const quickAdd = () => {
+      const val = addInput.value.trim();
+      if (!val) return;
+      const time = parseReminderTime(val);
+      const label = extractReminderText(val);
+      const fireAt = time || new Date(Date.now() + 5 * 60000); // Default 5 min
+      addReminder(label, fireAt);
+      addInput.value = '';
+      const timeStr = fireAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      if (typeof diag !== 'undefined') {
+        diag.logToTerminal(`[REMINDER] Set: "${label}" at ${timeStr}`, 'info');
+      }
+    };
+    addBtn.addEventListener('click', quickAdd);
+    addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') quickAdd(); });
+  }
+}
+// ═══════════════════ END REMINDER ENGINE ═══════════════════
+
 // Global map to store physical BluetoothDevice references and connection handlers
 const activeBleDevices = new Map();
 
@@ -149,6 +345,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initClock();
   diag.initGauges();
   diag.initChartTooltip();
+  initReminders();
   
   // Render energy chart on interval
   diag.drawEnergyChart();
@@ -450,17 +647,17 @@ function bindUIEvents() {
       liveEl.classList.add('visible');
     }
     
-    // Wait for 3 seconds of silence after the last word recognized before proceeding
+    // Process command quickly after 1.5s of silence (minimal gap for speech finalizer)
     proceedTimeout = setTimeout(() => {
       if (accumulatedTranscript.trim()) {
-        diag.logToTerminal(`[AI CORE] 3 seconds of silence detected after speech. Proceeding with command: "${accumulatedTranscript}"`, "info");
+        diag.logToTerminal(`[AI CORE] Speech finalized. Proceeding with command: "${accumulatedTranscript}"`, "info");
         voice.stopListeningForCommand();
         processCommand(accumulatedTranscript, 'voice');
         accumulatedTranscript = "";
         // Hide live transcript
         if (liveEl) liveEl.classList.remove('visible');
       }
-    }, 3000);
+    }, 1500);
   }
 
   voice.onSpeechDetected = (transcript) => {
@@ -2498,7 +2695,7 @@ IMPORTANT: Reply ONLY with valid JSON. Do not include markdown code block syntax
 
 JSON Schema:
 {
-  "category": "light" | "climate" | "security" | "routine" | "media" | "diagnostics" | "greetings" | "time" | "date" | "weather" | "crypto" | "cctv" | "unknown",
+  "category": "light" | "climate" | "security" | "routine" | "media" | "diagnostics" | "greetings" | "time" | "date" | "weather" | "crypto" | "cctv" | "reminder" | "unknown",
   "isGlobal": boolean,
   "targetDeviceName": string | null,
   "targetZone": "Living Room" | "Bedroom" | "Kitchen" | "Outdoor" | null,
@@ -2516,7 +2713,9 @@ Mappings Guide:
 - "how is the system running" -> {"category":"diagnostics","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"status","value":null}
 - "play next track" -> {"category":"media","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"next","value":null}
 - "show camera feed" -> {"category":"cctv","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"on","value":null}
-- "stop music" -> {"category":"media","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"stop","value":null}`;
+- "stop music" -> {"category":"media","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"stop","value":null}
+- "remind me in 5 minutes to go home" -> {"category":"reminder","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":"in 5 minutes to go home"}
+- "set a reminder" -> {"category":"reminder","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":null}`;
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
     const response = await fetch(url, {
@@ -2605,7 +2804,7 @@ IMPORTANT: Reply ONLY with valid JSON. Do not include markdown code block syntax
 
 JSON Schema:
 {
-  "category": "light" | "climate" | "security" | "routine" | "media" | "diagnostics" | "greetings" | "time" | "date" | "weather" | "crypto" | "cctv" | "unknown",
+  "category": "light" | "climate" | "security" | "routine" | "media" | "diagnostics" | "greetings" | "time" | "date" | "weather" | "crypto" | "cctv" | "reminder" | "unknown",
   "isGlobal": boolean,
   "targetDeviceName": string | null,
   "targetZone": "Living Room" | "Bedroom" | "Kitchen" | "Outdoor" | null,
@@ -2623,7 +2822,9 @@ Mappings Guide:
 - "how is the system running" -> {"category":"diagnostics","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"status","value":null}
 - "play next track" -> {"category":"media","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"next","value":null}
 - "show camera feed" -> {"category":"cctv","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"on","value":null}
-- "stop music" -> {"category":"media","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"stop","value":null}`;
+- "stop music" -> {"category":"media","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"stop","value":null}
+- "remind me in 5 minutes to go home" -> {"category":"reminder","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":"in 5 minutes to go home"}
+- "set a reminder" -> {"category":"reminder","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":null}`;
 
     const prompt = `System Instructions: ${systemPrompt}\n\nUser Directive: "${rawCommand}"`;
     const response = await window.puter.ai.chat(prompt);
@@ -3054,9 +3255,82 @@ async function processCommand(rawCommand, source) {
         handleAssistantResponse("I don't have information about that, Commander.");
         return;
       }
+    } else if (followUp.type === "reminder_input") {
+      // User is providing the reminder text after being asked
+      const time = parseReminderTime(cmd);
+      const label = extractReminderText(rawCommand);
+      const fireAt = time || new Date(Date.now() + 5 * 60000); // Default 5 minutes if no time given
+      addReminder(label, fireAt);
+      const timeStr = fireAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      handleAssistantResponse(`Reminder set: "${label}" — I'll alert you at ${timeStr}, Commander.`);
+      return;
     }
   }
   
+  // ═══════════════════ REMINDER/TASK COMMAND DETECTION ═══════════════════
+  const isReminderCmd = /\b(remind|reminder|set\s*(?:a\s*)?reminder|set\s*(?:a\s*)?task|set\s*(?:a\s*)?alarm|set\s*(?:a\s*)?timer)\b/i.test(cmd);
+  const isListReminders = /\b(list|show|view|what|my)\s*(?:all\s*)?(?:reminder|task|alarm|timer)s?\b/i.test(cmd) || (cmd.includes('reminder') && (cmd.includes('list') || cmd.includes('show') || cmd.includes('what')));
+  const isClearReminders = /\b(clear|delete|remove)\s*(?:all\s*)?(?:reminder|task|alarm|timer)s?\b/i.test(cmd);
+
+  if (isClearReminders) {
+    reminderTimers.forEach((t) => clearTimeout(t));
+    reminderTimers.clear();
+    lukasReminders.length = 0;
+    saveReminders();
+    handleAssistantResponse("All reminders have been cleared, Commander.");
+    return;
+  }
+
+  if (isListReminders) {
+    const active = lukasReminders.filter(r => !r.fired);
+    if (active.length === 0) {
+      handleAssistantResponse("You have no active reminders, Commander.");
+    } else {
+      const listText = active.map((r, i) => {
+        const t = new Date(r.fireAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `${i + 1}. ${r.text} — at ${t}`;
+      }).join('. ');
+      handleAssistantResponse(`You have ${active.length} active reminder${active.length > 1 ? 's' : ''}. ${listText}`);
+    }
+    return;
+  }
+
+  if (isReminderCmd) {
+    // Check if the command already has time + text inline: "remind me in 5 minutes to go home"
+    const inlineTime = parseReminderTime(cmd);
+    const inlineText = extractReminderText(rawCommand);
+    
+    if (inlineTime && inlineText && inlineText !== 'Reminder') {
+      // Full inline command — set it directly
+      addReminder(inlineText, inlineTime);
+      const timeStr = inlineTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      handleAssistantResponse(`Reminder set: "${inlineText}" — I'll alert you at ${timeStr}, Commander.`);
+      return;
+    }
+    
+    if (inlineTime && (!inlineText || inlineText === 'Reminder')) {
+      // Has time but no label — ask what the reminder is about
+      activeFollowUp = { type: 'reminder_input', time: inlineTime };
+      handleAssistantResponse("What should I remind you about, Commander?");
+      return;
+    }
+    
+    if (!inlineTime && inlineText && inlineText !== 'Reminder') {
+      // Has label but no time — default to 5 minutes
+      const defaultTime = new Date(Date.now() + 5 * 60000);
+      addReminder(inlineText, defaultTime);
+      const timeStr = defaultTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      handleAssistantResponse(`Reminder set: "${inlineText}" — defaulting to 5 minutes from now at ${timeStr}, Commander.`);
+      return;
+    }
+    
+    // Just "set a reminder" with nothing else — ask what
+    activeFollowUp = { type: 'reminder_input' };
+    handleAssistantResponse("What would you like to be reminded about, Commander?");
+    return;
+  }
+  // ═══════════════════ END REMINDER DETECTION ═══════════════════
+
   diag.logToTerminal("[AI CORE] Parsing token patterns & entities...", "info");
 
   // TIME / DATE COMMAND INTENT
