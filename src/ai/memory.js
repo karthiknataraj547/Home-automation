@@ -16,6 +16,8 @@ class LukasMemory {
       contextTags: new Set(), // Topics active in this session
       pendingTasks: [],     // Queued subtasks
       lastIntent: null,     // Last classified intent
+      currentProject: null,
+      currentGoal: null,
     };
 
     // Long-term: persisted to localStorage
@@ -126,6 +128,8 @@ class LukasMemory {
     this.shortTerm.activeGoals = [];
     this.shortTerm.pendingTasks = [];
     this.shortTerm.lastIntent = null;
+    this.shortTerm.currentProject = null;
+    this.shortTerm.currentGoal = null;
   }
 
   // ─── Long-Term Preferences ───────────────────────────────────────────────
@@ -164,8 +168,15 @@ class LukasMemory {
   // ─── Long-Term Projects ──────────────────────────────────────────────────
 
   setProject(name, data) {
-    const existing = this.longTerm.projects[name] || {};
-    this.longTerm.projects[name] = { ...existing, ...data, name, updatedAt: Date.now() };
+    const existing = this.longTerm.projects[name] || { goals: [], problems: [] };
+    this.longTerm.projects[name] = {
+      goals: [],
+      problems: [],
+      ...existing,
+      ...data,
+      name,
+      updatedAt: Date.now()
+    };
     this._saveLongTerm();
   }
 
@@ -190,6 +201,40 @@ class LukasMemory {
     this._saveLongTerm();
   }
 
+  addProjectGoal(name, goal) {
+    if (!this.longTerm.projects[name]) {
+      this.setProject(name, { description: 'Auto-created project', status: 'active' });
+    }
+    const project = this.longTerm.projects[name];
+    if (!project.goals) project.goals = [];
+    if (!project.goals.includes(goal)) {
+      project.goals.push(goal);
+      project.updatedAt = Date.now();
+      this._saveLongTerm();
+    }
+  }
+
+  addProjectProblem(name, problem) {
+    if (!this.longTerm.projects[name]) {
+      this.setProject(name, { description: 'Auto-created project', status: 'active' });
+    }
+    const project = this.longTerm.projects[name];
+    if (!project.problems) project.problems = [];
+    if (!project.problems.includes(problem)) {
+      project.problems.push(problem);
+      project.updatedAt = Date.now();
+      this._saveLongTerm();
+    }
+  }
+
+  clearProjectProblems(name) {
+    if (this.longTerm.projects[name]) {
+      this.longTerm.projects[name].problems = [];
+      this.longTerm.projects[name].updatedAt = Date.now();
+      this._saveLongTerm();
+    }
+  }
+
   // ─── Context Summary (for Prompt Injection) ──────────────────────────────
 
   /**
@@ -203,37 +248,50 @@ class LukasMemory {
 
     const lines = [];
 
-    // User identity
+    // [WORKING MEMORY]
+    lines.push('### [WORKING MEMORY]');
     const name = prefs.name || facts.name?.value || null;
     if (name) lines.push(`User's name: ${name}`);
     if (prefs.location || facts.location?.value) {
       lines.push(`User location: ${prefs.location || facts.location?.value}`);
     }
-    if (prefs.responseStyle) lines.push(`Prefers: ${prefs.responseStyle} responses`);
-    if (prefs.language && prefs.language !== 'en') lines.push(`Language: ${prefs.language}`);
-
-    // Session info
+    if (this.shortTerm.currentProject) lines.push(`Current Project: ${this.shortTerm.currentProject}`);
+    if (this.shortTerm.currentGoal) lines.push(`Current Goal: ${this.shortTerm.currentGoal}`);
+    if (topics.length > 0) {
+      lines.push(`Topics discussed this session: ${topics.join(', ')}`);
+    }
     lines.push(`Session #${this.longTerm.sessionCount} with LUKAS`);
 
-    // Active projects
+    // [PROJECTS MEMORY]
+    lines.push('\n### [PROJECTS MEMORY]');
     if (projects.length > 0) {
       const projectList = projects
-        .slice(-4)
-        .map(p => `• ${p.name}${p.status ? ` [${p.status}]` : ''}${p.description ? `: ${p.description}` : ''}`)
+        .map(p => {
+          let pLines = `• Project: ${p.name}${p.status ? ` [${p.status}]` : ''}${p.description ? `: ${p.description}` : ''}`;
+          if (p.goals && p.goals.length > 0) {
+            pLines += `\n  - Goals: ${p.goals.join(', ')}`;
+          }
+          if (p.problems && p.problems.length > 0) {
+            pLines += `\n  - Problems/Issues: ${p.problems.join(', ')}`;
+          }
+          return pLines;
+        })
         .join('\n');
-      lines.push(`\nActive Projects:\n${projectList}`);
+      lines.push(projectList);
+    } else {
+      lines.push('No active projects recorded.');
     }
 
-    // Recent topics this session
-    if (topics.length > 0) {
-      lines.push(`\nTopics discussed this session: ${topics.join(', ')}`);
-    }
-
-    // Key facts
+    // [LONG-TERM MEMORY]
+    lines.push('\n### [LONG-TERM MEMORY]');
+    if (prefs.responseStyle) lines.push(`Prefers: ${prefs.responseStyle} responses`);
+    if (prefs.language && prefs.language !== 'en') lines.push(`Language: ${prefs.language}`);
     const factKeys = Object.keys(facts).filter(k => !['name', 'location'].includes(k));
     if (factKeys.length > 0) {
-      const factList = factKeys.slice(-5).map(k => `• ${k}: ${facts[k].value}`).join('\n');
-      lines.push(`\nRemembered facts:\n${factList}`);
+      const factList = factKeys.map(k => `• ${k}: ${facts[k].value}`).join('\n');
+      lines.push(`Remembered facts:\n${factList}`);
+    } else {
+      lines.push('No long-term facts recorded.');
     }
 
     return lines.join('\n');
@@ -273,14 +331,42 @@ class LukasMemory {
       }
     }
 
-    // Detect project mentions
-    const projectMatch = userMessage.match(/(?:working on|building|developing|creating|making)\s+(?:a\s+)?([^.?!,]+?)(?:\s+project|app|system|website|tool)?(?:\.|,|$)/i);
+    // Detect working memory declarations or goals / problems:
+    // e.g. "I am starting a project called Store, my goal is to launch it by next week, and the main problem is payment gateway setup."
+    // 1. Project name
+    const projectMatch = userMessage.match(/(?:working on|building|developing|creating|making|project called)\s+(?:a\s+)?([^.?!,]+?)(?:\s+project|app|system|website|tool)?(?:\.|,|$)/i);
+    let currentProjName = this.shortTerm.currentProject;
     if (projectMatch && projectMatch[1].length < 60) {
-      const projectName = projectMatch[1].trim();
-      if (!this.longTerm.projects[projectName]) {
-        this.setProject(projectName, { description: `Mentioned in conversation`, status: 'active' });
-        console.log(`[LUKAS Memory] Auto-detected project: "${projectName}"`);
+      currentProjName = projectMatch[1].trim();
+      this.shortTerm.currentProject = currentProjName;
+      if (!this.longTerm.projects[currentProjName]) {
+        this.setProject(currentProjName, { description: `Created from conversation`, status: 'active' });
+        console.log(`[LUKAS Memory] Created active project: "${currentProjName}"`);
       }
+      extracted = true;
+    }
+
+    // 2. Project Goal
+    const goalMatch = userMessage.match(/(?:my goal is to|the goal is to|goal is|aim to)\s+([^.?!,]+)/i);
+    if (goalMatch && goalMatch[1]) {
+      const goalStr = goalMatch[1].trim();
+      this.shortTerm.currentGoal = goalStr;
+      if (currentProjName) {
+        this.addProjectGoal(currentProjName, goalStr);
+        console.log(`[LUKAS Memory] Added goal to "${currentProjName}": "${goalStr}"`);
+      }
+      extracted = true;
+    }
+
+    // 3. Project Problem
+    const problemMatch = userMessage.match(/(?:main problem is|problem is|issue is|active problem is)\s+([^.?!,]+)/i);
+    if (problemMatch && problemMatch[1]) {
+      const problemStr = problemMatch[1].trim();
+      if (currentProjName) {
+        this.addProjectProblem(currentProjName, problemStr);
+        console.log(`[LUKAS Memory] Added problem to "${currentProjName}": "${problemStr}"`);
+      }
+      extracted = true;
     }
 
     return extracted;
@@ -354,6 +440,58 @@ class LukasMemory {
       activeGoals: this.shortTerm.activeGoals.length,
       contextTags: [...this.shortTerm.contextTags],
     };
+  }
+
+  /**
+   * Get a clean Working Memory snapshot for the UI Memory Panel.
+   */
+  getWorkingMemorySummary() {
+    const prefs = this.longTerm.preferences;
+    const facts = this.longTerm.facts;
+    return {
+      userName: prefs.name || facts.name?.value || 'Commander',
+      currentProject: this.shortTerm.currentProject || null,
+      currentGoal: this.shortTerm.currentGoal || null,
+      contextTags: [...this.shortTerm.contextTags].slice(-6),
+      sessionCount: this.longTerm.sessionCount,
+      messageCount: this.shortTerm.messages.length,
+      dominantUseCase: prefs.dominantUseCase || null,
+      location: prefs.location || facts.location?.value || null,
+    };
+  }
+
+  /**
+   * Get active project summaries for the UI Memory Panel.
+   */
+  getProjectMemorySummary() {
+    return Object.values(this.longTerm.projects)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+      .slice(0, 5)
+      .map(p => ({
+        name: p.name,
+        status: p.status || 'active',
+        description: p.description || '',
+        goals: (p.goals || []).slice(0, 3),
+        problems: (p.problems || []).slice(0, 2),
+        updatedAt: p.updatedAt ? new Date(p.updatedAt).toLocaleDateString() : 'Unknown',
+      }));
+  }
+
+  /**
+   * Get long-term facts for the UI Memory Panel.
+   */
+  getLongTermFactsSummary() {
+    const prefs = this.longTerm.preferences;
+    const facts = this.longTerm.facts;
+    const items = [];
+    const keyLabels = { name: 'Name', location: 'Location', responseStyle: 'Style', dominantUseCase: 'Top Use' };
+    for (const [k, v] of Object.entries(facts)) {
+      if (items.length >= 8) break;
+      items.push({ key: keyLabels[k] || k, value: v.value });
+    }
+    if (prefs.responseStyle && !facts.responseStyle) items.push({ key: 'Response Style', value: prefs.responseStyle });
+    if (prefs.dominantUseCase) items.push({ key: 'Top Activity', value: prefs.dominantUseCase });
+    return items;
   }
 
   exportMemory() {

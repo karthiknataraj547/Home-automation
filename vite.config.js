@@ -16,6 +16,83 @@ let go2rtcProcess    = null;
 let ffmpegHlsProcess = null;
 let activeRtspUrl    = null;
 
+let cachedInvidiousInstances = null;
+let lastInvidiousFetchTime = 0;
+
+function getHealthyInvidiousInstances() {
+  const now = Date.now();
+  if (cachedInvidiousInstances && (now - lastInvidiousFetchTime < 1800000)) {
+    return Promise.resolve(cachedInvidiousInstances);
+  }
+
+  const fallbackList = [
+    'https://invidious.io.lol',
+    'https://inv.nadeko.net',
+    'https://invidious.nerdvpn.de',
+    'https://invidious.privacyredirect.com',
+    'https://invidious.perennialte.ch',
+  ];
+
+  return new Promise((resolve) => {
+    https.get({
+      hostname: 'api.invidious.io',
+      path: '/v1/instances?sort_by=type,health',
+      headers: { 'User-Agent': 'LUKAS-AI/1.0', 'Accept': 'application/json' },
+      timeout: 4000
+    }, (r) => {
+      let data = '';
+      r.on('data', c => data += c);
+      r.on('end', () => {
+        try {
+          const list = JSON.parse(data);
+          const instances = [];
+          if (Array.isArray(list)) {
+            list.forEach(item => {
+              if (Array.isArray(item) && item.length > 1 && item[1] && typeof item[1] === 'object') {
+                instances.push(item[1]);
+              } else if (item && typeof item === 'object') {
+                instances.push(item);
+              }
+            });
+          }
+
+          const healthyUrls = instances
+            .filter(inst => {
+              if (!inst || !inst.uri || inst.type !== 'https' || inst.api !== true) return false;
+              if (inst.metadata && inst.metadata.online === false) return false;
+              return true;
+            })
+            .sort((a, b) => {
+              const uptimeA = (a.metadata && a.metadata.uptime) || 0;
+              const uptimeB = (b.metadata && b.metadata.uptime) || 0;
+              return uptimeB - uptimeA;
+            })
+            .map(inst => inst.uri);
+
+          if (healthyUrls.length > 0) {
+            cachedInvidiousInstances = healthyUrls.slice(0, 8);
+            lastInvidiousFetchTime = now;
+            console.log(`[Music Search Backend] Dynamically fetched ${cachedInvidiousInstances.length} healthy Invidious instances.`);
+            resolve(cachedInvidiousInstances);
+          } else {
+            resolve(fallbackList);
+          }
+        } catch (err) {
+          console.warn('[Music Search Backend] Failed to parse Invidious instances:', err.message);
+          resolve(fallbackList);
+        }
+      });
+    }).on('error', (err) => {
+      console.warn('[Music Search Backend] Failed to fetch Invidious instances:', err.message);
+      resolve(fallbackList);
+    }).on('timeout', () => {
+      console.warn('[Music Search Backend] Invidious instances fetch timed out.');
+      resolve(fallbackList);
+    });
+  });
+}
+
+
 // ── RTSP candidate paths ──────────────────────────────────────────────────────
 const RTSP_PATHS = [
   'ch0_0.264','ch0_1.264','stream0','stream1','onvif1','onvif2',
@@ -891,6 +968,152 @@ export default defineConfig({
             json(res, { query: q, found: results.length > 0, results: results.slice(0, 6), timestamp: new Date().toISOString(), backend: 'lukas-search-serpapi-vite', serpapi_used: !!serpApiKey });
 
           } catch(e) { json(res, { error: e.message, found: false, results: [] }, 500); }
+
+        // ── POST /api/music-search ── Invidious YouTube audio search ─────
+        } else if (url === '/api/music-search' && req.method === 'POST') {
+          try {
+            const body = await readBody(req);
+            const { query } = JSON.parse(body);
+            if (!query || !query.trim()) return json(res, { found: false, error: 'Missing query' }, 400);
+
+            const q = query.trim();
+            console.log(`[Music Search] Searching: "${q}"`);
+
+            // Public Invidious instances resolved dynamically
+            const INVIDIOUS_INSTANCES = await getHealthyInvidiousInstances();
+
+            const searchWithTimeout = (url, timeoutMs = 7000) => new Promise((resolve, reject) => {
+              const controller = { aborted: false };
+              const timer = setTimeout(() => {
+                controller.aborted = true;
+                reject(new Error('timeout'));
+              }, timeoutMs);
+
+              https.get(url, {
+                timeout: timeoutMs,
+                headers: {
+                  'Accept': 'application/json',
+                  'User-Agent': 'LUKAS-AI/1.0',
+                }
+              }, (r) => {
+                clearTimeout(timer);
+                let data = '';
+                r.on('data', c => data += c);
+                r.on('end', () => {
+                  try { resolve(JSON.parse(data)); }
+                  catch { reject(new Error('Invalid JSON')); }
+                });
+              })
+              .on('error', (e) => { clearTimeout(timer); reject(e); })
+              .on('timeout', () => { clearTimeout(timer); reject(new Error('timeout')); });
+            });
+
+            // Try each Invidious instance
+            let searchResults = null;
+            let workingInstance = null;
+
+            for (const instance of INVIDIOUS_INSTANCES) {
+              try {
+                const searchUrl = `${instance}/api/v1/search?q=${encodeURIComponent(q + ' audio')}&type=video&fields=videoId,title,author,lengthSeconds,videoThumbnails`;
+                const results = await searchWithTimeout(searchUrl, 7000);
+                if (Array.isArray(results) && results.length > 0) {
+                  searchResults = results;
+                  workingInstance = instance;
+                  console.log(`[Music Search] Got ${results.length} results from ${instance}`);
+                  break;
+                }
+              } catch (e) {
+                console.warn(`[Music Search] Instance ${instance} failed: ${e.message}`);
+              }
+            }
+
+            if (!searchResults || !workingInstance) {
+              return json(res, { found: false, error: 'All Invidious instances unavailable' });
+            }
+
+            // Score and pick best result
+            const qWords = q.toLowerCase().split(/\s+/).filter(w => w.length > 1);
+            const scored = searchResults.slice(0, 8).map(r => {
+              let score = 0;
+              const title = (r.title || '').toLowerCase();
+              const author = (r.author || '').toLowerCase();
+
+              const titleMatches = qWords.filter(w => title.includes(w)).length;
+              score += (titleMatches / Math.max(qWords.length, 1)) * 50;
+
+              if (author.includes('- topic') || author.includes('vevo') || author.includes('official')) score += 30;
+
+              const dur = r.lengthSeconds || 0;
+              if (dur > 60 && dur < 480) score += 20;
+              else if (dur > 480) score -= 10;
+
+              if (title.includes('mix') || title.includes('compilation') || title.includes('full album') || title.includes('playlist')) score -= 20;
+
+              return { r, score };
+            });
+            scored.sort((a, b) => b.score - a.score);
+            const best = scored[0]?.r || searchResults[0];
+
+            console.log(`[Music Search] Best match: "${best.title}" by "${best.author}" (${best.videoId})`);
+
+            // Get audio stream URL from Invidious video endpoint
+            let audioUrl = null;
+            try {
+              const videoUrl = `${workingInstance}/api/v1/videos/${best.videoId}?fields=adaptiveFormats,formatStreams`;
+              const videoData = await searchWithTimeout(videoUrl, 7000);
+
+              // Prefer audio-only adaptive formats (highest bitrate)
+              const audioFormats = (videoData.adaptiveFormats || [])
+                .filter(f => f.type && f.type.startsWith('audio/') && f.url)
+                .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+              if (audioFormats.length > 0) {
+                audioUrl = audioFormats[0].url;
+                console.log(`[Music Search] Audio stream found (${audioFormats[0].type}, ${Math.round((audioFormats[0].bitrate || 0) / 1000)}kbps)`);
+              } else {
+                // Fall back to combined format
+                const combined = (videoData.formatStreams || []).find(f => f.url);
+                if (combined) {
+                  audioUrl = combined.url;
+                  console.log(`[Music Search] Using combined stream format`);
+                }
+              }
+            } catch (e) {
+              console.warn(`[Music Search] Stream URL fetch failed: ${e.message}`);
+            }
+
+            if (!audioUrl) {
+              return json(res, {
+                found: false,
+                error: 'Could not get audio stream URL',
+                partial: {
+                  videoId: best.videoId,
+                  title: best.title,
+                  author: best.author,
+                }
+              });
+            }
+
+            const thumbnail = best.videoThumbnails?.find(t => t.quality === 'medium')?.url ||
+                              best.videoThumbnails?.[0]?.url || '';
+
+            return json(res, {
+              found: true,
+              track: {
+                videoId: best.videoId,
+                title: best.title,
+                author: best.author,
+                audioUrl,
+                thumbnail,
+                duration: best.lengthSeconds || 0,
+                instance: workingInstance,
+              }
+            });
+
+          } catch (e) {
+            console.error('[Music Search] Error:', e.message);
+            return json(res, { found: false, error: e.message }, 500);
+          }
 
         } else { next(); }
 

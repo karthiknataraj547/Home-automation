@@ -173,22 +173,65 @@ Return a JSON object with:
    * Used for compound commands like "research X, summarize it, and set a reminder"
    */
   async decompose(input, intent, apiKey, apiProvider) {
-    if (!apiKey) return [{ task: input, intent, agent: 'conversation' }];
+    // If no api key is available, use rule-based decomposition for simple split keywords like 'and then'
+    if (!apiKey) {
+      const parts = input.split(/\band then\b|\bthen\b/i);
+      if (parts.length > 1) {
+        return parts.map((part, index) => {
+          const trimmed = part.trim();
+          const ruleClass = this._classifyByRules(trimmed);
+          return {
+            task: trimmed,
+            agent: this._intentToAgent(ruleClass.intent),
+            dependsOn: index > 0 ? index - 1 : null
+          };
+        });
+      }
+      return [{ task: input, agent: this._intentToAgent(intent), dependsOn: null }];
+    }
 
-    const systemPrompt = `You are LUKAS's task decomposition engine. Break the user request into ordered subtasks.
-Return JSON array:
+    const systemPrompt = `You are LUKAS's task planning and decomposition engine.
+Your goal is to break down a complex, compound or multi-step user request into an ordered sequence of subtasks.
+Each subtask should specify the agent responsible for executing it.
+Supported agents:
+- 'research' (for web searching or looking up external info)
+- 'home_control' (for smart home device status or actions like lights, climate, climate mode)
+- 'automation' (for scheduling reminders, timers, alarms, or routines)
+- 'weather' (for weather inquiries)
+- 'media' (for music or volume control)
+- 'math' (for arithmetic and computations)
+- 'conversation' (for general chatting or synthesizing final responses)
+- 'system' (for diagnostics, system commands, or settings)
+
+Return ONLY a JSON array of objects, with NO markdown backticks or commentary:
 [
-  { "task": "...", "agent": "research|home_control|task_execution|automation|conversation", "dependsOn": <index or null> }
+  { "task": "detailed task instruction for this step", "agent": "one of the agents above", "dependsOn": null or integer index of prerequisite step }
 ]
-Keep it minimal — only decompose genuinely multi-step requests.`;
+
+Example input: "Set up a morning routine, search the weather, and set a reminder to water my plants."
+Example output:
+[
+  { "task": "activate morning routine in home", "agent": "home_control", "dependsOn": null },
+  { "task": "retrieve the weather forecast", "agent": "weather", "dependsOn": null },
+  { "task": "set a reminder to water the plants", "agent": "automation", "dependsOn": null }
+]`;
 
     try {
-      const result = await this._callAI(systemPrompt, input, apiKey, apiProvider, 0.2);
-      const parsed = JSON.parse(result);
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    } catch {}
+      const result = await this._callAI(systemPrompt, input, apiKey, apiProvider, 0.15);
+      const cleaned = result.replace(/```json/g, '').replace(/```/g, '').trim();
+      const parsed = JSON.parse(cleaned);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map(step => ({
+          task: step.task,
+          agent: step.agent || 'conversation',
+          dependsOn: typeof step.dependsOn === 'number' ? step.dependsOn : null
+        }));
+      }
+    } catch (e) {
+      console.warn('[Orchestrator] Task decomposition AI call failed, falling back:', e.message);
+    }
 
-    return [{ task: input, intent, agent: this._intentToAgent(intent), dependsOn: null }];
+    return [{ task: input, agent: this._intentToAgent(intent), dependsOn: null }];
   }
 
   _intentToAgent(intent) {

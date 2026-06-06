@@ -41,6 +41,25 @@ class LukasVoiceController {
     this.onWakeWordDetected = null;
     this.onSpeechDetected = null;
     this.onMicPermissionBlocked = null;
+    this.onPreWarm = null;  // NEW: fires as soon as wake word detected, before user finishes speaking
+    
+    // Latency tracker — records timestamps at each pipeline stage
+    this.latency = {
+      wakeDetectedAt: 0,
+      sttCompleteAt: 0,
+      responseStartAt: 0,
+      speechStartAt: 0,
+      getReport() {
+        if (!this.wakeDetectedAt) return null;
+        return {
+          wake_to_stt_ms: this.sttCompleteAt ? this.sttCompleteAt - this.wakeDetectedAt : null,
+          stt_to_response_ms: this.responseStartAt && this.sttCompleteAt ? this.responseStartAt - this.sttCompleteAt : null,
+          response_to_speech_ms: this.speechStartAt && this.responseStartAt ? this.speechStartAt - this.responseStartAt : null,
+          total_ms: this.speechStartAt ? this.speechStartAt - this.wakeDetectedAt : null,
+        };
+      },
+      reset() { this.wakeDetectedAt = 0; this.sttCompleteAt = 0; this.responseStartAt = 0; this.speechStartAt = 0; }
+    };
     
     this.preferredVoice = null;
     this.dummyStream = null; // Keeps browser microphone hardware warm on mobile
@@ -407,6 +426,13 @@ class LukasVoiceController {
               if (this.wakeWordTimeout) clearTimeout(this.wakeWordTimeout);
               this.wakeWordTimeout = setTimeout(() => {
                 console.log("Wake word detected (paused)!");
+                // ⚡ Latency Tracker: mark wake detection time
+                this.latency.reset();
+                this.latency.wakeDetectedAt = Date.now();
+                // ⚡ Pre-warm hook: start memory retrieval BEFORE user finishes speaking
+                if (this.onPreWarm) {
+                  this.onPreWarm();
+                }
                 this.stopWakeWordListener();
                 if (this.onWakeWordDetected) {
                   this.onWakeWordDetected();
@@ -477,10 +503,20 @@ class LukasVoiceController {
                   clearTimeout(this.wakeWordTimeout);
                   this.wakeWordTimeout = null;
                 }
+                // ⚡ Latency Tracker: mark wake detection time
+                this.latency.reset();
+                this.latency.wakeDetectedAt = Date.now();
+                // ⚡ Pre-warm hook
+                if (this.onPreWarm) this.onPreWarm();
                 if (this.onWakeWordDetected) {
                   this.onWakeWordDetected();
                 }
               } else {
+                // ⚡ Latency Tracker: inline command (wake word + command in one)
+                this.latency.reset();
+                this.latency.wakeDetectedAt = Date.now();
+                this.latency.sttCompleteAt = Date.now(); // already final
+                if (this.onPreWarm) this.onPreWarm();
                 if (this.onCommandRecognized) {
                   this.onCommandRecognized(command);
                 }
@@ -624,11 +660,34 @@ class LukasVoiceController {
     return this.isMuted;
   }
 
-  // Vocalize responses
+  // Vocalize responses — progressive sentence chunking for low latency
   speak(text) {
     this.lastSpokenText = text;
+    this.latency.speechStartAt = Date.now();
     this.cancelSpeech();
-    this.speakSentence(text);
+
+    // Split into sentences for progressive delivery
+    // First sentence plays immediately; rest are queued
+    const sentences = this._splitIntoSentences(text);
+    if (sentences.length <= 1) {
+      this.speakSentence(text);
+      return;
+    }
+
+    // Speak first sentence right away
+    this.speakSentence(sentences[0]);
+    // Queue remaining sentences
+    for (let i = 1; i < sentences.length; i++) {
+      this.speakSentence(sentences[i]);
+    }
+  }
+
+  // Split text on sentence boundaries for progressive TTS
+  _splitIntoSentences(text) {
+    const clean = text.replace(/[*_`]/g, '').replace(/\[.*?\]/g, '').trim();
+    // Split on . ? ! followed by space or end, but keep abbreviations safe
+    const parts = clean.match(/[^.!?]+[.!?](?:\s|$)|[^.!?]+$/g) || [clean];
+    return parts.map(s => s.trim()).filter(s => s.length > 1);
   }
 
   // Stream-compatible sentence speak handler

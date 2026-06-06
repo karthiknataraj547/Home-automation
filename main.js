@@ -13,6 +13,9 @@ import LukasOrchestrator, { INTENT } from './src/ai/orchestrator.js';
 import LukasResearchAgent from './src/ai/research.js';
 import LukasReasoningEngine from './src/ai/reasoning.js';
 import { generateConversationalResponse, parseHomeCommand, scoreResponse } from './src/ai/core.js';
+import LukasMusicEngine from './src/ai/music.js';
+import LukasPlannerAgent from './src/ai/planner.js';
+import LukasTaskRunner from './src/ai/taskrunner.js';
 
 // ── Puter Quiet Mode (Silence WebSocket warnings in console) ───────────
 if (window.puter) {
@@ -93,6 +96,8 @@ function handleLocalAPIResponse(url, options) {
     resBody = { success: true, message: "Mocked Tuya command executed" };
   } else if (endpoint === '/api/scan-lan' || endpoint === '/api/scan-onvif' || endpoint === '/api/scan-network' || endpoint === '/api/scan-tuya') {
     resBody = [];
+  } else if (endpoint === '/api/music-search') {
+    resBody = { found: false, error: 'Music search requires local dev server. Use built-in playlist.' };
   } else {
     resBody = {};
   }
@@ -115,16 +120,15 @@ const lukasOrchestrator = new LukasOrchestrator(lukasMemory);
 const lukasResearch = new LukasResearchAgent();
 const lukasReasoning = new LukasReasoningEngine();
 
-// Local Media Tracks Playlist with copyright-free MP3 streams
-const playlist = [
-  { title: "Viper (Synthwave)", artist: "MDN Synth Beats", icon: "fa-compact-disc", url: "https://raw.githubusercontent.com/mdn/webaudio-examples/main/audio-analyser/viper.mp3" },
-  { title: "Bollywood Hits (Vividh Bharati)", artist: "Akamai Live HLS", icon: "fa-radio", url: "https://vividhbharati-lh.akamaihd.net/i/vividhbharati_1@507811/index_1_a-p.m3u8" },
-  { title: "Ghazal Radio (Mirchi Mehfil)", artist: "Akamai Live HLS", icon: "fa-music", url: "https://mirchimahfil-lh.akamaihd.net/i/MirchiMehfl_1@120798/index_1_a-b.m3u8" },
-  { title: "Kannada Hits (AIR Kannada)", artist: "Akamai Live HLS", icon: "fa-satellite-dish", url: "https://airkannada-lh.akamaihd.net/i/airkannada_1@507819/master.m3u8" },
-  { title: "Outfoxing (Cyberpunk)", artist: "MDN Audio Lab", icon: "fa-atom", url: "https://raw.githubusercontent.com/mdn/webaudio-examples/main/output-timestamp/outfoxing.mp3" },
-  { title: "Ambient Horizon", artist: "Lukas Synth Engine", icon: "fa-music", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3" },
-  { title: "Cybernetic Pulse", artist: "Jarvis Wave Generator", icon: "fa-wave-square", url: "https://www.soundhelix.com/examples/mp3/SoundHelix-Song-2.mp3" }
-];
+// ═══ LUKAS Music Engine — Smart Song Search & Playlist ═══
+const lukasMusic = new LukasMusicEngine();
+
+// Playlist is now managed by the music engine — this alias keeps legacy code compatible
+let playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
+
+// ═══ LUKAS Planner & Task Runner ═══
+const lukasPlan = new LukasPlannerAgent();
+const lukasTask = new LukasTaskRunner();
 let currentTrackIndex = 0;
 let isPlaying = false;
 let isPassiveListenEnabled = true;
@@ -1243,6 +1247,12 @@ function bindUIEvents() {
     });
   }
 
+  voice.onPreWarm = () => {
+    diag.logToTerminal("[VOICE PIPELINE] Pre-warm trigger. Indexing active memory and context cache...", "info");
+    lukasMemory.buildContextBlock();
+    updateMemoryPanel();
+  };
+
   voice.onWakeWordDetected = () => {
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
     // Re-enable passive listening whenever wake word is detected (even from STANDBY)
@@ -1281,6 +1291,14 @@ function bindUIEvents() {
     coreCenterNode.classList.add('speaking');
     audioWaveform.classList.add('speaking');
     audioPlayer.volume = 0.08; // Duck music while speaking
+
+    // Print latency benchmark report
+    const report = voice.latency.getReport();
+    if (report && report.total_ms > 0) {
+      diag.logToTerminal(`[LATENCY PROFILE] Wake-to-STT: ${report.wake_to_stt_ms}ms | STT-to-Response: ${report.stt_to_response_ms}ms | Response-to-Speech: ${report.response_to_speech_ms}ms | Total: ${report.total_ms}ms`, 'info');
+      // Reset after reporting
+      voice.latency.reset();
+    }
   };
 
   voice.onSpeechEnd = () => {
@@ -2690,6 +2708,178 @@ function bindUIEvents() {
       }
     });
   });
+
+  // Memory Panel events
+  const memoryDrawer = document.getElementById('memoryDrawer');
+  const openMemBtn = document.getElementById('openMemoryPanelBtn');
+  const closeMemBtn = document.getElementById('closeMemoryPanelBtn');
+
+  if (openMemBtn && memoryDrawer) {
+    openMemBtn.addEventListener('click', () => {
+      memoryDrawer.classList.toggle('active');
+      updateMemoryPanel();
+      diag.logToTerminal('[MEMORY MATRIX] Displaying multi-level memory matrix.', 'info');
+    });
+  }
+
+  if (closeMemBtn && memoryDrawer) {
+    closeMemBtn.addEventListener('click', () => {
+      memoryDrawer.classList.remove('active');
+      diag.logToTerminal('[MEMORY MATRIX] Closing memory matrix.', 'info');
+    });
+  }
+
+  // Plan execution panel close
+  const closePlanBtn = document.getElementById('closePlanPanelBtn');
+  const planPanel = document.getElementById('planExecutionPanel');
+  if (closePlanBtn && planPanel) {
+    closePlanBtn.addEventListener('click', () => {
+      planPanel.classList.remove('active');
+      diag.logToTerminal('[PLANNER] Plan roadmap dismissed.', 'info');
+    });
+  }
+}
+
+// ─── UPGRADE: Memory Panel Update Logic ───
+function updateMemoryPanel() {
+  const working = lukasMemory.getWorkingMemorySummary();
+  const projects = lukasMemory.getProjectMemorySummary();
+  const facts = lukasMemory.getLongTermFactsSummary();
+  
+  // 1. Render Working Memory
+  const workingDiv = document.getElementById('memWorkingDetails');
+  if (workingDiv) {
+    let tagsHtml = working.contextTags.map(t => `<span class="memory-tag">${t}</span>`).join('');
+    workingDiv.innerHTML = `
+      <div class="memory-fact-row"><span>User</span><span>${working.userName}</span></div>
+      <div class="memory-fact-row"><span>Project</span><span>${working.currentProject || 'None'}</span></div>
+      <div class="memory-fact-row"><span>Goal</span><span>${working.currentGoal || 'None'}</span></div>
+      <div class="memory-fact-row"><span>Location</span><span>${working.location || 'Local Area'}</span></div>
+      <div class="memory-fact-row"><span>Top Activity</span><span>${working.dominantUseCase || 'Conversational'}</span></div>
+      <div class="memory-fact-row"><span>Messages</span><span>${working.messageCount}</span></div>
+      <div style="font-size:0.6rem; color:#64748b; margin-top:0.40rem; font-family:var(--font-mono)">CONTEXT FOCUS TAGS:</div>
+      <div class="memory-tags-container">${tagsHtml || '<span class="memory-tag" style="border-color:rgba(255,255,255,0.05); color:#64748b;">None</span>'}</div>
+    `;
+  }
+  
+  // 2. Render Project Memory
+  const projectsDiv = document.getElementById('memProjectsDetails');
+  if (projectsDiv) {
+    if (projects.length === 0) {
+      projectsDiv.innerHTML = `<div style="font-size:0.65rem; color:#64748b; text-align:center; padding:10px 0;">No active projects recorded.</div>`;
+    } else {
+      projectsDiv.innerHTML = projects.map(p => `
+        <div class="memory-project-card">
+          <div class="memory-project-title"><span>${p.name.toUpperCase()}</span><span style="color:${p.status === 'active' ? 'var(--cyan-neon)' : '#64748b'}">[${p.status.toUpperCase()}]</span></div>
+          <div style="font-size:0.6rem; color:#94a3b8; margin-bottom:4px; line-height:1.2;">${p.description}</div>
+          ${p.goals.length > 0 ? `<div style="font-size:0.55rem; color:#64748b;">Goals: ${p.goals.join(', ')}</div>` : ''}
+          ${p.problems.length > 0 ? `<div style="font-size:0.55rem; color:var(--rose-neon);">Problems: ${p.problems.join(', ')}</div>` : ''}
+        </div>
+      `).join('');
+    }
+  }
+  
+  // 3. Render Long-term Facts
+  const factsDiv = document.getElementById('memFactsDetails');
+  if (factsDiv) {
+    if (facts.length === 0) {
+      factsDiv.innerHTML = `<div style="font-size:0.65rem; color:#64748b; text-align:center; padding:10px 0;">No long-term facts recorded.</div>`;
+    } else {
+      factsDiv.innerHTML = facts.map(f => `
+        <div class="memory-fact-row"><span>${f.key}</span><span>${f.value}</span></div>
+      `).join('');
+    }
+  }
+}
+
+// ─── UPGRADE: Plan Panel Control Logic ───
+function showPlanExecutionPanel(plan) {
+  const panel = document.getElementById('planExecutionPanel');
+  const listContainer = document.getElementById('planPanelStepsList');
+  if (!panel || !listContainer) return;
+  
+  // Clear steps
+  listContainer.innerHTML = '';
+  
+  // Generate steps html
+  plan.steps.forEach((step, idx) => {
+    const row = document.createElement('div');
+    row.className = `plan-step-row plan-step-${idx}`;
+    row.innerHTML = `
+      <div class="plan-step-status-icon pending" id="planStepIcon-${idx}"><i class="fa-regular fa-circle"></i></div>
+      <div class="plan-step-info">
+        <span class="plan-step-title">${step.title}</span>
+        <span class="plan-step-desc">${step.description}</span>
+      </div>
+      <div class="plan-step-meta">${step.duration}</div>
+    `;
+    listContainer.appendChild(row);
+  });
+  
+  panel.classList.add('active');
+}
+
+function updatePlanPanelStepStatus(idx, status) {
+  const row = document.querySelector(`.plan-step-${idx}`);
+  const icon = document.getElementById(`planStepIcon-${idx}`);
+  if (!row || !icon) return;
+  
+  // Remove existing status classes
+  row.classList.remove('active', 'completed', 'failed');
+  
+  if (status === 'active') {
+    row.classList.add('active');
+    icon.className = 'plan-step-status-icon active';
+    icon.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin"></i>';
+  } else if (status === 'completed') {
+    row.classList.add('completed');
+    icon.className = 'plan-step-status-icon completed';
+    icon.innerHTML = '<i class="fa-solid fa-circle-check"></i>';
+  } else if (status === 'failed') {
+    row.classList.add('failed');
+    icon.className = 'plan-step-status-icon failed';
+    icon.innerHTML = '<i class="fa-solid fa-circle-xmark"></i>';
+  }
+}
+
+// ─── UPGRADE: Executive Analysis Parsing Logic ───
+function parseExecutiveAnalysis(text) {
+  if (typeof text !== 'string') return { hasAnalysis: false, analysisHtml: '', responseText: text };
+  const execRegex = /\[EXECUTIVE ANALYSIS\]([\s\S]*?)\[RESPONSE\]([\s\S]*)/i;
+  const match = text.match(execRegex);
+  if (match) {
+    const analysisRaw = match[1].trim();
+    const responseBody = match[2].trim();
+    
+    // Parse the items in analysis
+    const lines = analysisRaw.split('\n');
+    let html = `<div class="executive-analysis-container">
+      <div class="executive-analysis-title"><i class="fa-solid fa-brain"></i> EXECUTIVE PRE-CHECK ANALYSIS</div>`;
+    
+    lines.forEach(line => {
+      if (line.includes(':')) {
+        const parts = line.split(':');
+        const label = parts[0].trim();
+        const val = parts.slice(1).join(':').trim();
+        html += `<div class="executive-analysis-item"><strong>${label}:</strong> ${val}</div>`;
+      } else if (line.trim()) {
+        html += `<div class="executive-analysis-item">${line.trim()}</div>`;
+      }
+    });
+    html += `</div>`;
+    
+    return {
+      hasAnalysis: true,
+      analysisHtml: html,
+      responseText: responseBody
+    };
+  }
+  
+  return {
+    hasAnalysis: false,
+    analysisHtml: '',
+    responseText: text
+  };
 }
 
 function updateMuteUI(isMuted) {
@@ -3391,7 +3581,7 @@ function wireProbeButton() {
 
 
 // 4. Chat Dialogue append
-function appendChatBubble(text, sender, linkUrl) {
+function appendChatBubble(text, sender, linkUrl, accuracyScore = null) {
   // Create row wrapper with avatar
   const row = document.createElement('div');
   row.className = `chat-bubble-row${sender === 'user' ? ' user-row' : ''}`;
@@ -3409,7 +3599,30 @@ function appendChatBubble(text, sender, linkUrl) {
   // Bubble itself
   const bubble = document.createElement('div');
   bubble.className = `chat-bubble ${sender}`;
-  bubble.textContent = text;
+  
+  if (sender === 'assistant') {
+    if (text.includes('Awaiting Clarification') || text.includes('ask_clarification')) {
+      bubble.classList.add('clarification-card');
+    }
+    const parsed = parseExecutiveAnalysis(text);
+    if (parsed.hasAnalysis) {
+      bubble.innerHTML = parsed.analysisHtml + `<div class="response-body-text">${parsed.responseText}</div>`;
+    } else {
+      bubble.textContent = text;
+    }
+
+    if (accuracyScore !== null) {
+      const badge = document.createElement('div');
+      let level = 'high';
+      if (accuracyScore < 60) level = 'low';
+      else if (accuracyScore < 80) level = 'medium';
+      badge.className = `accuracy-badge ${level}`;
+      badge.innerHTML = `<i class="fa-solid fa-circle-nodes"></i> Accuracy: ${accuracyScore}%`;
+      bubble.appendChild(badge);
+    }
+  } else {
+    bubble.textContent = text;
+  }
 
   if (linkUrl) {
     const link = document.createElement('a');
@@ -3460,7 +3673,19 @@ function appendStreamingChatBubble(sender) {
   return {
     element: bubble,
     update: (newText) => {
-      bubble.textContent = newText;
+      if (sender === 'assistant') {
+        if (newText.includes('Awaiting Clarification') || newText.includes('ask_clarification')) {
+          bubble.classList.add('clarification-card');
+        }
+        const parsed = parseExecutiveAnalysis(newText);
+        if (parsed.hasAnalysis) {
+          bubble.innerHTML = parsed.analysisHtml + `<div class="response-body-text">${parsed.responseText}</div>`;
+        } else {
+          bubble.textContent = newText;
+        }
+      } else {
+        bubble.textContent = newText;
+      }
       chatHistory.scrollTop = chatHistory.scrollHeight;
     },
     appendLink: (linkUrl) => {
@@ -3471,6 +3696,86 @@ function appendStreamingChatBubble(sender) {
       link.className = "chat-link";
       link.innerHTML = ' <i class="fa-solid fa-arrow-up-right-from-square"></i> Source';
       bubble.appendChild(link);
+    }
+  };
+}
+
+function appendChecklistBubble(steps) {
+  const row = document.createElement('div');
+  row.className = `chat-bubble-row`;
+
+  const avatar = document.createElement('div');
+  avatar.className = `chat-avatar lukas-avatar`;
+  avatar.innerHTML = '<i class="fa-solid fa-microchip"></i>';
+  row.appendChild(avatar);
+
+  const bubble = document.createElement('div');
+  bubble.className = `chat-bubble assistant planner-checklist`;
+  
+  const title = document.createElement('div');
+  title.className = 'planner-title';
+  title.innerHTML = '⚙️ LUKAS EXECUTIVE PLANNER INITIATED:';
+  title.style.fontWeight = 'bold';
+  title.style.marginBottom = '8px';
+  title.style.borderBottom = '1px solid var(--purple-neon)';
+  title.style.paddingBottom = '4px';
+  bubble.appendChild(title);
+
+  const listContainer = document.createElement('div');
+  listContainer.className = 'planner-steps';
+  
+  const stepElements = steps.map((step, idx) => {
+    const item = document.createElement('div');
+    item.className = 'planner-step-item';
+    item.style.display = 'flex';
+    item.style.alignItems = 'center';
+    item.style.marginBottom = '6px';
+    item.style.fontSize = '0.9em';
+
+    const icon = document.createElement('span');
+    icon.className = 'planner-step-icon';
+    icon.innerHTML = '<i class="fa-regular fa-circle" style="margin-right: 8px; color: var(--text-dim);"></i>';
+    
+    const label = document.createElement('span');
+    label.className = 'planner-step-label';
+    label.textContent = `[${step.agent.toUpperCase()}] ${step.task}`;
+    label.style.color = 'var(--text-dim)';
+
+    item.appendChild(icon);
+    item.appendChild(label);
+    listContainer.appendChild(item);
+
+    return { item, icon, label };
+  });
+
+  bubble.appendChild(listContainer);
+  row.appendChild(bubble);
+  chatHistory.appendChild(row);
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+
+  const rows = chatHistory.querySelectorAll('.chat-bubble-row, .chat-bubble.system');
+  if (rows.length > 30) rows[0].remove();
+
+  return {
+    updateStep(idx, status) {
+      const el = stepElements[idx];
+      if (!el) return;
+      if (status === 'running') {
+        el.icon.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin" style="margin-right: 8px; color: var(--purple-neon);"></i>';
+        el.label.style.color = 'var(--text-light)';
+        el.label.style.fontWeight = '500';
+      } else if (status === 'completed') {
+        el.icon.innerHTML = '<i class="fa-solid fa-circle-check" style="margin-right: 8px; color: var(--emerald-neon);"></i>';
+        el.label.style.color = 'var(--text-light)';
+        el.label.style.textDecoration = 'line-through';
+        el.label.style.opacity = '0.6';
+      } else if (status === 'failed') {
+        el.icon.innerHTML = '<i class="fa-solid fa-circle-xmark" style="margin-right: 8px; color: var(--rose-neon);"></i>';
+        el.label.style.color = 'var(--rose-neon)';
+      }
+    },
+    remove() {
+      row.remove();
     }
   };
 }
@@ -3872,6 +4177,12 @@ async function processCommand(rawCommand, source) {
   try {
     isProcessingCommand = true;
     lastCommandSource = source || 'user';
+    
+    // Record STT latency timestamp
+    if (source === 'voice') {
+      voice.latency.sttCompleteAt = Date.now();
+    }
+
     // Clear any active voice capturing timeouts immediately
     if (typeof noCommandTimeout !== 'undefined' && noCommandTimeout) {
       clearTimeout(noCommandTimeout);
@@ -3946,44 +4257,6 @@ async function processCommand(rawCommand, source) {
       return;
     }
 
-    // Run structured 6-step Voice Intelligence reasoning cycle
-    lukasReasoning.runReasoningCycle(rawCommand, diag.logToTerminal.bind(diag));
-
-    // ── FAST PATH: Temperature / Thermostat (instant regex, no AI wait) ──────
-    // Matches: "set temperature to 25", "adjust temp to 22 degrees", "change thermostat to 24", etc.
-    const tempFastMatch = cmd.match(
-      /(?:set|adjust|change|make|put|increase|decrease|raise|lower|turn(?:\s+up|\s+down)?)\s+(?:the\s+)?(?:temp(?:erature)?|thermostat|ac|air\s*con(?:ditioning)?|climate|heat(?:ing)?|cool(?:ing)?)\s+(?:to\s+)?(\d{1,2})(?:\s*°?\s*(?:celsius|centigrade|degrees?|c))?/i
-    ) || cmd.match(/(?:temp(?:erature)?|thermostat)\s+(?:to\s+)?(\d{1,2})/i)
-      || cmd.match(/(\d{1,2})\s*(?:°|degrees?|celsius|c)\b/i);
-
-    const climateModeFast = cmd.match(/(?:set|switch|change|put)\s+(?:the\s+)?(?:ac|thermostat|climate|hvac)\s+(?:to\s+|mode\s+(?:to\s+)?)?(cool(?:ing)?|heat(?:ing)?|eco|fan|auto)/i)
-      || cmd.match(/(?:cooling|heating|eco)\s+mode/i);
-
-    if (tempFastMatch && (cmd.includes('temp') || cmd.includes('thermostat') || cmd.includes('heat') || cmd.includes('cool') || cmd.includes('ac') || cmd.includes('climate') || cmd.includes('degree') || cmd.includes('celsius'))) {
-      const val = parseInt(tempFastMatch[1]);
-      if (!isNaN(val) && val >= 16 && val <= 35) {
-        isProcessingCommand = false;
-        diag.logToTerminal(`[FAST PATH] Temperature command detected. Setting thermostat to ${val}°C`, 'info');
-        home.setTargetTemperature(val);
-        handleAssistantResponse(`Acknowledged, Commander. Eco-Thermostat target adjusted to ${val} degrees Celsius.`, true);
-        keepConversationAlive(8000);
-        return;
-      }
-    }
-
-    if (climateModeFast && !tempFastMatch) {
-      const modeRaw = (climateModeFast[1] || '').toLowerCase();
-      const mode = modeRaw.startsWith('cool') ? 'cool' : modeRaw.startsWith('heat') ? 'heat' : 'eco';
-      isProcessingCommand = false;
-      diag.logToTerminal(`[FAST PATH] Climate mode command detected: ${mode.toUpperCase()}`, 'info');
-      home.setClimateMode(mode);
-      handleAssistantResponse(`Climate matrix switching to ${mode.toUpperCase()} mode.`, true);
-      keepConversationAlive(8000);
-      return;
-    }
-    // ── END FAST PATH ─────────────────────────────────────────────────────────
-
-
     const openaiApiKey = localStorage.getItem('openai_api_key');
     const geminiApiKey = localStorage.getItem('gemini_api_key');
     const activeProvider = openaiApiKey ? 'openai' : (geminiApiKey ? 'gemini' : 'puter');
@@ -3992,42 +4265,210 @@ async function processCommand(rawCommand, source) {
     // Get home context summary for intent analysis
     const homeContext = `Active devices: ${home.dynamicDevices.filter(d => d.on).map(d => d.name).join(', ') || 'None'}. Indoor Temp: ${home.state.climate.indoorTemp}°C, target: ${home.state.climate.targetTemp}°C.`;
 
-    // 2. Orchestration Intent Analysis
-    diag.logToTerminal("[AI ORCHESTRATOR] Classifying intent...", "info");
+    // ── STAGE 1: INTENT DETECTION ──
+    diag.logToTerminal("[STAGE 1: INTENT] Classifying raw command intent...", "info");
     const routing = await lukasOrchestrator.analyze(rawCommand, homeContext, activeKey, activeProvider);
     diag.logToTerminal(`[AI INTENT] Routed to: ${routing.intent.toUpperCase()} (Confidence: ${Math.round(routing.confidence * 100)}%)`, 'info');
 
-    // Handle intent-specific routing
+    // Auto-trigger research when requiresResearch is true
+    if (routing.requiresResearch && routing.intent !== INTENT.RESEARCH) {
+      diag.logToTerminal("[ORCHESTRATOR] AI detected external information dependency. Upgrading intent to RESEARCH.", "info");
+      routing.intent = INTENT.RESEARCH;
+    }
+
+    // ── STAGE 2: CONTEXT RETRIEVAL ──
+    diag.logToTerminal("[STAGE 2: CONTEXT] Retrived context blocks from 3-level memory...", "info");
+    const contextLines = lukasMemory.buildContextBlock().split('\n');
+    contextLines.slice(0, 4).forEach(line => {
+      if (line.trim()) diag.logToTerminal(` &gt; ${line}`, 'info');
+    });
+
+    // ── STAGE 3: TASK PLANNING ──
+    diag.logToTerminal("[STAGE 3: PLAN] Checking if directive requires task planning or decomposition...", "info");
+    const isPlanExecution = precheckResult.requiresPlanning || routing.intent === INTENT.PLANNING || routing.isComplex;
+
+    // ── STAGE 4: REASONING LOGS ──
+    diag.logToTerminal("[STAGE 4: REASONING] Running structured Voice Intelligence cycles...", "info");
+    lukasReasoning.runReasoningCycle(rawCommand, diag.logToTerminal.bind(diag));
+
+    // ── FAST PATH: Temperature / Thermostat (instant regex, no AI wait) ──────
+    if (!isPlanExecution) {
+      const tempFastMatch = cmd.match(
+        /(?:set|adjust|change|make|put|increase|decrease|raise|lower|turn(?:\s+up|\s+down)?)\s+(?:the\s+)?(?:temp(?:erature)?|thermostat|ac|air\s*con(?:ditioning)?|climate|heat(?:ing)?|cool(?:ing)?)\s+(?:to\s+)?(\d{1,2})(?:\s*°?\s*(?:celsius|centigrade|degrees?|c))?/i
+      ) || cmd.match(/(?:temp(?:erature)?|thermostat)\s+(?:to\s+)?(\d{1,2})/i)
+        || cmd.match(/(\d{1,2})\s*(?:°|degrees?|celsius|c)\b/i);
+
+      const climateModeFast = cmd.match(/(?:set|switch|change|put)\s+(?:the\s+)?(?:ac|thermostat|climate|hvac)\s+(?:to\s+|mode\s+(?:to\s+)?)?(cool(?:ing)?|heat(?:ing)?|eco|fan|auto)/i)
+        || cmd.match(/(?:cooling|heating|eco)\s+mode/i);
+
+      if (tempFastMatch && (cmd.includes('temp') || cmd.includes('thermostat') || cmd.includes('heat') || cmd.includes('cool') || cmd.includes('ac') || cmd.includes('climate') || cmd.includes('degree') || cmd.includes('celsius'))) {
+        const val = parseInt(tempFastMatch[1]);
+        if (!isNaN(val) && val >= 16 && val <= 35) {
+          isProcessingCommand = false;
+          diag.logToTerminal(`[FAST PATH] Temperature command detected. Setting thermostat to ${val}°C`, 'info');
+          home.setTargetTemperature(val);
+          handleAssistantResponse(`Acknowledged, Commander. Eco-Thermostat target adjusted to ${val} degrees Celsius.`, true);
+          keepConversationAlive(8000);
+          return;
+        }
+      }
+
+      if (climateModeFast && !tempFastMatch) {
+        const modeRaw = (climateModeFast[1] || '').toLowerCase();
+        const mode = modeRaw.startsWith('cool') ? 'cool' : modeRaw.startsWith('heat') ? 'heat' : 'eco';
+        isProcessingCommand = false;
+        diag.logToTerminal(`[FAST PATH] Climate mode command detected: ${mode.toUpperCase()}`, 'info');
+        home.setClimateMode(mode);
+        handleAssistantResponse(`Climate matrix switching to ${mode.toUpperCase()} mode.`, true);
+        keepConversationAlive(8000);
+        return;
+      }
+    }
+
+    // ── STAGE 5: AUTONOMOUS EXECUTION ──
+    diag.logToTerminal("[STAGE 5: EXECUTE] Initiating background execution...", "info");
+    if (isPlanExecution) {
+      diag.logToTerminal("[PLANNER AGENT] Generating structured executive plan...", "info");
+      
+      const plan = await lukasPlan.createPlan(rawCommand, lukasMemory, activeKey, activeProvider);
+      
+      // Render plan as text in console chat
+      const planText = lukasPlan.formatPlanAsText(plan);
+      appendChatBubble(planText, 'assistant');
+      
+      // Speak objective
+      voice.stopWakeWordListener();
+      voice.speak(`I have formulated a roadmap to ${plan.objective}. Commencing execution.`);
+      
+      // Show bottom plan panel UI
+      showPlanExecutionPanel(plan);
+      
+      // Render the chat checklist bubble UI
+      const chatChecklistUI = appendChecklistBubble(plan.steps.map(s => ({ task: s.description, agent: s.type })));
+      
+      // Set task runner event hooks
+      lukasTask.onStepStarted = (idx, step) => {
+        updatePlanPanelStepStatus(idx, 'active');
+        chatChecklistUI.updateStep(idx, 'running');
+        diag.logToTerminal(`[PLANNER] Executing Step ${idx+1}: ${step.title}`, 'info');
+      };
+      
+      lukasTask.onStepCompleted = (idx, result) => {
+        updatePlanPanelStepStatus(idx, 'completed');
+        chatChecklistUI.updateStep(idx, 'completed');
+        diag.logToTerminal(`[PLANNER] Step ${idx+1} Completed successfully.`, 'info');
+      };
+      
+      lukasTask.onStepFailed = (idx, error) => {
+        updatePlanPanelStepStatus(idx, 'failed');
+        chatChecklistUI.updateStep(idx, 'failed');
+        diag.logToTerminal(`[PLANNER] Step ${idx+1} Failed: ${error.error || error.message}`, 'error');
+      };
+      
+      lukasTask.onProgress = (percent, message) => {
+        diag.logToTerminal(`[PLANNER PROGRESS] ${percent}% - ${message}`, 'info');
+      };
+
+      // Run plan execution
+      const context = {
+        memory: lukasMemory,
+        apiKey: activeKey,
+        apiProvider: activeProvider,
+        research: lukasResearch
+      };
+      
+      const results = await lukasTask.executePlan(plan, context);
+      const summary = lukasTask.summarizeResults(plan, results);
+      
+      // Synthesize cohesive Jarvis response
+      const compiledText = results.map((r, idx) => `Step ${idx+1} (${r.title}): ${r.status === 'completed' ? r.output : 'Failed - ' + r.error}`).join('\n');
+      const synthesisPrompt = `You are LUKAS, a Jarvis-style executive assistant.
+You have just executed a multi-step plan for the user: "${rawCommand}".
+Here are the steps and their execution outcomes:
+${compiledText}
+
+Please synthesize a single, cohesive, premium Jarvis-style response summary explaining exactly what actions were taken and the results. Keep it polished and direct.`;
+
+      // ── STAGE 6 & 7: ACCURACY CHECK & VALIDATION ──
+      diag.logToTerminal("[STAGE 6 & 7: ACCURACY & VALIDATE] Compiling plan results and scoring synthesizer compliance...", "info");
+      const finalResponse = await callLukasAI({
+        systemPrompt: "You are LUKAS, an advanced AI Operating System.",
+        userMessage: synthesisPrompt,
+        memory: lukasMemory,
+        apiKey: activeKey,
+        apiProvider: activeProvider,
+        temperature: 0.65,
+        maxTokens: 1000
+      });
+      
+      isProcessingCommand = false;
+      const coreBtn = document.getElementById('lukasCoreBtn');
+      if (coreBtn) coreBtn.classList.remove('processing');
+      
+      if (finalResponse) {
+        const validation = lukasReasoning.validate(rawCommand, finalResponse, lukasMemory);
+        appendChatBubble(finalResponse, 'assistant', null, validation.score);
+        
+        voice.stopWakeWordListener();
+        const cleanResponse = parseExecutiveAnalysis(finalResponse).responseText;
+        voice.speak(cleanResponse);
+        
+        lukasMemory.addMessage('assistant', finalResponse, 'planning');
+      } else {
+        appendChatBubble(summary, 'assistant');
+        voice.speak("Plan execution complete.");
+      }
+      
+      // Hide bottom panel after 6s delay
+      setTimeout(() => {
+        const panel = document.getElementById('planExecutionPanel');
+        if (panel) panel.classList.remove('active');
+      }, 6000);
+      
+      keepConversationAlive(15000);
+      updateMemoryPanel();
+      return;
+    }
+
+    // Single Step execution routes
     switch (routing.intent) {
       case INTENT.HOME_CONTROL:
+        diag.logToTerminal("[STAGE 5: EXECUTE] Processing smart home command...", "info");
         await handleHomeControlIntent(rawCommand, activeKey, activeProvider);
         break;
 
       case INTENT.RESEARCH:
+        diag.logToTerminal("[STAGE 5: EXECUTE] Initiating web search queries...", "info");
         await handleResearchIntent(rawCommand, activeKey, activeProvider, source);
         break;
 
       case INTENT.MEMORY_QUERY:
+        diag.logToTerminal("[STAGE 5: EXECUTE] Accessing memory indexing database...", "info");
         await handleMemoryQueryIntent(rawCommand, activeKey, activeProvider);
         break;
 
       case INTENT.WEATHER:
+        diag.logToTerminal("[STAGE 5: EXECUTE] Fetching meteorological data feed...", "info");
         await handleWeatherIntent(rawCommand);
         break;
 
       case INTENT.MEDIA:
+        diag.logToTerminal("[STAGE 5: EXECUTE] Triggering client media driver...", "info");
         await handleMediaIntent(cmd, rawCommand);
         break;
 
       case INTENT.AUTOMATION:
+        diag.logToTerminal("[STAGE 5: EXECUTE] Dispatching cron and scheduling automation...", "info");
         await handleAutomationIntent(cmd, rawCommand);
         break;
 
       case INTENT.MATH:
+        diag.logToTerminal("[STAGE 5: EXECUTE] Running numerical calculation subroutines...", "info");
         await handleMathIntent(rawCommand, activeKey, activeProvider);
         break;
 
       case INTENT.SYSTEM:
+        diag.logToTerminal("[STAGE 5: EXECUTE] Accessing local system hardware layer...", "info");
         await handleSystemIntent(cmd);
         break;
 
@@ -4036,10 +4477,13 @@ async function processCommand(rawCommand, source) {
       case INTENT.PLANNING:
       case INTENT.ANALYSIS:
       default:
+        diag.logToTerminal("[STAGE 5: EXECUTE] Querying Conversational AI synthesis model...", "info");
         await handleConversationalIntent(rawCommand, routing.intent, activeKey, activeProvider, source);
         break;
     }
-
+    
+    // Auto-update memory drawer
+    updateMemoryPanel();
   } catch (err) {
     console.error("Error in processCommand:", err);
     isProcessingCommand = false;
@@ -4146,7 +4590,8 @@ ${lukasMemory.buildContextBlock()}`;
     memory: lukasMemory,
     intent: 'memory_query',
     apiKey,
-    apiProvider
+    apiProvider,
+    reasoning: lukasReasoning
   });
 
   if (response) {
@@ -4273,7 +4718,8 @@ async function handleMathIntent(rawCommand, apiKey, apiProvider) {
     memory: null,
     intent: 'math',
     apiKey,
-    apiProvider
+    apiProvider,
+    reasoning: lukasReasoning
   });
   if (response) {
     handleAssistantResponse(response);
@@ -4317,10 +4763,26 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
     const streamingBubble = appendStreamingChatBubble('assistant');
     let spokenSentences = new Set();
     let sentenceBuffer = "";
+    let isResponseStarted = false;
 
     const streamCallback = (delta, fullText) => {
       streamingBubble.update(fullText);
-      sentenceBuffer += delta;
+      
+      // If we see [EXECUTIVE ANALYSIS], we suppress speaking until we find [RESPONSE]
+      if (fullText.includes('[EXECUTIVE ANALYSIS]') && !isResponseStarted) {
+        if (fullText.includes('[RESPONSE]')) {
+          isResponseStarted = true;
+          // Start sentence buffer after [RESPONSE]
+          const responseIndex = fullText.indexOf('[RESPONSE]') + '[RESPONSE]'.length;
+          sentenceBuffer = fullText.substring(responseIndex);
+        } else {
+          // Do not speak anything yet
+          return;
+        }
+      } else {
+        isResponseStarted = true;
+        sentenceBuffer += delta;
+      }
 
       let match;
       const sentenceRegex = /[^.!?\n]+[.!?\n](\s+|$)/g;
@@ -4351,7 +4813,8 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
         apiKey,
         apiProvider,
         streamCallback,
-        isVoice: isVoiceMode
+        isVoice: isVoiceMode,
+        reasoning: lukasReasoning
       });
 
       if (response) {
@@ -4375,12 +4838,27 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
         diag.logToTerminal(`[LUKAS REPLY] "${response.slice(0, 120)}${response.length > 120 ? '...' : ''}"`, 'info');
         lukasMemory.addMessage('assistant', response, intent);
 
-        // Validation Checks (Layer 5 / Response Quality Rules)
-        const validation = lukasReasoning.validate(rawCommand, response);
-        if (!validation.valid) {
-          diag.logToTerminal(`[REASONING WARNING] Output validation failed (Score: ${validation.score}). Issues: ${validation.issues.join(', ')}.`, 'warn');
-        } else {
-          diag.logToTerminal(`[REASONING] Response validated successfully (Score: ${validation.score}).`, 'info');
+        // Validation Checks (Layer 6 & 7 / Response Quality Rules)
+        const validation = lukasReasoning.validate(rawCommand, response, lukasMemory);
+        diag.logToTerminal("[STAGE 6: ACCURACY] Assessing prompt compliance and response precision score...", "info");
+        diag.logToTerminal("[STAGE 7: VALIDATE] Performing response quality validation and self-reflection refinement...", "info");
+        diag.logToTerminal("[STAGE 8: RESPONSE] Synthesizing final response output...", "info");
+        
+        if (validation) {
+          if (!validation.valid) {
+            diag.logToTerminal(`[REASONING WARNING] Output validation failed (Score: ${validation.score}). Issues: ${validation.issues.join(', ')}.`, 'warn');
+          } else {
+            diag.logToTerminal(`[REASONING] Response validated successfully (Score: ${validation.score}).`, 'info');
+          }
+
+          // Add accuracy badge to the final response bubble
+          const badge = document.createElement('div');
+          let level = 'high';
+          if (validation.score < 60) level = 'low';
+          else if (validation.score < 80) level = 'medium';
+          badge.className = `accuracy-badge ${level}`;
+          badge.innerHTML = `<i class="fa-solid fa-circle-nodes"></i> Accuracy: ${validation.score}%`;
+          streamingBubble.element.appendChild(badge);
         }
 
         // Keep mic alive for follow-up commands if voice mode
@@ -4411,7 +4889,13 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
 
     if (response) {
       lukasMemory.addMessage('assistant', response, intent);
-      handleAssistantResponse(response);
+      
+      const validation = lukasReasoning.validate(rawCommand, response, lukasMemory);
+      appendChatBubble(response, 'assistant', null, validation.score);
+      
+      const parsed = parseExecutiveAnalysis(response);
+      voice.stopWakeWordListener();
+      voice.speak(parsed.responseText);
       
       const isQuestion = response.trim().endsWith('?') || response.includes('?');
       if (isQuestion || intent === 'planning' || intent === 'task_execution' || isVoiceMode) {
@@ -4637,51 +5121,106 @@ function executeParsedHomeControl(parsed) {
       }
     }
     
-    // MEDIA
+    // MEDIA — Smart Music Engine Routing
     else if (parsed.category === 'media') {
       aiIsControlAction = true;
-      if (parsed.action === 'pause' || parsed.action === 'stop') {
+      const cmd = parsed.action || '';
+      const rawVal = parsed.value || '';
+
+      if (cmd === 'pause' || cmd === 'stop') {
         isPlaying = false;
         updateMediaPlayButton(false);
         audioPlayer.pause();
-        aiResponseText = "Ambient audio feeds paused.";
+        aiResponseText = 'Audio feed paused. Standing by.';
         handledByAI = true;
-      } else if (parsed.action === 'next') {
+
+      } else if (cmd === 'next') {
+        playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
         currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
-        isPlaying = true;
-        updateMediaWidget();
-        playTrack();
-        aiResponseText = `Skipping to next stream: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+        isPlaying = true; updateMediaWidget(); playTrack();
+        aiResponseText = `Skipping to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
         handledByAI = true;
-      } else if (parsed.action === 'prev') {
+
+      } else if (cmd === 'prev') {
+        playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
         currentTrackIndex = (currentTrackIndex - 1 + playlist.length) % playlist.length;
-        isPlaying = true;
-        updateMediaWidget();
-        playTrack();
-        aiResponseText = `Reverting to previous stream: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+        isPlaying = true; updateMediaWidget(); playTrack();
+        aiResponseText = `Reverting to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
         handledByAI = true;
+
       } else {
-        let foundIndex = -1;
-        if (parsed.value) {
-          const val = parsed.value.toLowerCase();
-          if (val.includes('bollywood') || val.includes('hindi') || val.includes('desi') || val.includes('indian')) {
-            foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('bollywood') || t.title.toLowerCase().includes('ghazal'));
-          } else if (val.includes('kannada') || val.includes('karnataka') || val.includes('bangalore') || val.includes('bengaluru')) {
-            foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('kannada'));
-          } else if (val.includes('synthwave') || val.includes('viper')) {
-            foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('viper'));
-          } else if (val.includes('cyberpunk') || val.includes('outfoxing')) {
-            foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('outfoxing'));
-          } else if (val.includes('ambient') || val.includes('horizon')) {
-            foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('ambient'));
-          }
-        }
-        if (foundIndex !== -1) currentTrackIndex = foundIndex;
-        isPlaying = true;
-        updateMediaWidget();
-        playTrack();
-        aiResponseText = `Playing requested stream: "${playlist[currentTrackIndex].title}" using ${activePlatform}.`;
+        // Smart music resolution — specific song or genre
         handledByAI = true;
+        const searchQuery = rawVal || commandText;
+        const musicQuery = LukasMusicEngine.parseMediaCommand(searchQuery) || searchQuery;
+
+        // Show searching indicator
+        if (musicQuery) {
+          aiResponseText = `Searching for "${musicQuery}"... one moment.`;
+          handleAssistantResponse(aiResponseText);
+          diag.logToTerminal(`[MUSIC ENGINE] Resolving: "${musicQuery}"`, 'info');
+
+          lukasMusic.resolveRequest(musicQuery).then(result => {
+            if (result && result.track) {
+              const t = result.track;
+              // Inject the found track into the playlist and play it
+              const newTrack = { id: t.id, title: t.title, artist: t.artist, url: t.url, icon: 'fa-music', thumbnail: t.thumbnail || '' };
+              const existIdx = playlist.findIndex(p => p.id === t.id);
+              if (existIdx === -1) {
+                playlist.push(newTrack);
+                lukasMusic.saveToLibrary(t);
+              }
+              currentTrackIndex = playlist.findIndex(p => p.id === t.id);
+              if (currentTrackIndex === -1) currentTrackIndex = playlist.length - 1;
+              isPlaying = true;
+              updateMediaWidget();
+              playTrack();
+              diag.logToTerminal(`[MUSIC ENGINE] ✓ Playing: "${t.title}" by ${t.artist} (${result.source})`, 'info');
+              const msg = result.source === 'youtube'
+                ? `Now playing "${t.title}" by ${t.artist}. Stream found via YouTube.`
+                : `Now playing "${t.title}" by ${t.artist} from your LUKAS library.`;
+              handleAssistantResponse(msg);
+              if (lastCommandSource === 'voice') voice.speak(msg);
+            } else {
+              const fallbackMsg = `I couldn't find that song online. Playing from your LUKAS library instead.`;
+              isPlaying = true; updateMediaWidget(); playTrack();
+              handleAssistantResponse(fallbackMsg);
+              if (lastCommandSource === 'voice') voice.speak(fallbackMsg);
+            }
+          }).catch(err => {
+            diag.logToTerminal(`[MUSIC ENGINE] ❌ Search error: ${err.message}`, 'error');
+            isPlaying = true; updateMediaWidget(); playTrack();
+          });
+
+          // Return early — async response will be handled above
+          return;
+        } else {
+          // Genre or generic play
+          lukasMusic.resolveRequest(searchQuery).then(result => {
+            if (result && result.track) {
+              const t = result.track;
+              const existIdx = playlist.findIndex(p => p.id === t.id);
+              if (existIdx !== -1) {
+                currentTrackIndex = existIdx;
+              } else {
+                playlist.push(t);
+                currentTrackIndex = playlist.length - 1;
+              }
+              isPlaying = true; updateMediaWidget(); playTrack();
+              const msg = `Playing ${t.title} from your LUKAS library.`;
+              handleAssistantResponse(msg);
+              if (lastCommandSource === 'voice') voice.speak(msg);
+            } else {
+              isPlaying = true; updateMediaWidget(); playTrack();
+              const msg = `Playing "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+              handleAssistantResponse(msg);
+              if (lastCommandSource === 'voice') voice.speak(msg);
+            }
+          }).catch(() => {
+            isPlaying = true; updateMediaWidget(); playTrack();
+          });
+          return;
+        }
       }
     }
     
@@ -5026,48 +5565,69 @@ function executeLocalHomeControlFallback(rawCommand) {
     responseText = "WARNING! SECURITY LOCKDOWN ACTIVATED. All portals secured, emergency beacons flashing red.";
   }
   
-  // MEDIA DIRECTIVES
+  // MEDIA DIRECTIVES — Smart Music Engine Routing
   else if (cmd.includes('music') || cmd.includes('song') || cmd.includes('audio') || cmd.includes('play') || cmd.includes('pause') || cmd.includes('media')) {
     isControlAction = true;
     if (cmd.includes('pause') || cmd.includes('stop')) {
       isPlaying = false;
       updateMediaPlayButton(false);
       audioPlayer.pause();
-      responseText = "Ambient audio feeds paused.";
+      responseText = 'Audio feed paused. Standing by.';
     } else if (cmd.includes('next') || cmd.includes('forward')) {
+      playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
       currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
-      isPlaying = true;
-      updateMediaWidget();
-      playTrack();
-      responseText = `Skipping to next stream: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+      isPlaying = true; updateMediaWidget(); playTrack();
+      responseText = `Skipping to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
     } else if (cmd.includes('prev') || cmd.includes('back')) {
+      playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
       currentTrackIndex = (currentTrackIndex - 1 + playlist.length) % playlist.length;
-      isPlaying = true;
-      updateMediaWidget();
-      playTrack();
-      responseText = `Reverting to previous stream: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+      isPlaying = true; updateMediaWidget(); playTrack();
+      responseText = `Reverting to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
     } else {
-      let foundIndex = -1;
-      if (cmd.includes('bollywood') || cmd.includes('hindi') || cmd.includes('desi') || cmd.includes('indian')) {
-        foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('bollywood') || t.title.toLowerCase().includes('ghazal'));
-      } else if (cmd.includes('kannada') || cmd.includes('karnataka') || cmd.includes('bangalore') || cmd.includes('bengaluru')) {
-        foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('kannada'));
-      } else if (cmd.includes('synthwave') || cmd.includes('viper')) {
-        foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('viper'));
-      } else if (cmd.includes('cyberpunk') || cmd.includes('outfoxing')) {
-        foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('outfoxing'));
-      } else if (cmd.includes('ambient') || cmd.includes('horizon')) {
-        foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('ambient'));
+      // Smart resolution — check if a specific song is named
+      const musicQuery = LukasMusicEngine.parseMediaCommand(cmd);
+      if (musicQuery) {
+        responseText = `Searching for "${musicQuery}"... one moment.`;
+        // Show the searching message immediately then resolve async
+        handleAssistantResponse(responseText);
+        if (lastCommandSource === 'voice') voice.speak(`Searching for ${musicQuery}`);
+        diag.logToTerminal(`[MUSIC ENGINE] Resolving (rule-based): "${musicQuery}"`, 'info');
+
+        lukasMusic.resolveRequest(musicQuery).then(result => {
+          if (result && result.track) {
+            const t = result.track;
+            const newTrack = { id: t.id, title: t.title, artist: t.artist, url: t.url, icon: 'fa-music', thumbnail: t.thumbnail || '' };
+            const existIdx = playlist.findIndex(p => p.id === t.id);
+            if (existIdx === -1) { playlist.push(newTrack); lukasMusic.saveToLibrary(t); }
+            currentTrackIndex = playlist.findIndex(p => p.id === t.id);
+            if (currentTrackIndex === -1) currentTrackIndex = playlist.length - 1;
+            isPlaying = true; updateMediaWidget(); playTrack();
+            diag.logToTerminal(`[MUSIC ENGINE] ✓ Playing: "${t.title}" by ${t.artist} (${result.source})`, 'info');
+            const msg = result.source === 'youtube'
+              ? `Now playing "${t.title}" by ${t.artist}. Stream found via YouTube.`
+              : `Now playing "${t.title}" by ${t.artist} from your LUKAS library.`;
+            handleAssistantResponse(msg);
+            if (lastCommandSource === 'voice') voice.speak(msg);
+          } else {
+            isPlaying = true; updateMediaWidget(); playTrack();
+            const fallbackMsg = `I couldn't find that exact song. Playing from your LUKAS library instead.`;
+            handleAssistantResponse(fallbackMsg);
+            if (lastCommandSource === 'voice') voice.speak(fallbackMsg);
+          }
+        }).catch(() => { isPlaying = true; updateMediaWidget(); playTrack(); });
+        return; // async, don't continue
+      } else {
+        // Genre/generic play
+        lukasMusic.resolveRequest(cmd).then(result => {
+          if (result && result.track) {
+            const t = result.track;
+            const idx = playlist.findIndex(p => p.url === t.url);
+            if (idx !== -1) currentTrackIndex = idx;
+          }
+          isPlaying = true; updateMediaWidget(); playTrack();
+        });
+        responseText = `Playing ${playlist[currentTrackIndex].title} on ${activePlatform}.`;
       }
-      
-      if (foundIndex !== -1) {
-        currentTrackIndex = foundIndex;
-      }
-      
-      isPlaying = true;
-      updateMediaWidget();
-      playTrack();
-      responseText = `Playing requested stream: "${playlist[currentTrackIndex].title}" using ${activePlatform}.`;
     }
   }
 
@@ -5158,11 +5718,13 @@ function handleAssistantResponse(text, isSmartHomeAction = false) {
     return;
   }
 
-  diag.logToTerminal(`[LUKAS REPLY] "${text}"`, 'info');
+  const parsed = parseExecutiveAnalysis(text);
+
+  diag.logToTerminal(`[LUKAS REPLY] "${parsed.responseText}"`, 'info');
   appendChatBubble(text, 'assistant');
   // Stop wake word listening while vocalizing to avoid self-triggering
   voice.stopWakeWordListener();
-  voice.speak(text);
+  voice.speak(parsed.responseText);
 }
 
 function playFuturisticBeep() {

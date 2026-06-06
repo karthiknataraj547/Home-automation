@@ -50,6 +50,7 @@
         <h1>LUKAS</h1>
         <span class="version">CORE v4.8.2</span>
         <button id="openNodeManagerBtn" class="btn-node-manager" style="margin-left: 1rem; background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.3); color: #d8b4fe; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;" onmouseover="this.style.background='var(--purple-neon)'; this.style.color='var(--color-bg)';" onmouseout="this.style.background='rgba(168, 85, 247, 0.1)'; this.style.color='#d8b4fe';"><i class="fa-solid fa-gears"></i> SYSTEM SETTINGS</button>
+        <button id="openMemoryPanelBtn" class="btn-node-manager" style="margin-left: 0.5rem; background: rgba(0, 240, 255, 0.1); border: 1px solid rgba(0, 240, 255, 0.3); color: #99f6ff; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;" onmouseover="this.style.background='var(--cyan-neon)'; this.style.color='var(--color-bg)';" onmouseout="this.style.background='rgba(0, 240, 255, 0.1)'; this.style.color='#99f6ff';"><i class="fa-solid fa-brain"></i> MEMORY</button>
         <button id="themeToggleBtn" class="btn-node-manager" style="margin-left: 0.5rem; background: rgba(0, 240, 255, 0.1); border: 1px solid rgba(0, 240, 255, 0.3); color: #99f6ff; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;"><i class="fa-solid fa-moon"></i> THEME</button>
         <button id="logoutBtn" class="btn-node-manager" style="margin-left: 0.5rem; background: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.3); color: #fecdd3; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;"><i class="fa-solid fa-sign-out"></i> LOGOUT</button>
       </div>
@@ -1088,6 +1089,45 @@
           <span id="authTogglePrompt">No clearance profile registered?</span>
           <button id="authToggleModeBtn" class="auth-toggle-link">CREATE TERMINAL PROFILE</button>
         </div>
+      </div>
+    </div>
+
+    <!-- Memory Drawer -->
+    <div id="memoryDrawer" class="memory-drawer">
+      <div class="memory-drawer-header">
+        <span><i class="fa-solid fa-brain"></i> LUKAS MEMORY MATRIX</span>
+        <button id="closeMemoryPanelBtn" class="btn-icon" style="color: var(--rose-neon); cursor: pointer; background: transparent; border: none; font-size: 1.1rem; width: auto; height: auto;"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="memory-drawer-content">
+        <div class="memory-drawer-section">
+          <h3><i class="fa-solid fa-address-card"></i> WORKING SESSION</h3>
+          <div id="memWorkingDetails">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+        <div class="memory-drawer-section">
+          <h3><i class="fa-solid fa-diagram-project"></i> ACTIVE PROJECTS</h3>
+          <div id="memProjectsDetails">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+        <div class="memory-drawer-section">
+          <h3><i class="fa-solid fa-database"></i> LONG-TERM FACTS</h3>
+          <div id="memFactsDetails">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Bottom Planning Panel -->
+    <div id="planExecutionPanel" class="plan-panel">
+      <div class="plan-panel-header">
+        <span><i class="fa-solid fa-gears"></i> ACTIVE EXECUTION ROADMAP</span>
+        <button id="closePlanPanelBtn" class="btn-icon" style="color: var(--rose-neon); cursor: pointer; background: transparent; border: none; font-size: 1.1rem; width: auto; height: auto;"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="plan-panel-body" id="planPanelStepsList">
+        <!-- Steps will be generated dynamically -->
       </div>
     </div>
 

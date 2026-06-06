@@ -48,14 +48,33 @@ CURRENT TIME: ${timeStr}
   }
 
   prompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-[OPERATING PRINCIPLES]
-1. THINK before answering — understand intent fully
-2. BE PROACTIVE — if you notice gaps, risks, or better approaches, mention them
-3. REMEMBER context — reference what was discussed earlier when relevant
+[OPERATING PRINCIPLES & COGNITIVE PIPELINE]
+You must process every command through the LUKAS 8-stage intelligence pipeline:
+  Intent Detection → Context Retrieval → Task Planning → Reasoning → Execution → Validation → Response
+
+Never allow direct "question → answer" behavior. Always think and analyze before answering.
+1. THINK before answering — understand intent fully and run through the pipeline stage-by-stage.
+2. BE PROACTIVE — if you notice gaps, risks, or better approaches, mention them.
+3. REMEMBER context — reference what was discussed earlier when relevant.
 4. ${styleGuide}
-5. EXECUTE fully — don't stop halfway through complex tasks
-6. PERSONALIZE — adapt to what you know about ${userName}
-7. HONEST — if uncertain, say so and explain what you do know
+5. EXECUTE fully — don't stop halfway through complex tasks.
+6. PERSONALIZE — adapt to what you know about ${userName}.
+7. HONEST — if uncertain, say so and explain what you do know.
+
+[BEHAVIORAL RATIO]
+You must blend your persona according to this behavioral profile:
+- 40% Executive Assistant: Manage schedule, preferences, active files, memory, and devices.
+- 25% Research Agent: Search web sources, verify facts, resolve ambiguities.
+- 15% Engineering Mind: Apply precise logic, syntax correctness, and understand hardware/protocols.
+- 10% Project Manager: Trace active goals, log problems, and define checklists.
+- 10% Automation Core: Event schedules, trigger rules, and state flows.
+
+[EXECUTIVE PRE-CHECK SYSTEM]
+Before writing your response, perform a cognitive validation step:
+- Determine precisely what the user is trying to accomplish.
+- Identify what target state they want to achieve.
+- Highlight any potential risks or execution gaps.
+- Propose the single best next action.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 You are NOT a generic chatbot. You are a capable AI executive assistant that:
@@ -70,11 +89,27 @@ Always address ${userName} directly.`;
 
   // Intent-specific additions
   if (intent === 'task_execution') {
-    prompt += `\n\nFor this task: deliver a COMPLETE result. Focus on output, not explanation.`;
+    prompt += `\n\nFor this task: Think through the request carefully, then deliver a COMPLETE result. Structure your response as:
+[EXECUTIVE ANALYSIS]
+User Goal: <one-line summary of what they want>
+Actual Objective: <what they really need to achieve>
+Risks/Considerations: <any gaps, risks, or important context>
+Best Next Step: <the single most important action>
+
+[RESPONSE]
+<your actual response here>`;
+  } else if (intent === 'planning') {
+    prompt += `\n\nFor planning: Think through the goals and constraints, then structure your plan as:
+[EXECUTIVE ANALYSIS]
+User Goal: <what they want>
+Actual Objective: <what success looks like>
+Risks/Considerations: <blockers or assumptions>
+Best Next Step: <immediate action item>
+
+[RESPONSE]
+<concrete numbered plan with priorities and realistic timelines>`;
   } else if (intent === 'research') {
     prompt += `\n\nFor research: synthesize information clearly, acknowledge uncertainty, cite key points.`;
-  } else if (intent === 'planning') {
-    prompt += `\n\nFor planning: provide concrete, actionable steps with clear priorities and timelines.`;
   }
 
   if (isVoice) {
@@ -360,6 +395,7 @@ async function generateConversationalResponse({
   systemPrompt = null,
   temperature = 0.75,
   maxTokens = 1500,
+  reasoning = null,
 }) {
   const finalSystemPrompt = systemPrompt || buildSystemPrompt(memory, homeContext, intent, isVoice);
 
@@ -380,14 +416,58 @@ async function generateConversationalResponse({
   if (streamCallback) return result;
 
   // ── LUKAS Response Quality Self-Reflection & Refinement Algorithm ──
-  let scoreObj = scoreResponse(userMessage, result);
   let attempts = 0;
+  let validationResult;
 
-  while (scoreObj.score < 85 && attempts < 2) {
-    console.log(`[Self-Reflection] Response scored low (${scoreObj.score}/100). Regrets:`, scoreObj.issues);
+  // ── Intent-specific quality thresholds ──────────────────────────────────────
+  // Conversation doesn't need to be as perfect as task execution
+  const thresholds = {
+    task_execution: 82,
+    research: 80,
+    planning: 82,
+    conversation: 70,
+    home_control: 65,
+  };
+  const minScore = thresholds[intent] || 78;
+
+  if (reasoning) {
+    validationResult = reasoning.validate(userMessage, result, memory);
+  } else {
+    const scoreObj = scoreResponse(userMessage, result);
+    validationResult = {
+      valid: scoreObj.score >= minScore,
+      score: scoreObj.score,
+      issues: scoreObj.issues,
+      action: 'respond'
+    };
+  }
+
+  // If confidence is low, the reasoning engine will specify action === 'ask_clarification'.
+  // In that case, we run Executive Framing to present a structured intake assessment.
+  if (validationResult.action === 'ask_clarification') {
+    console.log(`[Self-Reflection] Low confidence action detected. Running Executive Framing to ask clarifying questions.`);
+    const framingPrompt = buildExecutiveFramingPrompt(memory, intent);
+    try {
+      const clarificationResponse = await callLukasAI({
+        systemPrompt: framingPrompt,
+        userMessage,
+        memory: null,
+        apiKey,
+        apiProvider,
+        temperature: 0.5,
+        maxTokens: 500,
+      });
+      return clarificationResponse || "I want to make sure I understand you correctly. Could you please clarify your request?";
+    } catch (e) {
+      return "I want to make sure I understand you correctly. Could you please clarify your request? What exactly would you like to achieve?";
+    }
+  }
+
+  while (!validationResult.valid && attempts < 2) {
+    console.log(`[Self-Reflection] Response scored low (${validationResult.score}/${minScore}). Issues:`, validationResult.issues);
 
     const reflectionPrompt = `You are LUKAS's response refinement engine. The previous response was evaluated and had some issues:
-${scoreObj.issues.map(i => `- ${i}`).join('\n')}
+${validationResult.issues.map(i => `- ${i}`).join('\n')}
 
 Original user query: "${userMessage}"
 Previous response: "${result}"
@@ -400,20 +480,38 @@ Please rewrite the response to resolve all the issues above. Keep it professiona
       memory: null,
       apiKey,
       apiProvider,
-      temperature: 0.45, // lower temperature for target correction
+      temperature: 0.45,
       maxTokens: Math.max(600, maxTokens),
       jsonMode: false,
       includeHistory: false,
     });
 
     if (refined && refined.trim().length > 5) {
+      // Sanity check: discard if refined is shorter than 80% of original (over-truncation)
+      if (refined.trim().length < result.length * 0.8 && result.length > 200) {
+        console.log(`[Self-Reflection] Refined response too short (${refined.length} vs ${result.length}). Discarding.`);
+        break;
+      }
       result = refined;
-      scoreObj = scoreResponse(userMessage, result);
+      if (reasoning) {
+        validationResult = reasoning.validate(userMessage, result, memory);
+      } else {
+        const scoreObj = scoreResponse(userMessage, result);
+        validationResult = {
+          valid: scoreObj.score >= minScore,
+          score: scoreObj.score,
+          issues: scoreObj.issues,
+          action: 'respond'
+        };
+      }
+      if (validationResult.action === 'ask_clarification') {
+        return "I want to make sure I understand you correctly. Could you please clarify your request?";
+      }
     }
     attempts++;
   }
 
-  console.log(`[Self-Reflection] Final response score: ${scoreObj.score}/100 after ${attempts} refinement attempts.`);
+  console.log(`[Self-Reflection] Final response score: ${validationResult.score} after ${attempts} refinement attempts.`);
   return result;
 }
 
@@ -495,9 +593,39 @@ function scoreResponse(userInput, response) {
   return { score: Math.max(0, score), issues };
 }
 
+/**
+ * Build the Executive Framing Prompt for requirement intake when query is ambiguous or low-confidence.
+ */
+function buildExecutiveFramingPrompt(memory, intent = 'planning') {
+  const userName = memory?.getFact('name') || 'Commander';
+  const contextBlock = memory ? memory.buildContextBlock() : '';
+  return `You are LUKAS, an advanced AI Operating System.
+The user (${userName}) has made a request under the "${intent}" intent which requires clarification or structure.
+You must NOT answer or plan immediately. Instead, act as an Executive PM and present a structured requirement-gathering checklist.
+
+You MUST return your response in this exact format:
+[EXECUTIVE ANALYSIS]
+Status: Awaiting Clarification
+Identified Goal: <what you think they want>
+Required Inputs: <what specific facts you need to know from the user>
+Potential Blockers: <risks or assumptions>
+
+[RESPONSE]
+I have analyzed your request. To execute this effectively, I need a few more details. Please clarify:
+1. <Specific question 1>
+2. <Specific question 2>
+3. <Specific question 3>
+
+Return only this structured analysis. Keep the tone professional, Jarvis-style, and brief.
+
+[USER PROFILE & CONTEXT]
+${contextBlock}`;
+}
+
 export {
   buildSystemPrompt,
   buildParserSystemPrompt,
+  buildExecutiveFramingPrompt,
   callLukasAI,
   parseHomeCommand,
   generateConversationalResponse,
