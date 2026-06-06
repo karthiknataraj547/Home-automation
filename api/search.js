@@ -106,6 +106,84 @@ export default async function handler(req, res) {
     console.warn('[Backend] SERPER_API_KEY not set — SerpAPI skipped');
   }
 
+  // ── 1.5. DuckDuckGo Organic Web Scrape (free, no API key needed fallback) ───
+  if (results.length < 3) {
+    try {
+      const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
+      const ddgRes = await fetch(ddgUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        },
+        signal: AbortSignal.timeout(6000),
+      });
+
+      if (ddgRes.ok) {
+        const html = await ddgRes.text();
+        const parts = html.split('<div class="result results_links results_links_deep web-result ">');
+        
+        function decodeHtml(str) {
+          return str
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#x27;/g, "'")
+            .replace(/&#39;/g, "'")
+            .replace(/&nbsp;/g, ' ');
+        }
+
+        let parsedCount = 0;
+        for (let i = 1; i < parts.length && parsedCount < 4; i++) {
+          const block = parts[i].split('<!-- This is the visible part -->')[1] || parts[i];
+          
+          const hrefMatch = block.match(/class="result__a"\s+href="([^"]+)"/);
+          let href = hrefMatch ? hrefMatch[1] : '';
+          let decodedUrl = href;
+          if (href.startsWith('//')) {
+            href = 'https:' + href;
+          }
+          if (href.includes('uddg=')) {
+            try {
+              const partsUrl = href.split('uddg=');
+              if (partsUrl.length > 1) {
+                const paramVal = partsUrl[1].split('&')[0];
+                decodedUrl = decodeURIComponent(paramVal);
+              }
+            } catch (e) {}
+          }
+          
+          const titleMatch = block.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/);
+          let title = titleMatch ? titleMatch[1].replace(/<[^>]*>/g, '').trim() : '';
+          title = decodeHtml(title);
+          
+          const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/) || block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/div>/);
+          let snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').trim() : '';
+          snippet = decodeHtml(snippet);
+          
+          if (title && snippet) {
+            let domain = '';
+            try {
+              domain = new URL(decodedUrl).hostname;
+            } catch {}
+            
+            results.push({
+              source: `Web (${domain || 'DuckDuckGo'})`,
+              title,
+              text: snippet,
+              url: decodedUrl,
+              confidence: 0.85,
+              type: 'organic',
+            });
+            parsedCount++;
+          }
+        }
+        console.log(`[Backend Scrape] Parsed ${parsedCount} results for: "${q}"`);
+      }
+    } catch (e) {
+      console.warn('[Backend Scrape] DuckDuckGo scrape failed:', e.message);
+    }
+  }
+
   // ── 2. DuckDuckGo Instant (free, always available as fallback) ───────────
   try {
     const ddgRes = await fetch(

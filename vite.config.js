@@ -812,10 +812,79 @@ export default defineConfig({
                 }
 
                 // Organic results
-                for (const item of (serp.organic_results || []).slice(0, 3)) {
-                  if (item.snippet) results.push({ source: `Google (${item.displayed_link || ''})`, title: item.title || '', text: item.snippet, url: item.link || '', confidence: 0.87, type: 'organic' });
+                 for (const item of (serp.organic_results || []).slice(0, 3)) {
+                   if (item.snippet) results.push({ source: `Google (${item.displayed_link || ''})`, title: item.title || '', text: item.snippet, url: item.link || '', confidence: 0.87, type: 'organic' });
+                 }
+               } catch(e) { console.warn('[Search] SerpAPI failed:', e.message); }
+             }
+
+            // 4. DuckDuckGo Scrape fallback (if SerpAPI didn't give enough results and no key is configured)
+            if (results.length < 3) {
+              try {
+                const ddgHtmlUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`;
+                const scrapeRes = await fetch(ddgHtmlUrl, {
+                  headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                  }
+                });
+                if (scrapeRes.ok) {
+                  const html = await scrapeRes.text();
+                  const parts = html.split('<div class="result results_links results_links_deep web-result ">');
+                  
+                  function decodeHtml(str) {
+                    return str
+                      .replace(/&amp;/g, '&')
+                      .replace(/&lt;/g, '<')
+                      .replace(/&gt;/g, '>')
+                      .replace(/&quot;/g, '"')
+                      .replace(/&#x27;/g, "'")
+                      .replace(/&#39;/g, "'")
+                      .replace(/&nbsp;/g, ' ');
+                  }
+
+                  let parsedCount = 0;
+                  for (let i = 1; i < parts.length && parsedCount < 4; i++) {
+                    const block = parts[i].split('<!-- This is the visible part -->')[1] || parts[i];
+                    
+                    const hrefMatch = block.match(/class="result__a"\s+href="([^"]+)"/);
+                    let href = hrefMatch ? hrefMatch[1] : '';
+                    let decodedUrl = href;
+                    if (href.startsWith('//')) href = 'https:' + href;
+                    if (href.includes('uddg=')) {
+                      try {
+                        const partsUrl = href.split('uddg=');
+                        if (partsUrl.length > 1) {
+                          const paramVal = partsUrl[1].split('&')[0];
+                          decodedUrl = decodeURIComponent(paramVal);
+                        }
+                      } catch (e) {}
+                    }
+                    
+                    const titleMatch = block.match(/class="result__a"[^>]*>([\s\S]*?)<\/a>/);
+                    let title = titleMatch ? titleMatch[1].replace(/<[^>]*>/g, '').trim() : '';
+                    title = decodeHtml(title);
+                    
+                    const snippetMatch = block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/a>/) || block.match(/class="result__snippet"[^>]*>([\s\S]*?)<\/div>/);
+                    let snippet = snippetMatch ? snippetMatch[1].replace(/<[^>]*>/g, '').trim() : '';
+                    snippet = decodeHtml(snippet);
+                    
+                    if (title && snippet) {
+                      let domain = '';
+                      try { domain = new URL(decodedUrl).hostname; } catch {}
+                      
+                      results.push({
+                        source: `Web (${domain || 'DuckDuckGo'})`,
+                        title,
+                        text: snippet,
+                        url: decodedUrl,
+                        confidence: 0.85,
+                        type: 'organic'
+                      });
+                      parsedCount++;
+                    }
+                  }
                 }
-              } catch(e) { console.warn('[Search] SerpAPI failed:', e.message); }
+              } catch(e) { console.warn('[Search] DDG html scrape failed:', e.message); }
             }
 
             results.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
