@@ -12,7 +12,7 @@ import LukasMemory from './src/ai/memory.js';
 import LukasOrchestrator, { INTENT } from './src/ai/orchestrator.js';
 import LukasResearchAgent from './src/ai/research.js';
 import LukasReasoningEngine from './src/ai/reasoning.js';
-import { generateConversationalResponse, parseHomeCommand, scoreResponse } from './src/ai/core.js';
+import { generateConversationalResponse, parseHomeCommand, scoreResponse, callLukasAI } from './src/ai/core.js';
 import LukasMusicEngine from './src/ai/music.js';
 import LukasPlannerAgent from './src/ai/planner.js';
 import LukasTaskRunner from './src/ai/taskrunner.js';
@@ -109,7 +109,7 @@ function handleLocalAPIResponse(url, options) {
 }
 
 // Instantiate core hubs
-const voice = new LukasVoiceController();
+let voice = new LukasVoiceController();
 const home = new LukasAutomationHub();
 const cctv = new LukasCCTVManager();
 const diag = new LukasDiagnosticsHub();
@@ -134,6 +134,7 @@ let isPlaying = false;
 let isPassiveListenEnabled = true;
 let isWakingUp = false;
 let isProcessingCommand = false;
+let multiTaskEngine = null;
 let currentWeatherCity = "";
 let activeFollowUp = null;
 let conversationActive = false;   // TRUE while we keep mic hot after a voice exchange
@@ -849,34 +850,517 @@ function initializeDashboard() {
   bootSequenceAnimation();
 }
 
+function resolveDevice(targetName, category) {
+  if (!targetName) return { device: null, ambiguous: false, matches: [] };
+  
+  const searchName = targetName.toLowerCase().trim();
+  // Find all matches in home.dynamicDevices
+  let matches = home.dynamicDevices.filter(d => {
+    const devName = d.name.toLowerCase();
+    const nameMatch = devName.includes(searchName) || searchName.includes(devName);
+    if (category && ['light', 'climate', 'security', 'media'].includes(category)) {
+      return nameMatch && d.category === category;
+    }
+    return nameMatch;
+  });
+  
+  // Exact match takes precedence
+  const exactMatch = matches.find(d => d.name.toLowerCase() === searchName);
+  if (exactMatch) {
+    return { device: exactMatch, ambiguous: false, matches: [exactMatch] };
+  }
+  
+  if (matches.length > 1) {
+    return { device: null, ambiguous: true, matches: matches };
+  }
+  
+  return { device: matches[0] || null, ambiguous: false, matches: matches };
+}
+
+class LukasMultiTaskEngine {
+  constructor() {
+    this.currentActions = [];
+    this.isRunning = false;
+    this.currentIndex = 0;
+    this.bubbleElement = null;
+    this.statusMap = [];
+    this.detailsMap = [];
+  }
+
+  async run(actions, apiKey, apiProvider) {
+    if (this.isRunning) {
+      console.warn("Task engine is already running!");
+      return;
+    }
+    this.currentActions = actions;
+    this.isRunning = true;
+    this.currentIndex = 0;
+    this.statusMap = actions.map(() => 'pending');
+    this.detailsMap = actions.map(act => this._getActionDescription(act));
+
+    this._appendQueueBubble();
+
+    isProcessingCommand = true;
+    const coreBtn = document.getElementById('lukasCoreBtn');
+    if (coreBtn) {
+      coreBtn.classList.add('processing');
+    }
+
+    let allSuccessful = true;
+    let finalSpeechResponse = "";
+    
+    for (let i = 0; i < actions.length; i++) {
+      this.currentIndex = i;
+      this.statusMap[i] = 'running';
+      this._updateQueueUI();
+      
+      await new Promise(resolve => setTimeout(resolve, 800));
+
+      const action = actions[i];
+      try {
+        const result = await this._executeSingleAction(action);
+        if (result.status === 'ambiguous') {
+          this.statusMap[i] = 'ambiguous';
+          this.detailsMap[i] = `Ambiguous device: ${result.message}`;
+          this._updateQueueUI();
+          
+          allSuccessful = false;
+          const msg = `Wait, I found multiple matches for "${action.targetDeviceName}": ${result.matches.map(m => m.name).join(', ')}. Which one did you mean?`;
+          this._speakAndOutput(msg, true);
+          break;
+        } else if (result.status === 'failed') {
+          this.statusMap[i] = 'failed';
+          this.detailsMap[i] = result.message;
+          this._updateQueueUI();
+          allSuccessful = false;
+          const msg = `Task failed: ${result.message}`;
+          this._speakAndOutput(msg);
+          break;
+        } else {
+          this.statusMap[i] = 'completed';
+          this.detailsMap[i] = result.message;
+          this._updateQueueUI();
+          if (finalSpeechResponse) finalSpeechResponse += " ";
+          finalSpeechResponse += result.message;
+        }
+      } catch (err) {
+        console.error(err);
+        this.statusMap[i] = 'failed';
+        this.detailsMap[i] = `Error: ${err.message}`;
+        this._updateQueueUI();
+        allSuccessful = false;
+        this._speakAndOutput(`Error running task: ${err.message}`);
+        break;
+      }
+    }
+
+    this.isRunning = false;
+
+    if (allSuccessful && actions.length > 0) {
+      this._speakAndOutput(finalSpeechResponse || "All actions completed successfully.");
+    } else {
+      isProcessingCommand = false;
+      if (coreBtn) {
+        coreBtn.classList.remove('processing');
+        coreBtn.classList.remove('listening');
+      }
+    }
+  }
+
+  _getActionDescription(act) {
+    const actionStr = act.action || 'set';
+    const cat = act.category || 'home';
+    const target = act.targetDeviceName || act.targetZone || 'system';
+    const value = act.value ? ` to ${act.value}` : '';
+    return `${actionStr.toUpperCase()} ${target}${value} (${cat})`;
+  }
+
+  _appendQueueBubble() {
+    const row = document.createElement('div');
+    row.className = 'chat-bubble-row';
+
+    const avatar = document.createElement('div');
+    avatar.className = 'chat-avatar lukas-avatar';
+    avatar.innerHTML = '<i class="fa-solid fa-microchip"></i>';
+    row.appendChild(avatar);
+
+    const bubble = document.createElement('div');
+    bubble.className = 'chat-bubble assistant';
+    
+    const queueContainer = document.createElement('div');
+    queueContainer.className = 'chat-task-queue';
+    
+    const title = document.createElement('div');
+    title.className = 'chat-task-title';
+    title.innerHTML = '<i class="fa-solid fa-list-check"></i> Lukas Multi-Action Queue';
+    queueContainer.appendChild(title);
+    
+    const itemsList = document.createElement('div');
+    itemsList.className = 'chat-task-items';
+    queueContainer.appendChild(itemsList);
+    
+    bubble.appendChild(queueContainer);
+    row.appendChild(bubble);
+    
+    chatHistory.appendChild(row);
+    chatHistory.scrollTop = chatHistory.scrollHeight;
+    
+    this.bubbleElement = itemsList;
+    this._updateQueueUI();
+  }
+
+  _updateQueueUI() {
+    if (!this.bubbleElement) return;
+    this.bubbleElement.innerHTML = "";
+    
+    this.currentActions.forEach((act, idx) => {
+      const status = this.statusMap[idx];
+      const details = this.detailsMap[idx];
+      
+      const item = document.createElement('div');
+      item.className = `chat-task-item ${status}`;
+      
+      let iconHtml = '';
+      if (status === 'pending') {
+        iconHtml = '<i class="fa-regular fa-circle"></i>';
+      } else if (status === 'running') {
+        iconHtml = '<i class="fa-solid fa-circle-notch"></i>';
+      } else if (status === 'completed') {
+        iconHtml = '<i class="fa-solid fa-circle-check"></i>';
+      } else if (status === 'failed' || status === 'ambiguous') {
+        iconHtml = '<i class="fa-solid fa-triangle-exclamation"></i>';
+      }
+      
+      item.innerHTML = `
+        <span>${details}</span>
+        <span class="chat-task-status-icon">${iconHtml}</span>
+      `;
+      this.bubbleElement.appendChild(item);
+    });
+  }
+
+  _speakAndOutput(text, isClarification = false) {
+    isProcessingCommand = false;
+    const coreBtn = document.getElementById('lukasCoreBtn');
+    if (coreBtn) {
+      coreBtn.classList.remove('processing');
+      coreBtn.classList.remove('listening');
+    }
+    
+    diag.logToTerminal(`[LUKAS REPLY] "${text}"`, 'info');
+    
+    appendChatBubble(text, 'assistant');
+    
+    voice.stopWakeWordListener();
+    voice.speak(text);
+    
+    lukasMemory.addMessage('assistant', text, 'home_control');
+  }
+
+  async _executeSingleAction(parsed) {
+    const colorMap = {
+      'red': '#ff0000', 'green': '#10b981', 'blue': '#3b82f6', 'purple': '#a855f7',
+      'cyan': '#00f0ff', 'orange': '#ff9f3b', 'white': '#ffffff', 'yellow': '#eab308',
+      'pink': '#ec4899', 'magenta': '#d946ef', 'lime': '#84cc16', 'teal': '#14b8a6',
+      'gold': '#f59e0b', 'crimson': '#e11d48'
+    };
+
+    if (parsed && parsed.category && parsed.category !== 'unknown') {
+      const res = resolveDevice(parsed.targetDeviceName, parsed.category);
+      if (res.ambiguous) {
+        return { status: 'ambiguous', matches: res.matches, message: `Ambiguous target "${parsed.targetDeviceName}"` };
+      }
+      const targetDevice = res.device;
+
+      // LIGHTS
+      if (parsed.category === 'light') {
+        let targetZone = null;
+        let zoneLabel = "";
+        if (parsed.targetZone === 'Living Room') { targetZone = DEVICES.LIVING_ROOM; zoneLabel = "Living Room"; }
+        else if (parsed.targetZone === 'Bedroom') { targetZone = DEVICES.BEDROOM; zoneLabel = "Bedroom"; }
+        else if (parsed.targetZone === 'Kitchen') { targetZone = DEVICES.KITCHEN; zoneLabel = "Kitchen"; }
+        
+        const turnOn = parsed.action === 'on' || parsed.action === 'activate';
+        const turnOff = parsed.action === 'off' || parsed.action === 'deactivate';
+        
+        if (targetDevice) {
+          const updates = {};
+          let actionLabel = "";
+          if (turnOn) {
+            updates.on = true;
+            actionLabel = "activated";
+          } else if (turnOff) {
+            updates.on = false;
+            actionLabel = "deactivated";
+          } else if (parsed.action === 'color' && parsed.value) {
+            const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
+            updates.on = true;
+            updates.color = hex;
+            actionLabel = `set to ${parsed.value}`;
+          } else if (parsed.action === 'brightness' && parsed.value) {
+            const val = parseInt(parsed.value);
+            updates.on = true;
+            updates.brightness = isNaN(val) ? 50 : val;
+            actionLabel = `dimmed to ${updates.brightness}%`;
+          } else {
+            updates.on = !targetDevice.on;
+            actionLabel = !targetDevice.on ? "activated" : "deactivated";
+          }
+          home.setDeviceState(targetDevice.id, updates);
+          return { status: 'success', message: `I have successfully ${actionLabel} the ${targetDevice.name}.` };
+        } else if (parsed.isGlobal || (!targetZone && !parsed.targetDeviceName)) {
+          if (turnOn) {
+            home.setDeviceState(DEVICES.LIVING_ROOM, { on: true });
+            home.setDeviceState(DEVICES.BEDROOM, { on: true });
+            home.setDeviceState(DEVICES.KITCHEN, { on: true });
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light') home.setDeviceState(dev.id, { on: true });
+            }
+            return { status: 'success', message: "Re-initialized all lighting arrays." };
+          } else if (turnOff) {
+            home.setDeviceState(DEVICES.LIVING_ROOM, { on: false });
+            home.setDeviceState(DEVICES.BEDROOM, { on: false });
+            home.setDeviceState(DEVICES.KITCHEN, { on: false });
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light') home.setDeviceState(dev.id, { on: false });
+            }
+            return { status: 'success', message: "Powering down all lighting grids." };
+          } else if (parsed.action === 'color' && parsed.value) {
+            const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
+            home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, color: hex });
+            home.setDeviceState(DEVICES.BEDROOM, { on: true, color: hex });
+            home.setDeviceState(DEVICES.KITCHEN, { on: true, color: hex });
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, color: hex });
+            }
+            return { status: 'success', message: `Changing all light spectrums to ${parsed.value}.` };
+          } else if (parsed.action === 'brightness' && parsed.value) {
+            const val = parseInt(parsed.value);
+            const percent = isNaN(val) ? 50 : val;
+            home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, brightness: percent });
+            home.setDeviceState(DEVICES.BEDROOM, { on: true, brightness: percent });
+            home.setDeviceState(DEVICES.KITCHEN, { on: true, brightness: percent });
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, brightness: percent });
+            }
+            return { status: 'success', message: `Adjusting light levels to ${percent} percent.` };
+          } else {
+            const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
+            const newState = !isAnyOn;
+            home.setDeviceState(DEVICES.LIVING_ROOM, { on: newState });
+            home.setDeviceState(DEVICES.BEDROOM, { on: newState });
+            home.setDeviceState(DEVICES.KITCHEN, { on: newState });
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light') home.setDeviceState(dev.id, { on: newState });
+            }
+            return { status: 'success', message: `Toggling all lighting grids ${newState ? 'ON' : 'OFF'}.` };
+          }
+        } else if (targetZone) {
+          const updates = {};
+          let actionLabel = "";
+          if (turnOn) {
+            updates.on = true;
+            actionLabel = "activated";
+          } else if (turnOff) {
+            updates.on = false;
+            actionLabel = "deactivated";
+          } else if (parsed.action === 'color' && parsed.value) {
+            const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
+            updates.on = true;
+            updates.color = hex;
+            actionLabel = `set to ${parsed.value}`;
+          } else if (parsed.action === 'brightness' && parsed.value) {
+            const val = parseInt(parsed.value);
+            updates.on = true;
+            updates.brightness = isNaN(val) ? 50 : val;
+            actionLabel = `dimmed to ${updates.brightness}%`;
+          } else {
+            const isCurrentOn = home.state.devices[targetZone].on;
+            updates.on = !isCurrentOn;
+            actionLabel = !isCurrentOn ? "activated" : "deactivated";
+          }
+          home.setDeviceState(targetZone, updates);
+          for (const dev of home.dynamicDevices) {
+            if (dev.category === 'light' && dev.zone === zoneLabel) {
+              home.setDeviceState(dev.id, updates);
+            }
+          }
+          return { status: 'success', message: `Perfect, I have ${actionLabel} the lighting grid in the ${zoneLabel}.` };
+        }
+      }
+      
+      // CLIMATE
+      else if (parsed.category === 'climate') {
+        if (parsed.action === 'temp' && parsed.value) {
+          const val = parseInt(parsed.value);
+          if (!isNaN(val)) {
+            home.setTargetTemperature(val);
+            return { status: 'success', message: `Eco-Thermostat target set to ${val} degrees Celsius.` };
+          }
+        } else if (parsed.action === 'mode' && parsed.value) {
+          const mode = parsed.value.toLowerCase();
+          if (['cool', 'heat', 'eco'].includes(mode)) {
+            home.setClimateMode(mode);
+            return { status: 'success', message: `Configuring eco-thermostat matrix to ${mode.toUpperCase()} mode.` };
+          }
+        } else if (parsed.action === 'status') {
+          return { status: 'success', message: `Current indoor sensor reading is ${home.state.climate.indoorTemp}°C, target set to ${home.state.climate.targetTemp}°C in ${home.state.climate.mode} mode.` };
+        }
+      }
+      
+      // SECURITY
+      else if (parsed.category === 'security') {
+        const lock = parsed.action === 'off' || parsed.action === 'stop' || parsed.action === 'close' || parsed.action === 'lock';
+        const unlock = parsed.action === 'on' || parsed.action === 'open' || parsed.action === 'release' || parsed.action === 'unlock';
+        
+        if (targetDevice) {
+          const isLocked = unlock ? false : (lock ? true : !targetDevice.locked);
+          home.setDeviceState(targetDevice.id, { locked: isLocked });
+          return { status: 'success', message: `I have successfully ${isLocked ? 'locked' : 'unlocked'} the ${targetDevice.name}.` };
+        } else {
+          const isLocked = unlock ? false : (lock ? true : !home.state.devices[DEVICES.OUTDOOR].locked);
+          home.setDeviceState(DEVICES.OUTDOOR, { locked: isLocked });
+          return { status: 'success', message: isLocked ? "Perimeter locks engaged. Main entryway secured." : "Security locks disengaged. Main entryway is now unlocked." };
+        }
+      }
+      
+      // ROUTINES
+      else if (parsed.category === 'routine' && parsed.value) {
+        const val = parsed.value.toLowerCase();
+        if (val.includes('morning') || val.includes('wake')) {
+          triggerRoutineEffect(ROUTINES.MORNING);
+          return { status: 'success', message: "Vocalizing morning sequence. Thermostat and lighting profiles loaded." };
+        } else if (val.includes('cinema') || val.includes('movie') || val.includes('theater')) {
+          triggerRoutineEffect(ROUTINES.CINEMA);
+          return { status: 'success', message: "Initiating Cinema Mode. Ambient lights dimmed, secondary grids disabled." };
+        } else if (val.includes('eco') || val.includes('green') || val.includes('save')) {
+          triggerRoutineEffect(ROUTINES.ECO);
+          return { status: 'success', message: "Power saving eco schedules initiated." };
+        } else if (val.includes('lockdown') || val.includes('emergency')) {
+          triggerRoutineEffect(ROUTINES.LOCKDOWN);
+          return { status: 'success', message: "WARNING! SECURITY LOCKDOWN ACTIVATED. All portals secured." };
+        }
+      }
+      
+      // MEDIA
+      else if (parsed.category === 'media') {
+        const cmd = parsed.action || '';
+        const rawVal = parsed.value || '';
+
+        if (cmd === 'pause' || cmd === 'stop') {
+          isPlaying = false;
+          updateMediaPlayButton(false);
+          audioPlayer.pause();
+          return { status: 'success', message: 'Audio feed paused.' };
+        } else if (cmd === 'next') {
+          playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
+          currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
+          isPlaying = true; updateMediaWidget(); playTrack();
+          return { status: 'success', message: `Skipping to: "${playlist[currentTrackIndex].title}".` };
+        } else if (cmd === 'prev') {
+          playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
+          currentTrackIndex = (currentTrackIndex - 1 + playlist.length) % playlist.length;
+          isPlaying = true; updateMediaWidget(); playTrack();
+          return { status: 'success', message: `Reverting to: "${playlist[currentTrackIndex].title}".` };
+        } else {
+          const searchQuery = rawVal || parsed.targetDeviceName || '';
+          const musicQuery = LukasMusicEngine.parseMediaCommand(searchQuery) || searchQuery;
+
+          if (musicQuery) {
+            diag.logToTerminal(`[MUSIC ENGINE] Sequential resolve: "${musicQuery}"`, 'info');
+            try {
+              const result = await lukasMusic.resolveRequest(musicQuery);
+              if (result && result.track) {
+                const t = result.track;
+                const newTrack = { id: t.id, title: t.title, artist: t.artist, url: t.url, icon: 'fa-music', thumbnail: t.thumbnail || '' };
+                const existIdx = playlist.findIndex(p => p.id === t.id);
+                if (existIdx === -1) {
+                  playlist.push(newTrack);
+                  lukasMusic.saveToLibrary(t);
+                }
+                currentTrackIndex = playlist.findIndex(p => p.id === t.id);
+                if (currentTrackIndex === -1) currentTrackIndex = playlist.length - 1;
+                isPlaying = true;
+                updateMediaWidget();
+                playTrack();
+                return { status: 'success', message: `Playing "${t.title}" by ${t.artist}.` };
+              }
+            } catch (err) {
+              console.error(err);
+            }
+          }
+          isPlaying = true; updateMediaWidget(); playTrack();
+          return { status: 'success', message: `Playing media stream.` };
+        }
+      }
+      
+      // CCTV
+      else if (parsed.category === 'cctv') {
+        const probeBtn = document.getElementById('cam1ProbeBtn');
+        if (probeBtn) {
+          probeBtn.click();
+        }
+        return { status: 'success', message: "Engaging camera matrix and initiating auto-probe sequence." };
+      }
+      
+      // TIME
+      else if (parsed.category === 'time') {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return { status: 'success', message: `The current system time is ${timeStr}.` };
+      }
+      
+      // DIAGNOSTICS
+      else if (parsed.category === 'diagnostics') {
+        return { status: 'success', message: `Diagnostics: CPU Load at ${Math.round(diag.metrics.cpu)}%, Thermals stable at ${diag.metrics.temp.toFixed(1)}°C.` };
+      }
+    }
+    
+    return { status: 'failed', message: 'Unknown action or could not execute.' };
+  }
+}
+
 function startWatchdogSystem() {
   console.log("[WATCHDOG] Initializing service health monitor...");
   setInterval(() => {
     try {
-      // 1. Check Voice & Wake Engine
       const isVoiceSpeaking = window.speechSynthesis.speaking;
       
-      // If we are in standby (sleep mode) or not actively in conversation, the Wake Engine should be listening
-      if (lastCommandSource === 'standby' || !conversationActive) {
-        if (!voice.isListeningForWakeWord && !voice.isCommandListeningActive && !isVoiceSpeaking) {
-          console.warn("[WATCHDOG] Wake Engine is inactive during Standby. Restarting wake listener...");
-          voice.startWakeWordListener();
+      // 1. Check Voice Engine
+      if (!voice || typeof voice.speak !== 'function' || typeof voice.cancelSpeech !== 'function') {
+        console.error("[WATCHDOG] Voice Engine crashed! Re-initializing voice controller...");
+        voice = new LukasVoiceController();
+      }
+      
+      // 2. Check Wake Engine / Speech Recognition Manager State Machine
+      if (voice && voice.recognitionManager) {
+        if (lastCommandSource === 'standby' || !conversationActive) {
+          if (voice.recognitionManager.state !== 'STANDBY' && voice.recognitionManager.state !== 'LISTENING' && !isVoiceSpeaking && !isProcessingCommand) {
+            console.warn(`[WATCHDOG] Wake Engine state mismatch (${voice.recognitionManager.state}). Transitioning to STANDBY...`);
+            voice.recognitionManager.transitionTo('STANDBY');
+          }
+        }
+        
+        if ((voice.recognitionManager.state === 'STANDBY' || voice.recognitionManager.state === 'LISTENING' || voice.recognitionManager.state === 'SPEAKING') && 
+            !voice.isRecognitionActive && !voice.isStopping && !isVoiceSpeaking) {
+          console.warn(`[WATCHDOG] Speech recognition inactive during state ${voice.recognitionManager.state}. Restarting...`);
+          voice.recognitionManager.start();
         }
       }
       
-      // If the recognition active flags are set but recognition is not active
-      if ((voice.isListeningForWakeWord || voice.isCommandListeningActive) && !voice.isRecognitionActive && !voice.isStopping && !isVoiceSpeaking) {
-        console.warn("[WATCHDOG] Speech recognition state mismatch. Restarting recognition...");
-        voice.startRecognitionInternal();
-      }
-
-      // 2. Check Memory Engine
+      // 3. Check Memory Engine
       if (!lukasMemory || typeof lukasMemory.addFact !== 'function') {
         console.error("[WATCHDOG] Memory Engine crashed! Restoring Memory Matrix...");
         lukasMemory = new LukasMemory();
       }
 
-      // 3. Sync Network Badge
+      // 4. Check Task Engine
+      if (!multiTaskEngine || typeof multiTaskEngine.run !== 'function') {
+        console.error("[WATCHDOG] Task Engine crashed! Restoring Task Multi-Action Engine...");
+        multiTaskEngine = new LukasMultiTaskEngine();
+      }
+
+      // 5. Sync Network Badge
       const netSyncVal = document.getElementById('netSyncStatus');
       if (netSyncVal && !navigator.onLine) {
         netSyncVal.textContent = 'OFFLINE';
@@ -908,6 +1392,9 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Apply initial Guest space preferences
   applyUserPreferencesToVoiceAndUI('Guest');
+
+  // Initialize Task Engine
+  multiTaskEngine = new LukasMultiTaskEngine();
 
   // Start Silent Service Watchdog health checking
   startWatchdogSystem();
@@ -4893,18 +5380,15 @@ async function processCommand(rawCommand, source) {
           }
         }
         
-        if (bestScore >= 0.88) {
+        if (bestScore >= 0.95) {
           // Dynamic verified switch
           if (lukasMemory.currentUsername !== bestMatch) {
             diag.logToTerminal(`[BIOMETRICS] Dynamic speaker match: ${bestMatch} (Similarity: ${(bestScore * 100).toFixed(1)}%). Swapping workspace context.`, 'info');
             applyUserPreferencesToVoiceAndUI(bestMatch);
           }
         } else {
-          // Unverified - fallback to Guest sandbox
-          if (lukasMemory.currentUsername !== 'Guest') {
-            diag.logToTerminal(`[BIOMETRICS] Speaker unrecognized or low confidence (${(bestScore * 100).toFixed(1)}%). Swapping to Guest sandbox.`, 'warn');
-            applyUserPreferencesToVoiceAndUI('Guest');
-          }
+          // Weak match - remain in current profile as required
+          diag.logToTerminal(`[BIOMETRICS] Speaker unrecognized or low confidence (${(bestScore * 100).toFixed(1)}%). Remaining in current profile: ${lukasMemory.currentUsername}.`, 'info');
         }
       } else {
         // Fallback for voice command with missing voiceprint
@@ -4926,20 +5410,34 @@ async function processCommand(rawCommand, source) {
       isProcessingCommand = false;
       isProfileUpdateConfirmationActive = false;
       
-      const yesWords = ['yes', 'sure', 'yeah', 'yep', 'ok', 'okay', 'update', 'change', 'please'];
+      const yesWords = ['yes', 'sure', 'yeah', 'yep', 'ok', 'okay', 'update', 'change', 'please', 'confirm', 'correct'];
       if (yesWords.some(w => cmd.includes(w))) {
         const { key, value } = pendingProfileUpdate;
-        lukasMemory.addFact(key, value, 'User Confirmed', 'Direct User Input');
+        const identityKeys = ['name', 'country', 'city', 'email', 'phone', 'language'];
+        
+        if (identityKeys.includes(key)) {
+          lukasMemory.longTerm.profile[key] = value;
+          lukasMemory._saveLongTerm();
+        } else {
+          lukasMemory.addFact(key, value, 'User Confirmed', 'Direct User Input');
+        }
         
         // Update parallel preferences where applicable
-        if (key === 'name') lukasMemory.setPreference('name', value);
-        if (key === 'language') lukasMemory.setPreference('speechLang', value);
+        if (key === 'name') {
+          lukasMemory.setPreference('name', value);
+          applyUserPreferencesToVoiceAndUI(value);
+        }
+        if (key === 'language') {
+          lukasMemory.setPreference('speechLang', value);
+          voice.setLanguage(value);
+        }
         if (key === 'accent') lukasMemory.setPreference('voiceAccent', value);
         if (key === 'style') lukasMemory.setPreference('personalityMode', value);
         
         handleAssistantResponse(`Thanks. I've updated your ${key} to ${value} in your profile.`);
       } else {
-        handleAssistantResponse(`Understood. Keeping your ${pendingProfileUpdate.key} as ${lukasMemory.getFact(pendingProfileUpdate.key) || 'not set'}.`);
+        const currentVal = lukasMemory.longTerm.profile[pendingProfileUpdate.key] || lukasMemory.getFact(pendingProfileUpdate.key) || 'not set';
+        handleAssistantResponse(`Understood. Keeping your ${pendingProfileUpdate.key} as ${currentVal}.`);
       }
       pendingProfileUpdate = null;
       setTimeout(() => voice.startWakeWordListener(), 1000);
@@ -4956,9 +5454,21 @@ async function processCommand(rawCommand, source) {
       if (cleanVal.length < 2) {
         handleAssistantResponse(`Aborted. The provided value was too short.`);
       } else {
-        lukasMemory.addFact(key, cleanVal, 'User Confirmed', 'Direct User Input');
-        if (key === 'name') lukasMemory.setPreference('name', cleanVal);
-        if (key === 'language') lukasMemory.setPreference('speechLang', cleanVal);
+        const identityKeys = ['name', 'country', 'city', 'email', 'phone', 'language'];
+        if (identityKeys.includes(key)) {
+          lukasMemory.longTerm.profile[key] = cleanVal;
+          lukasMemory._saveLongTerm();
+        } else {
+          lukasMemory.addFact(key, cleanVal, 'User Confirmed', 'Direct User Input');
+        }
+        if (key === 'name') {
+          lukasMemory.setPreference('name', cleanVal);
+          applyUserPreferencesToVoiceAndUI(cleanVal);
+        }
+        if (key === 'language') {
+          lukasMemory.setPreference('speechLang', cleanVal);
+          voice.setLanguage(cleanVal);
+        }
         if (key === 'accent') lukasMemory.setPreference('voiceAccent', cleanVal);
         if (key === 'style') lukasMemory.setPreference('personalityMode', cleanVal);
         
@@ -4971,15 +5481,17 @@ async function processCommand(rawCommand, source) {
     // ── CRUD Profile Commands ──
     if (cmd === 'view profile' || cmd === 'show profile' || cmd === 'show my profile' || cmd === 'view my profile') {
       isProcessingCommand = false;
-      const facts = lukasMemory.longTerm.facts;
       const prefs = lukasMemory.longTerm.preferences;
+      const profile = lukasMemory.longTerm.profile || {};
       
       const profileLines = [
         "**[PROFILE DETAILS]**",
-        `Name: ${lukasMemory.getFact('name') || 'Not set'}`,
-        `Country: ${lukasMemory.getFact('country') || 'Not set'}`,
-        `City: ${lukasMemory.getFact('city') || 'Not set'}`,
-        `Preferred Language: ${lukasMemory.getFact('language') || prefs.speechLang || 'en-IN'}`,
+        `Name: ${profile.name || 'Not set'}`,
+        `Email: ${profile.email || 'Not set'}`,
+        `Phone: ${profile.phone || 'Not set'}`,
+        `Country: ${profile.country || 'Not set'}`,
+        `City: ${profile.city || 'Not set'}`,
+        `Preferred Language: ${profile.language || prefs.speechLang || 'en-IN'}`,
         `Preferred Accent: ${lukasMemory.getFact('accent') || prefs.voiceAccent || 'indian_english'}`,
         `Time Zone: ${lukasMemory.getFact('timezone') || 'Asia/Kolkata'}`,
         `Profession: ${lukasMemory.getFact('profession') || 'Not set'}`,
@@ -5002,15 +5514,26 @@ async function processCommand(rawCommand, source) {
       return;
     }
     
-    const deleteFactMatch = cmd.match(/^delete (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style) from profile$/i)
-      || cmd.match(/^delete (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style)$/i)
-      || cmd.match(/^remove (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style) from profile$/i)
-      || cmd.match(/^remove (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style)$/i);
+    const deleteFactMatch = cmd.match(/^delete (?:my\s+)?(name|country|city|email|phone|language|accent|timezone|profession|interests|projects|style) from profile$/i)
+      || cmd.match(/^delete (?:my\s+)?(name|country|city|email|phone|language|accent|timezone|profession|interests|projects|style)$/i)
+      || cmd.match(/^remove (?:my\s+)?(name|country|city|email|phone|language|accent|timezone|profession|interests|projects|style) from profile$/i)
+      || cmd.match(/^remove (?:my\s+)?(name|country|city|email|phone|language|accent|timezone|profession|interests|projects|style)$/i);
       
     if (deleteFactMatch) {
       isProcessingCommand = false;
       const key = deleteFactMatch[1].toLowerCase().trim();
-      const ok = lukasMemory.deleteFact(key);
+      const identityKeys = ['name', 'country', 'city', 'email', 'phone', 'language'];
+      let ok = false;
+      if (identityKeys.includes(key)) {
+        if (lukasMemory.longTerm.profile[key]) {
+          lukasMemory.longTerm.profile[key] = null;
+          lukasMemory._saveLongTerm();
+          ok = true;
+        }
+      } else {
+        ok = lukasMemory.deleteFact(key);
+      }
+      
       if (ok) {
         handleAssistantResponse(`I've deleted your ${key} from your profile.`);
       } else {
@@ -5022,6 +5545,8 @@ async function processCommand(rawCommand, source) {
 
     // ── Direct profile query retrieval ──
     const nameQueries = ['what is my name', 'do you know my name', 'tell me my name'];
+    const emailQueries = ['what is my email', 'do you know my email', 'tell me my email'];
+    const phoneQueries = ['what is my phone number', 'what is my phone', 'do you know my phone number'];
     const countryQueries = ['what is my country', 'tell me my country', 'where am i from', 'which country am i from'];
     const cityQueries = ['what city do i live in', 'what is my city', 'which city do i live in', 'where do i live'];
     const langQueries = ['what language do i prefer', 'what is my preferred language', 'which language do i prefer'];
@@ -5034,7 +5559,7 @@ async function processCommand(rawCommand, source) {
     let queryPrompt = '';
     
     if (nameQueries.includes(cmd)) {
-      const name = lukasMemory.getFact('name');
+      const name = lukasMemory.longTerm.profile.name;
       if (name) {
         isProcessingCommand = false;
         handleAssistantResponse(`Your name is ${name}.`);
@@ -5043,8 +5568,28 @@ async function processCommand(rawCommand, source) {
       }
       targetQueryKey = 'name';
       queryPrompt = "I don't know your name yet. What would you like me to call you?";
+    } else if (emailQueries.includes(cmd)) {
+      const email = lukasMemory.longTerm.profile.email;
+      if (email) {
+        isProcessingCommand = false;
+        handleAssistantResponse(`Your email is ${email}.`);
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      targetQueryKey = 'email';
+      queryPrompt = "I don't know your email yet. What is your email address?";
+    } else if (phoneQueries.includes(cmd)) {
+      const phone = lukasMemory.longTerm.profile.phone;
+      if (phone) {
+        isProcessingCommand = false;
+        handleAssistantResponse(`Your phone number is ${phone}.`);
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      targetQueryKey = 'phone';
+      queryPrompt = "I don't know your phone number yet. What is your phone number?";
     } else if (countryQueries.includes(cmd)) {
-      const country = lukasMemory.getFact('country');
+      const country = lukasMemory.longTerm.profile.country;
       if (country) {
         isProcessingCommand = false;
         handleAssistantResponse(`You are from ${country}.`);
@@ -5054,7 +5599,7 @@ async function processCommand(rawCommand, source) {
       targetQueryKey = 'country';
       queryPrompt = "I don't know your country yet. Which country are you from?";
     } else if (cityQueries.includes(cmd)) {
-      const city = lukasMemory.getFact('city');
+      const city = lukasMemory.longTerm.profile.city;
       if (city) {
         isProcessingCommand = false;
         handleAssistantResponse(`You live in ${city}.`);
@@ -5064,7 +5609,7 @@ async function processCommand(rawCommand, source) {
       targetQueryKey = 'city';
       queryPrompt = "I don't know your city yet. Which city do you live in?";
     } else if (langQueries.includes(cmd)) {
-      const lang = lukasMemory.getFact('language') || lukasMemory.getPreference('speechLang');
+      const lang = lukasMemory.longTerm.profile.language || lukasMemory.getPreference('speechLang');
       if (lang) {
         isProcessingCommand = false;
         handleAssistantResponse(`Your preferred language is ${lang}.`);
@@ -5132,20 +5677,31 @@ async function processCommand(rawCommand, source) {
       { re: /\b(?:my profession is|i work as|i run a)\s+([a-z\s]+)$/i, key: 'profession' },
       { re: /\b(?:my interests are|i am interested in)\s+([a-z\s]+)$/i, key: 'interests' },
       { re: /\b(?:my projects are|i am working on)\s+([a-z\s]+)$/i, key: 'projects' },
-      { re: /\b(?:my communication style is|i prefer style|change my style to)\s+([a-z\s]+)$/i, key: 'style' }
+      { re: /\b(?:my communication style is|i prefer style|change my style to)\s+([a-z\s]+)$/i, key: 'style' },
+      { re: /\b(?:my email is|email is|change my email to)\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$/i, key: 'email' },
+      { re: /\b(?:my phone number is|my phone is|phone is|change my phone to)\s+(\+?[0-9\s-]{8,15})$/i, key: 'phone' }
     ];
+
+    const identityKeys = ['name', 'country', 'city', 'email', 'phone', 'language'];
 
     for (const { re, key } of updatePatterns) {
       const match = cmd.match(re);
       if (match) {
         const newValue = match[1].trim();
-        const oldValue = lukasMemory.getFact(key) || (key === 'language' ? lukasMemory.getPreference('speechLang') : (key === 'style' ? lukasMemory.getPreference('personalityMode') : null));
+        const isIdentity = identityKeys.includes(key);
+        const oldValue = isIdentity ? lukasMemory.longTerm.profile[key] : (lukasMemory.getFact(key) || (key === 'language' ? lukasMemory.getPreference('speechLang') : (key === 'style' ? lukasMemory.getPreference('personalityMode') : null)));
         
-        if (oldValue && oldValue.toLowerCase() !== newValue.toLowerCase()) {
+        // Always prompt for confirmation on identity keys, or when changing an existing value of other keys
+        if (isIdentity || (oldValue && oldValue.toLowerCase() !== newValue.toLowerCase())) {
           isProcessingCommand = false;
           pendingProfileUpdate = { key, value: newValue };
           isProfileUpdateConfirmationActive = true;
-          handleAssistantResponse(`I currently have your ${key} stored as ${oldValue}. Would you like me to update it to ${newValue}?`);
+          
+          if (oldValue) {
+            handleAssistantResponse(`I currently have your ${key} stored as "${oldValue}". Would you like me to update it to "${newValue}"? Please say yes or no.`);
+          } else {
+            handleAssistantResponse(`Would you like me to save your ${key} as "${newValue}" in your profile? Please say yes or no.`);
+          }
           keepConversationAlive(15000);
           return;
         }
@@ -5184,7 +5740,9 @@ async function processCommand(rawCommand, source) {
         lukasMemory.switchUser(voicePrintTrainingName);
         const userId = 'user_' + Date.now();
         lukasMemory.addFact('userId', userId);
-        lukasMemory.addFact('name', voicePrintTrainingName);
+        lukasMemory.longTerm.profile.name = voicePrintTrainingName;
+        lukasMemory.longTerm.profile.language = 'en-IN';
+        lukasMemory._saveLongTerm();
         lukasMemory.setPreference('name', voicePrintTrainingName);
         lukasMemory.setPreference('speechLang', 'en-IN');
         lukasMemory.setPreference('voiceAccent', 'indian_english');
@@ -5325,7 +5883,9 @@ async function processCommand(rawCommand, source) {
           lukasMemory.switchUser(tempName);
           const userId = 'user_' + Date.now();
           lukasMemory.addFact('userId', userId);
-          lukasMemory.addFact('name', tempName);
+          lukasMemory.longTerm.profile.name = tempName;
+          lukasMemory.longTerm.profile.language = tempLanguage;
+          lukasMemory._saveLongTerm();
           lukasMemory.setPreference('name', tempName);
           lukasMemory.setPreference('speechLang', tempLanguage);
           lukasMemory.setPreference('voiceAccent', tempAccent);
@@ -5408,7 +5968,7 @@ async function processCommand(rawCommand, source) {
           }
         }
 
-        if (bestScore >= 0.88) {
+        if (bestScore >= 0.95) {
           handleAssistantResponse(`You are ${bestMatch}.`);
         } else if (bestScore >= 0.70) {
           handleAssistantResponse("I cannot confidently identify you. Would you like to verify your identity?");
@@ -5836,18 +6396,71 @@ Please synthesize a single, cohesive, premium Jarvis-style response summary expl
 
 // ═══════════════════ INTENT SPECIFIC HANDLERS ═══════════════════
 
+async function parseMultiHomeCommand(rawCommand, apiKey, apiProvider) {
+  try {
+    const history = lukasMemory.getHistory(6);
+    const historyText = history.map(h => `${h.role === 'user' ? 'User' : 'LUKAS'}: ${h.content}`).join('\n');
+    
+    const systemPrompt = `You are LUKAS's smart home multi-command parser. 
+Decompose the user's natural language directive(s) into an array of individual, structured JSON actions.
+Analyze pronouns ("it", "them", "those", "here", "there") contextually using the conversation history and previous actions.
+
+Return ONLY a JSON array containing objects matching this schema:
+{
+  "category": "light|climate|security|media|routine|reminder|weather|time|diagnostics|unknown",
+  "action": "on|off|toggle|set|color|brightness|lock|unlock|increase|decrease|play|pause|stop|skip|morning|cinema|eco|lockdown|null",
+  "targetZone": "Living Room|Bedroom|Kitchen|Outdoor|All|null",
+  "targetDeviceName": "<exact name of the device or target, or the resolved name of the device if pronouns were used, or null>",
+  "isGlobal": true|false,
+  "value": "<numeric/color value, or null>",
+  "timeExpression": "<for reminders: time string like '5 minutes' or null>",
+  "reminderText": "<what to remind about or null>"
+}
+
+Provided Conversation History for resolving pronouns/context:
+${historyText}
+
+Output strictly the raw JSON array (e.g. [{"category": "light", ...}]) without any markdown formatting or backticks.`;
+
+    const result = await callLukasAI({
+      systemPrompt,
+      userMessage: rawCommand,
+      memory: null,
+      apiKey,
+      apiProvider,
+      temperature: 0.05,
+      maxTokens: 500,
+      jsonMode: true,
+      includeHistory: false,
+    });
+
+    if (!result) return [];
+    
+    let cleaned = result.trim();
+    if (cleaned.startsWith('```')) {
+      cleaned = cleaned.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+    }
+    
+    const parsed = JSON.parse(cleaned);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  } catch (e) {
+    console.warn('[Multi-Parser] Failed:', e.message);
+    return [];
+  }
+}
+
 async function handleHomeControlIntent(rawCommand, apiKey, apiProvider) {
-  diag.logToTerminal("[AI PARSER] Extracting home control entities...", "info");
-  const parsed = await parseHomeCommand(rawCommand, apiKey, apiProvider);
+  diag.logToTerminal("[AI PARSER] Extracting smart home directives...", "info");
+  const actions = await parseMultiHomeCommand(rawCommand, apiKey, apiProvider);
   
-  if (!parsed || parsed.category === 'unknown') {
-    diag.logToTerminal("[AI PARSER] Structured parse returned unknown. Falling back to local pattern matching.", "warn");
+  if (!actions || actions.length === 0 || (actions.length === 1 && actions[0].category === 'unknown')) {
+    diag.logToTerminal("[AI PARSER] Structured parse returned unknown/empty. Falling back to local pattern matching.", "warn");
     executeLocalHomeControlFallback(rawCommand);
     return;
   }
 
-  diag.logToTerminal(`[AI PARSER] Category: ${parsed.category} | Action: ${parsed.action} | Target: ${parsed.targetDeviceName || parsed.targetZone || 'Global'}`, "info");
-  executeParsedHomeControl(parsed);
+  diag.logToTerminal(`[AI PARSER] Decomposed command into ${actions.length} action(s).`, "info");
+  await multiTaskEngine.run(actions, apiKey, apiProvider);
 }
 
 async function handleResearchIntent(rawCommand, apiKey, apiProvider, source = 'user') {

@@ -2,6 +2,176 @@
 // Integrates HTML5 Web Speech API (SpeechRecognition & SpeechSynthesis)
 import LukasVoiceprintAnalyzer from './ai/voiceprint.js';
 
+class SpeechRecognitionManager {
+  constructor(controller) {
+    this.controller = controller;
+    this.state = 'STANDBY'; // IDLE, STANDBY, LISTENING, PROCESSING, SPEAKING
+    this.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    this.recognition = null;
+    this.init();
+  }
+
+  init() {
+    if (!this.SpeechRecognition) {
+      console.warn("Speech Recognition not supported in this browser.");
+      return;
+    }
+    this.recognition = new this.SpeechRecognition();
+    this.recognition.continuous = true;
+    this.recognition.interimResults = true;
+    this.recognition.lang = localStorage.getItem('lukas_speech_lang') || 'en-IN';
+
+    this.recognition.onstart = () => {
+      this.controller.isRecognitionActive = true;
+      this.controller.consecutiveErrors = 0;
+      this.controller.lastStartTime = Date.now();
+      console.log(`[SpeechRecognitionManager] Recognition started (State: ${this.state})`);
+      if (this.controller.onRecognitionStateChange) {
+        this.controller.onRecognitionStateChange(this.state.toLowerCase());
+      }
+    };
+
+    this.recognition.onend = () => {
+      this.controller.isRecognitionActive = false;
+      this.controller.isStopping = false;
+      console.log(`[SpeechRecognitionManager] Recognition ended (State: ${this.state})`);
+
+      // Recovery restart or standby restart logic
+      if (this.state === 'STANDBY' || this.state === 'LISTENING') {
+        const delay = this.controller.consecutiveErrors > 3 ? 2000 : 200;
+        setTimeout(() => {
+          if (this.state === 'STANDBY' || this.state === 'LISTENING') {
+            this.start();
+          }
+        }, delay);
+      } else {
+        if (this.controller.onRecognitionStateChange) {
+          this.controller.onRecognitionStateChange(this.state.toLowerCase());
+        }
+      }
+    };
+
+    this.recognition.onerror = (event) => {
+      console.error(`[SpeechRecognitionManager] Error: ${event.error}`);
+      this.controller.lastError = event.error;
+
+      if (event.error === 'not-allowed') {
+        if (this.controller.onMicPermissionBlocked) {
+          this.controller.onMicPermissionBlocked();
+        }
+        this.transitionTo('IDLE');
+        return;
+      }
+
+      if (event.error === 'no-speech') {
+        this.controller.consecutiveErrors = 0;
+        return;
+      }
+
+      if (event.error === 'aborted') {
+        this.controller.consecutiveErrors++;
+        return;
+      }
+
+      this.controller.consecutiveErrors++;
+    };
+
+    this.recognition.onresult = (event) => {
+      let fullTranscript = "";
+      for (let i = 0; i < event.results.length; i++) {
+        fullTranscript += event.results[i][0].transcript + " ";
+      }
+      fullTranscript = fullTranscript.trim();
+      const isFinal = event.results[event.resultIndex].isFinal;
+
+      this.controller.handleSpeechResult(fullTranscript, isFinal);
+    };
+  }
+
+  transitionTo(newState) {
+    if (this.state === newState) return;
+    const oldState = this.state;
+    this.state = newState;
+    console.log(`[SpeechRecognitionManager] Transition: ${oldState} -> ${newState}`);
+
+    if (newState === 'STANDBY') {
+      this.controller.isListeningForWakeWord = true;
+      this.controller.isCommandListeningActive = false;
+      this.controller.isLongConversation = false;
+      this.start();
+    } else if (newState === 'LISTENING') {
+      this.controller.isListeningForWakeWord = false;
+      this.controller.isCommandListeningActive = true;
+      this.start();
+    } else if (newState === 'PROCESSING') {
+      this.controller.isListeningForWakeWord = false;
+      this.controller.isCommandListeningActive = false;
+      this.stop();
+    } else if (newState === 'SPEAKING') {
+      this.controller.isListeningForWakeWord = false;
+      this.controller.isCommandListeningActive = false;
+      // Keep recognition running to allow speech interruption
+      this.start();
+    } else if (newState === 'IDLE') {
+      this.controller.isListeningForWakeWord = false;
+      this.controller.isCommandListeningActive = false;
+      this.controller.isLongConversation = false;
+      this.stop();
+    }
+
+    if (this.controller.onRecognitionStateChange) {
+      this.controller.onRecognitionStateChange(newState.toLowerCase());
+    }
+  }
+
+  start() {
+    if (!this.recognition) return;
+    if (this.controller.isRecognitionActive) return;
+    
+    // Prevent starting too fast
+    const timeSinceLastStart = Date.now() - (this.controller.lastStartTime || 0);
+    if (timeSinceLastStart < 600) {
+      setTimeout(() => this.start(), 600 - timeSinceLastStart);
+      return;
+    }
+
+    try {
+      this.recognition.start();
+      this.controller.isRecognitionActive = true;
+      this.controller.lastStartTime = Date.now();
+    } catch (e) {
+      console.warn("[SpeechRecognitionManager] Start error:", e.message);
+    }
+  }
+
+  stop() {
+    if (!this.recognition) return;
+    if (!this.controller.isRecognitionActive) return;
+    try {
+      this.recognition.stop();
+      this.controller.isRecognitionActive = false;
+      this.controller.isStopping = true;
+    } catch (e) {
+      console.warn("[SpeechRecognitionManager] Stop error:", e.message);
+    }
+  }
+
+  abort() {
+    if (!this.recognition) return;
+    try {
+      this.recognition.abort();
+      this.controller.isRecognitionActive = false;
+    } catch (e) {
+      console.warn("[SpeechRecognitionManager] Abort error:", e.message);
+    }
+  }
+
+  restart() {
+    this.abort();
+    setTimeout(() => this.start(), 150);
+  }
+}
+
 class LukasVoiceController {
   constructor() {
     this.biometrics = new LukasVoiceprintAnalyzer();
@@ -27,7 +197,6 @@ class LukasVoiceController {
     this.activeTimeout = null;
     this.currentSpeechEmotion = null;
 
-    this.isListening = false;
     this.isListeningForWakeWord = false;
     this.isLongConversation = false;
     this.speakingText = '';
@@ -88,6 +257,10 @@ class LukasVoiceController {
     
     this.initSpeechSynthesis();
     this.initSpeechRecognition();
+  }
+
+  get isListening() {
+    return this.recognitionManager ? this.recognitionManager.state === 'LISTENING' : false;
   }
 
   getVoiceForLanguage(langCode) {
@@ -168,400 +341,166 @@ class LukasVoiceController {
     }
   }
 
-  // Initialize Speech-to-Text Recognition
+  // Initialize Speech-to-Text Recognition via Manager
   initSpeechRecognition() {
-    if (!this.SpeechRecognition) {
-      console.warn("Web Speech Recognition API is not supported in this browser.");
-      return;
+    this.recognitionManager = new SpeechRecognitionManager(this);
+    this.recognition = this.recognitionManager.recognition;
+  }
+
+  handleSpeechResult(fullTranscript, isFinal) {
+    const state = this.recognitionManager.state;
+    const cmd = fullTranscript.toLowerCase().trim();
+
+    // ── INTERRUPTION CHECK ──
+    if (state === 'SPEAKING' || (this.synth && this.synth.speaking)) {
+      const userSpeech = fullTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+      
+      const stopWords = ['stop', 'cancel', 'shut up', 'quiet', 'stop talking', 'stop listening', 'stand down', 'go to sleep'];
+      const isStopCommand = stopWords.some(word => userSpeech === word || userSpeech.startsWith(word + ' '));
+      
+      if (isStopCommand) {
+        console.log(`[INTERRUPT] Stop command detected during speech: "${userSpeech}"`);
+        this.cancelSpeech();
+        this.speakingText = '';
+        if (this.onSpeechEnd) this.onSpeechEnd();
+        
+        this.recognitionManager.transitionTo('STANDBY');
+        
+        if (this.onCommandRecognized) {
+          this.onCommandRecognized('stop');
+        }
+        return;
+      }
+      
+      const isEcho = this.speakingText && (this.speakingText.includes(userSpeech) || userSpeech.includes(this.speakingText));
+      if (!isEcho && userSpeech.length > 2) {
+        console.log(`[INTERRUPT] User spoke during vocalization: "${userSpeech}"`);
+        this.cancelSpeech();
+        this.speakingText = '';
+        if (this.onSpeechEnd) this.onSpeechEnd();
+        
+        // INTERRUPTION FLOW: Cancel TTS -> wait 100ms -> release audio focus -> enable recognition -> listen
+        this.recognitionManager.abort();
+        setTimeout(() => {
+          this.recognitionManager.transitionTo('LISTENING');
+          if (this.onWakeWordDetected) this.onWakeWordDetected();
+        }, 100);
+        return;
+      }
+      return; // ignore echoes/noise during synthesis
     }
 
-    try {
-      this.recognition = new this.SpeechRecognition();
-      this.recognition.continuous = true;
-      this.recognition.interimResults = true; // Enabled interim results for fast interruption!
-      this.speechLang = localStorage.getItem('lukas_speech_lang') || 'en-IN';
-      this.recognition.lang = this.speechLang;
+    // Keep track of the current session's latest transcript
+    this.lastSessionTranscript = fullTranscript;
 
-      this.recognition.onstart = () => {
-        this.isRecognitionActive = true;
-        this.consecutiveErrors = 0; // Reset consecutive errors on successful start
-        this.isListening = this.isLongConversation || this.isCommandListeningActive || !this.isListeningForWakeWord;
-        if (this.onRecognitionStateChange) {
-          if (this.isListeningForWakeWord) {
-            this.onRecognitionStateChange('wakeword');
-          } else if (this.isListening || this.isCommandListeningActive || this.isLongConversation) {
-            this.onRecognitionStateChange('command');
-          } else {
-            this.onRecognitionStateChange('off');
-          }
-        }
-      };
-
-      this.recognition.onend = () => {
-        this.isRecognitionActive = false;
-        this.isStopping = false;
-        
-        // Prevent infinite restart-fail loops on mobile/Safari
-        if (this.consecutiveErrors >= 4) {
-          const isFatal = this.lastError === 'not-allowed' || this.lastError === 'service-not-allowed';
-          if (!isFatal && (this.isListeningForWakeWord || this.isCommandListeningActive || this.isLongConversation)) {
-            console.warn(`[voice.js] Encountered ${this.consecutiveErrors} consecutive errors (${this.lastError || 'unknown'}). Backing off for 6 seconds before retrying...`);
-            this.consecutiveErrors = 0; // reset counter
-            setTimeout(() => {
-              if (this.isListeningForWakeWord || this.isCommandListeningActive || this.isLongConversation) {
-                this.startRecognitionInternal();
-              }
-            }, 6000);
-            return;
-          }
-
-          console.warn("[voice.js] Halting recognition restarts due to fatal error or permission denial (lastError=" + this.lastError + ").");
-          this.isListeningForWakeWord = false;
-          this.isCommandListeningActive = false;
-          this.isLongConversation = false;
-          this.isListening = false;
-          this.pendingStart = false;
-          if (this.onRecognitionStateChange) {
-            this.onRecognitionStateChange('off', 'mic_suspended');
-          }
-          return;
-        }
-
-        // If we are transitioning to a new mode, let the transition handle the restart
-        if (this.isTransitioning) {
-          console.log("[voice.js] Recognition ended during transition — deferring to transition handler.");
-          return;
-        }
-
-        // Dynamically increase delay if we are hitting consecutive errors or aborts
-        const delay = this.consecutiveErrors > 3 ? 2500 : (this.consecutiveErrors > 1 ? 1000 : 200);
-        if (this.consecutiveErrors > 1) {
-          console.warn(`[voice.js] Backing off recognition restart delay to ${delay}ms due to consecutive errors (${this.consecutiveErrors}).`);
-        }
-        
-        // Handle pending state-machine start actions cleanly
-        if (this.pendingStart) {
-          this.pendingStart = false;
-          setTimeout(() => this.startRecognitionInternal(), delay);
-        } else if (this.isCommandListeningActive) {
-          // Save the current session's last transcript before restarting
-          if (this.lastSessionTranscript) {
-            this.accumulatedSpeechText = (this.accumulatedSpeechText + " " + this.lastSessionTranscript).trim();
-            this.lastSessionTranscript = "";
-          }
-          setTimeout(() => this.startRecognitionInternal(), delay);
-        } else if (this.isListeningForWakeWord || this.isLongConversation) {
-          setTimeout(() => this.startRecognitionInternal(), delay);
-        } else {
-          this.isListening = false;
-          if (this.onRecognitionStateChange) {
-            this.onRecognitionStateChange('off');
-          }
-        }
-      };
-
-      this.recognition.onerror = (event) => {
-        console.error("Speech recognition error:", event.error);
-        this.lastError = event.error;
-        
-        if (event.error === 'not-allowed') {
-          if (this.onMicPermissionBlocked) {
-            this.onMicPermissionBlocked();
-          }
-        }
-        
-        // Ignore noise/no-speech errors to avoid breaking loops
-        if (event.error === 'no-speech' && (this.isListeningForWakeWord || this.isLongConversation || this.isCommandListeningActive)) {
-          this.consecutiveErrors = 0; // Reset on normal silence
-          return; 
-        }
-
-        if (event.error === 'aborted') {
-          console.warn("Speech recognition aborted. Will attempt restart if active.");
-          this.consecutiveErrors++;
-          return;
-        }
-
-        // Differentiate between fatal errors (permission blocked, unsupported, etc.) and transient errors (network blips)
-        const fatalErrors = ['not-allowed', 'service-not-allowed', 'language-not-supported'];
-        const isFatal = fatalErrors.includes(event.error);
-
-        if (isFatal) {
-          console.error(`[voice.js] Fatal speech recognition error: "${event.error}". Halting speech listener.`);
-          this.isCommandListeningActive = false;
-          this.isListening = false;
-          this.isListeningForWakeWord = false;
-          this.isLongConversation = false;
-          this.pendingStart = false;
-          this.consecutiveErrors++;
-          
-          if (this.onRecognitionStateChange) {
-            this.onRecognitionStateChange('off', event.error);
-          }
-        } else {
-          // Non-fatal, transient errors (like network/audio-capture glitches).
-          // We increment consecutiveErrors, but DO NOT shut down the passive listener flags.
-          // The onend event callback will handle restarting with a graceful backoff.
-          console.warn(`[voice.js] Transient speech recognition error: "${event.error}". Recovery sequence engaged.`);
-          this.consecutiveErrors++;
-        }
-      };
-
-      this.recognition.onresult = (event) => {
-        let fullTranscript = "";
-        for (let i = 0; i < event.results.length; i++) {
-          fullTranscript += event.results[i][0].transcript + " ";
-        }
-        fullTranscript = fullTranscript.trim();
-        
-        const isFinal = event.results[event.resultIndex].isFinal;
-        
-        // Interrupt check while speaking
-        if (this.synth && this.synth.speaking) {
-          const userSpeech = fullTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-          
-          // Check if userSpeech is a stop command
-          const stopWords = ['stop', 'cancel', 'shut up', 'quiet', 'stop talking', 'stop listening', 'stand down', 'go to sleep'];
-          const isStopCommand = stopWords.some(word => userSpeech === word || userSpeech.startsWith(word + ' '));
-          
-          if (isStopCommand) {
-            console.log(`[INTERRUPT] Stop command detected during speech: "${userSpeech}"`);
-            this.cancelSpeech();
-            this.speakingText = '';
-            
-            // Trigger speech end animations
-            if (this.onSpeechEnd) this.onSpeechEnd();
-            
-            // Stop active conversation and return to passive wake word listener
-            this.isLongConversation = false;
-            this.isCommandListeningActive = false;
-            this.isListeningForWakeWord = true;
-            this.accumulatedSpeechText = "";
-            this.lastSessionTranscript = "";
-            
-            // Stop recognition and restart in wake word mode
-            try { this.recognition.stop(); } catch(e) {}
-            setTimeout(() => {
-              this.startWakeWordListener();
-            }, 100);
-            
-            // Forward deactivation command to orchestrator/processCommand
-            if (this.onCommandRecognized) {
-              this.onCommandRecognized('stop');
-            }
-            return;
-          }
-          
-          const isEcho = this.speakingText && (this.speakingText.includes(userSpeech) || userSpeech.includes(this.speakingText));
-          if (!isEcho && userSpeech.length > 2) {
-            console.log(`[INTERRUPT] User spoke during vocalization: "${userSpeech}"`);
-            this.synth.cancel();
-            this.speakingText = '';
-            
-            // Trigger speech end animations
-            if (this.onSpeechEnd) this.onSpeechEnd();
-            
-            // Transition to active command listening instead of wake word
-            this.isListeningForWakeWord = false;
-            this.isCommandListeningActive = true;
-            this.accumulatedSpeechText = "";
-            this.lastSessionTranscript = "";
-            
-            // Stop and restart recognition to reset state
-            try { this.recognition.stop(); } catch(e) {}
-            setTimeout(() => {
-              try { this.recognition.start(); } catch(e) {}
-              if (this.onWakeWordDetected) this.onWakeWordDetected(); // Wake up LUKAS UI!
-            }, 100);
-            return;
-          }
-          return; // Ignore other sounds/echoes while LUKAS is speaking
-        }
-
-        // Keep track of the current session's latest transcript
-        this.lastSessionTranscript = fullTranscript;
-
-        // If we are accumulating transcripts across restarts
-        let displayTranscript = fullTranscript;
-        if (this.isCommandListeningActive && this.accumulatedSpeechText) {
-          displayTranscript = (this.accumulatedSpeechText + " " + fullTranscript).trim();
-        }
-
-        // Trigger real-time interim speech detection callback
-        if (this.onSpeechDetected) {
-          let textToDisplay = displayTranscript;
-          if (this.isListeningForWakeWord) {
-            const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-            const wakeWords = this.wakeWords;
-            
-            let matchedWakeWord = null;
-            let wakeWordIndex = -1;
-            for (const w of wakeWords) {
-              const index = lowerText.indexOf(w);
-              if (index !== -1) {
-                const charBefore = index > 0 ? lowerText[index - 1] : ' ';
-                const charAfter = index + w.length < lowerText.length ? lowerText[index + w.length] : ' ';
-                const isWordIsolated = /[^a-z]/.test(charBefore) && /[^a-z]/.test(charAfter);
-                if (isWordIsolated) {
-                  matchedWakeWord = w;
-                  wakeWordIndex = index;
-                  break;
-                }
-              }
-            }
-
-            if (matchedWakeWord) {
-              const originalLower = displayTranscript.toLowerCase();
-              const originalWakeIndex = originalLower.indexOf(matchedWakeWord);
-              if (originalWakeIndex !== -1) {
-                textToDisplay = displayTranscript.substring(originalWakeIndex + matchedWakeWord.length).trim();
-              }
-            } else {
-              textToDisplay = "";
-            }
-          }
-          if (textToDisplay) {
-            this.onSpeechDetected(textToDisplay);
-          }
-        }
-
-        // Continuous wake word checking on every speech update (both interim and final)
-        if (this.isListeningForWakeWord && !this.isWakeLocked) {
-          const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-          const wakeWords = this.wakeWords;
-          
-          let matchedWakeWord = null;
-          let wakeWordIndex = -1;
-          for (const w of wakeWords) {
-            const index = lowerText.indexOf(w);
-            if (index !== -1) {
-              const charBefore = index > 0 ? lowerText[index - 1] : ' ';
-              const charAfter = index + w.length < lowerText.length ? lowerText[index + w.length] : ' ';
-              const isWordIsolated = /[^a-z]/.test(charBefore) && /[^a-z]/.test(charAfter);
-              if (isWordIsolated) {
-                matchedWakeWord = w;
-                wakeWordIndex = index;
-                break;
-              }
-            }
-          }
-          
-          if (matchedWakeWord) {
-            const commandAfterWakeWord = lowerText.substring(wakeWordIndex + matchedWakeWord.length).trim();
-            const isJustWakeWord = commandAfterWakeWord.length === 0;
-            
-            if (isJustWakeWord) {
-              // User might have paused. Schedule greeting in 600ms.
-              if (this.wakeWordTimeout) clearTimeout(this.wakeWordTimeout);
-              this.wakeWordTimeout = setTimeout(() => {
-                console.log("Wake word detected (paused)!");
-                // ⚡ Latency Tracker: mark wake detection time
-                this.latency.reset();
-                this.latency.wakeDetectedAt = Date.now();
-                // ⚡ Pre-warm hook: start memory retrieval BEFORE user finishes speaking
-                if (this.onPreWarm) {
-                  this.onPreWarm();
-                }
-                this.stopWakeWordListener();
-                if (this.onWakeWordDetected) {
-                  this.onWakeWordDetected();
-                }
-              }, 600);
-            } else {
-              // User kept speaking (inline command). Clear any pending greeting.
-              if (this.wakeWordTimeout) {
-                clearTimeout(this.wakeWordTimeout);
-                this.wakeWordTimeout = null;
-              }
-            }
-            
-            // Only return early if this is an interim result (not final).
-            // If it is final, we want to let it fall through to the isFinal block so the inline command gets processed!
-            if (!isFinal) {
-              return;
-            }
-          } else if (lowerText === 'stop' || lowerText === 'stop listening' || lowerText === 'go to sleep' || lowerText === 'stand down' || lowerText === 'deactivate voice' || lowerText === 'mute microphone' || lowerText.startsWith('stop ')) {
-            console.log("Stop command detected during passive listening.");
-            this.stopWakeWordListener();
-            if (this.onCommandRecognized) {
-              this.onCommandRecognized(displayTranscript);
-            }
-            return;
-          }
-        }
-
-        if (isFinal) {
-          console.log(`Speech recognized (final): "${displayTranscript}"`);
-          if (this.isListeningForWakeWord && !this.isWakeLocked) {
-            // Wake word listener is active, but we got a finalized inline command containing the wake word
-            const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-            const wakeWords = this.wakeWords;
-            
-            let matchedWakeWord = null;
-            let wakeWordIndex = -1;
-            for (const w of wakeWords) {
-              const index = lowerText.indexOf(w);
-              if (index !== -1) {
-                const charBefore = index > 0 ? lowerText[index - 1] : ' ';
-                const charAfter = index + w.length < lowerText.length ? lowerText[index + w.length] : ' ';
-                const isWordIsolated = /[^a-z]/.test(charBefore) && /[^a-z]/.test(charAfter);
-                if (isWordIsolated) {
-                  matchedWakeWord = w;
-                  wakeWordIndex = index;
-                  break;
-                }
-              }
-            }
-            
-            if (matchedWakeWord) {
-              console.log("Inline command finalized!");
-              this.stopWakeWordListener();
-              
-              const originalLower = displayTranscript.toLowerCase();
-              const originalWakeIndex = originalLower.indexOf(matchedWakeWord);
-              let command = displayTranscript;
-              if (originalWakeIndex !== -1) {
-                command = displayTranscript.substring(originalWakeIndex + matchedWakeWord.length).trim();
-              }
-              // Clean leading punctuation and spaces robustly
-              command = command.replace(/^[^a-zA-Z0-9]+/, '').trim();
-              
-              if (command.length === 0) {
-                // Just the wake word was finalized. Trigger wake word detected immediately!
-                if (this.wakeWordTimeout) {
-                  clearTimeout(this.wakeWordTimeout);
-                  this.wakeWordTimeout = null;
-                }
-                // ⚡ Latency Tracker: mark wake detection time
-                this.latency.reset();
-                this.latency.wakeDetectedAt = Date.now();
-                // ⚡ Pre-warm hook
-                if (this.onPreWarm) this.onPreWarm();
-                if (this.onWakeWordDetected) {
-                  this.onWakeWordDetected();
-                }
-              } else {
-                // ⚡ Latency Tracker: inline command (wake word + command in one)
-                this.latency.reset();
-                this.latency.wakeDetectedAt = Date.now();
-                this.latency.sttCompleteAt = Date.now(); // already final
-                if (this.onPreWarm) this.onPreWarm();
-                if (this.onCommandRecognized) {
-                  this.onCommandRecognized(command);
-                }
-              }
-              return;
-            }
-          } else {
-            if (this.onCommandRecognized) {
-              this.onCommandRecognized(displayTranscript);
-            }
-          }
-        }
-      };
-    } catch (e) {
-      console.error("Failed to initialize speech recognition:", e);
+    let displayTranscript = fullTranscript;
+    if (state === 'LISTENING' && this.accumulatedSpeechText) {
+      displayTranscript = (this.accumulatedSpeechText + " " + fullTranscript).trim();
     }
+
+    // Trigger real-time interim speech detection callback
+    if (this.onSpeechDetected) {
+      let textToDisplay = displayTranscript;
+      if (state === 'STANDBY') {
+        const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+        let matchedWakeWord = this._detectWakeWord(lowerText);
+        if (matchedWakeWord) {
+          const originalLower = displayTranscript.toLowerCase();
+          const originalWakeIndex = originalLower.indexOf(matchedWakeWord);
+          if (originalWakeIndex !== -1) {
+            textToDisplay = displayTranscript.substring(originalWakeIndex + matchedWakeWord.length).trim();
+          }
+        } else {
+          textToDisplay = "";
+        }
+      }
+      if (textToDisplay) {
+        this.onSpeechDetected(textToDisplay);
+      }
+    }
+
+    // ── STANDBY STATE: WAKE WORD DETECTION ──
+    if (state === 'STANDBY' && !this.isWakeLocked) {
+      const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+      let matchedWakeWord = this._detectWakeWord(lowerText);
+      
+      if (matchedWakeWord) {
+        const wakeWordIndex = lowerText.indexOf(matchedWakeWord);
+        const commandAfterWakeWord = lowerText.substring(wakeWordIndex + matchedWakeWord.length).trim();
+        const isJustWakeWord = commandAfterWakeWord.length === 0;
+
+        console.log(`Wake word matched: "${matchedWakeWord}"`);
+        this.latency.reset();
+        this.latency.wakeDetectedAt = Date.now();
+        if (this.onPreWarm) this.onPreWarm();
+
+        // SINGLE ATTEMPT WAKE WORD FLOW:
+        // Wake Word Detected -> Lock Wake Engine -> Stop Existing Session -> Wait 100ms -> Start Listening Mode
+        this.isWakeLocked = true;
+        setTimeout(() => { this.isWakeLocked = false; }, 2000);
+
+        this.recognitionManager.abort();
+        
+        setTimeout(() => {
+          this.recognitionManager.transitionTo('LISTENING');
+          if (this.onWakeWordDetected) this.onWakeWordDetected();
+
+          if (!isJustWakeWord) {
+            // It was an inline command!
+            const originalLower = displayTranscript.toLowerCase();
+            const originalWakeIndex = originalLower.indexOf(matchedWakeWord);
+            let command = displayTranscript.substring(originalWakeIndex + matchedWakeWord.length).trim();
+            command = command.replace(/^[^a-zA-Z0-9]+/, '').trim();
+            
+            if (isFinal) {
+              this.recognitionManager.transitionTo('PROCESSING');
+              this.latency.sttCompleteAt = Date.now();
+              if (this.onCommandRecognized) {
+                this.onCommandRecognized(command);
+              }
+            } else {
+              this.accumulatedSpeechText = command;
+            }
+          }
+        }, 100);
+        return;
+      } else if (lowerText === 'stop' || lowerText === 'stop listening' || lowerText === 'go to sleep' || lowerText === 'stand down' || lowerText === 'deactivate voice' || lowerText === 'mute microphone') {
+        console.log("Stop command detected during standby.");
+        this.recognitionManager.transitionTo('IDLE');
+        if (this.onCommandRecognized) {
+          this.onCommandRecognized(displayTranscript);
+        }
+        return;
+      }
+    }
+
+    // ── LISTENING STATE: FINAL COMMAND CAPTURING ──
+    if (state === 'LISTENING') {
+      if (isFinal) {
+        console.log(`Speech recognized (final command): "${displayTranscript}"`);
+        this.recognitionManager.transitionTo('PROCESSING');
+        this.accumulatedSpeechText = "";
+        this.lastSessionTranscript = "";
+        if (this.onCommandRecognized) {
+          this.onCommandRecognized(displayTranscript);
+        }
+      }
+    }
+  }
+
+  _detectWakeWord(text) {
+    for (const w of this.wakeWords) {
+      const index = text.indexOf(w);
+      if (index !== -1) {
+        const charBefore = index > 0 ? text[index - 1] : ' ';
+        const charAfter = index + w.length < text.length ? text[index + w.length] : ' ';
+        const isWordIsolated = /[^a-z]/.test(charBefore) && /[^a-z]/.test(charAfter);
+        if (isWordIsolated) {
+          return w;
+        }
+      }
+    }
+    return null;
   }
 
   cancelSpeech() {
@@ -892,16 +831,8 @@ class LukasVoiceController {
 
     this.speakingText = cleanedText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
 
-    if (this.recognition) {
-      try {
-        if (!this.isRecognitionActive) {
-          this.recognition.start();
-          this.isRecognitionActive = true;
-          this.lastStartTime = Date.now();
-        }
-      } catch(e) {
-        console.warn("[voice.js] Could not start recognition on speech start:", e.message);
-      }
+    if (this.recognitionManager) {
+      this.recognitionManager.transitionTo('SPEAKING');
     }
 
     utterance.onend = () => {
@@ -984,17 +915,13 @@ class LukasVoiceController {
 
   // Toggle listening recognition process
   toggleListening() {
-    if (!this.recognition) {
+    if (!this.recognitionManager) {
       return false;
     }
 
     if (this.isListening) {
       this.stopListeningForCommand();
       return false;
-    }
-
-    if (this.isListeningForWakeWord) {
-      this.isListeningForWakeWord = false;
     }
 
     this.cancelSpeech();
@@ -1015,13 +942,13 @@ class LukasVoiceController {
   setLanguage(lang) {
     this.speechLang = lang;
     localStorage.setItem('lukas_speech_lang', lang);
-    if (this.recognition) {
-      this.recognition.lang = lang;
+    if (this.recognitionManager) {
+      if (this.recognitionManager.recognition) {
+        this.recognitionManager.recognition.lang = lang;
+      }
       if (this.isRecognitionActive) {
         console.log(`[voice.js] Speech recognition language changed to ${lang}. Restarting recognition engine...`);
-        try {
-          this.recognition.stop();
-        } catch(e) {}
+        this.recognitionManager.restart();
       }
     }
     if (this.synth) {
@@ -1060,41 +987,16 @@ class LukasVoiceController {
   }
 
   startListeningForCommand() {
-    this.isLongConversation = false;
-    this.isListeningForWakeWord = false;
-    this.isCommandListeningActive = true;
-    this.accumulatedSpeechText = "";
-    this.lastSessionTranscript = "";
-    
     this.warmUpMic(); // Keep hardware mic warm
-    if (this.dummyStream) {
-      this.biometrics.startAnalysis(this.dummyStream);
-    }
-    
-    if (this.isRecognitionActive) {
-      this.isTransitioning = false;
-      if (this.onRecognitionStateChange) {
-        this.onRecognitionStateChange('command');
-      }
-      return;
-    }
-    
-    this.isTransitioning = true;
-    this.cancelSpeech();
-    
-    if (this.isStopping) {
-      this.pendingStart = true;
-    } else {
-      this.startRecognitionInternal();
+    if (this.recognitionManager) {
+      this.recognitionManager.transitionTo('LISTENING');
     }
   }
 
   stopListeningForCommand() {
-    this.isLongConversation = false;
-    this.isListeningForWakeWord = false;
-    this.isCommandListeningActive = false;
-    this.stopRecognitionInternal();
-    
+    if (this.recognitionManager) {
+      this.recognitionManager.transitionTo('STANDBY');
+    }
     if (this.biometrics) {
       const voiceprint = this.biometrics.stopAnalysis();
       if (voiceprint) {
@@ -1110,27 +1012,13 @@ class LukasVoiceController {
     this.isWakeLocked = true;
     setTimeout(() => { this.isWakeLocked = false; }, 2000);
 
-    // Stop current recognition
-    this.stopRecognitionInternal();
-    
-    // Transition flags to command mode
-    this.isListeningForWakeWord = false;
-    this.isCommandListeningActive = true;
-    this.isLongConversation = false;
     this.accumulatedSpeechText = "";
     this.lastSessionTranscript = "";
 
-    // Clear and abort the SpeechRecognition object to clean system audio state
-    if (this.recognition) {
-      try {
-        this.recognition.abort();
-      } catch (e) {}
+    if (this.recognitionManager) {
+      this.recognitionManager.restart();
+      this.recognitionManager.transitionTo('LISTENING');
     }
-    
-    // Restart recognition immediately for command input
-    setTimeout(() => {
-      this.startRecognitionInternal();
-    }, 100);
   }
 }
 

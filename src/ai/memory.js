@@ -97,6 +97,16 @@ class LukasMemory {
       try { return JSON.parse(localStorage.getItem(prefix + key) || 'null') || fallback; }
       catch { return fallback; }
     };
+    const profilePrefix = `lukas_user_${this.currentUsername.toLowerCase()}_profile`;
+    let profile = { name: null, email: null, phone: null, city: null, country: null, language: null };
+    try {
+      const stored = localStorage.getItem(profilePrefix);
+      if (stored) {
+        profile = JSON.parse(stored);
+      }
+    } catch (e) {
+      console.warn('[LUKAS Memory] Failed to load user profile:', e);
+    }
     return {
       preferences: safe('preferences', {}),
       facts: safe('facts', {}),
@@ -104,6 +114,7 @@ class LukasMemory {
       patterns: safe('patterns', []),
       interactionLog: safe('interactions', []),
       sessionCount: safe('sessions', 0) + 1,
+      profile: profile
     };
   }
 
@@ -115,6 +126,9 @@ class LukasMemory {
       localStorage.setItem(prefix + 'projects', JSON.stringify(this.longTerm.projects));
       localStorage.setItem(prefix + 'patterns', JSON.stringify(this.longTerm.patterns));
       localStorage.setItem(prefix + 'sessions', JSON.stringify(this.longTerm.sessionCount));
+      
+      const profilePrefix = `lukas_user_${this.currentUsername.toLowerCase()}_profile`;
+      localStorage.setItem(profilePrefix, JSON.stringify(this.longTerm.profile || {}));
       
       const enabled = this.getPreference('syncEnabled', 'false') === 'true';
       const phrase = this.getPreference('syncPassphrase', '');
@@ -348,15 +362,16 @@ class LukasMemory {
     const facts = this.longTerm.facts;
     const projects = Object.values(this.longTerm.projects);
     const topics = [...this.shortTerm.contextTags].slice(-5);
+    const profile = this.longTerm.profile || {};
 
     const lines = [];
 
     // [WORKING MEMORY]
     lines.push('### [WORKING MEMORY]');
-    const name = this.getFact('name') || prefs.name || null;
+    const name = profile.name || null;
     if (name) lines.push(`User's name: ${name}`);
-    if (this.getFact('city') || this.getFact('location') || prefs.location) {
-      lines.push(`User location: ${this.getFact('city') || this.getFact('location') || prefs.location}`);
+    if (profile.city || profile.country) {
+      lines.push(`User location: ${[profile.city, profile.country].filter(Boolean).join(', ')}`);
     }
     if (this.shortTerm.currentProject) lines.push(`Current Project: ${this.shortTerm.currentProject}`);
     if (this.shortTerm.currentGoal) lines.push(`Current Goal: ${this.shortTerm.currentGoal}`);
@@ -367,15 +382,18 @@ class LukasMemory {
 
     // [IDENTITY PROFILE]
     lines.push('\n### [IDENTITY PROFILE]');
-    lines.push(`Name: ${this.getFact('name') || 'Unknown'}`);
-    lines.push(`Country: ${this.getFact('country') || 'Unknown'}`);
-    lines.push(`City: ${this.getFact('city') || 'Unknown'}`);
+    lines.push(`Name: ${profile.name || 'Unknown'}`);
+    lines.push(`Country: ${profile.country || 'Unknown'}`);
+    lines.push(`City: ${profile.city || 'Unknown'}`);
+    lines.push(`Email: ${profile.email || 'Unknown'}`);
+    lines.push(`Phone: ${profile.phone || 'Unknown'}`);
+    lines.push(`Language: ${profile.language || 'Unknown'}`);
     lines.push(`Profession: ${this.getFact('profession') || 'Unknown'}`);
     lines.push(`Interests: ${this.getFact('interests') || 'Unknown'}`);
 
     // [PREFERENCES PROFILE]
     lines.push('\n### [PREFERENCES PROFILE]');
-    lines.push(`Preferred Language: ${this.getFact('language') || prefs.speechLang || 'en-IN'}`);
+    lines.push(`Preferred Language: ${profile.language || prefs.speechLang || 'en-IN'}`);
     lines.push(`Preferred Accent: ${this.getFact('accent') || prefs.voiceAccent || 'indian_english'}`);
     lines.push(`Communication Style: ${this.getFact('style') || prefs.personalityMode || 'casual'}`);
     lines.push(`Time Zone: ${this.getFact('timezone') || 'Asia/Kolkata'}`);
@@ -401,7 +419,7 @@ class LukasMemory {
     const structuredKeys = [
       'name', 'country', 'city', 'location', 'language', 'accent', 'timezone',
       'profession', 'interests', 'projects', 'style', 'businesses', 'ai_projects',
-      'websites', 'personal_goals', 'business_goals', 'userId'
+      'websites', 'personal_goals', 'business_goals', 'userId', 'email', 'phone'
     ];
     const otherFactKeys = Object.keys(facts).filter(k => !structuredKeys.includes(k));
     if (otherFactKeys.length > 0) {
@@ -420,11 +438,6 @@ class LukasMemory {
    */
   extractAndStoreFacts(userMessage) {
     const patterns = [
-      { re: /\bmy name is ([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)/i,    key: 'name' },
-      { re: /\bcall me ([A-Z][a-z]+)/i,                          key: 'name' },
-      { re: /\bi(?:'m| am) ([A-Z][a-z]+)/i,                     key: 'name', pref: false },
-      { re: /\bi live in ([A-Za-z\s,]+?)(?:\.|$)/i,             key: 'location' },
-      { re: /\bi(?:'m| am) from ([A-Za-z\s,]+?)(?:\.|$)/i,     key: 'location' },
       { re: /\bi prefer (\w+) responses/i,                       key: 'responseStyle', pref: true },
       { re: /\bi(?:'m| am) working on ([^.?!]+)/i,              key: 'currentProject' },
       { re: /\bmy (?:favorite|favourite) ([^.?!]+?) is ([^.?!]+)/i, keyFn: m => m[1], valFn: m => m[2] },
@@ -566,15 +579,16 @@ class LukasMemory {
   getWorkingMemorySummary() {
     const prefs = this.longTerm.preferences;
     const facts = this.longTerm.facts;
+    const profile = this.longTerm.profile || {};
     return {
-      userName: prefs.name || facts.name?.value || 'Commander',
+      userName: profile.name || prefs.name || facts.name?.value || 'Commander',
       currentProject: this.shortTerm.currentProject || null,
       currentGoal: this.shortTerm.currentGoal || null,
       contextTags: [...this.shortTerm.contextTags].slice(-6),
       sessionCount: this.longTerm.sessionCount,
       messageCount: this.shortTerm.messages.length,
       dominantUseCase: prefs.dominantUseCase || null,
-      location: prefs.location || facts.location?.value || null,
+      location: [profile.city, profile.country].filter(Boolean).join(', ') || prefs.location || facts.location?.value || null,
     };
   }
 
@@ -601,14 +615,25 @@ class LukasMemory {
   getLongTermFactsSummary() {
     const prefs = this.longTerm.preferences;
     const facts = this.longTerm.facts;
+    const profile = this.longTerm.profile || {};
     const items = [];
+    
+    if (profile.name) items.push({ key: 'Name', value: profile.name });
+    if (profile.email) items.push({ key: 'Email', value: profile.email });
+    if (profile.phone) items.push({ key: 'Phone', value: profile.phone });
+    if (profile.city || profile.country) {
+      items.push({ key: 'Location', value: [profile.city, profile.country].filter(Boolean).join(', ') });
+    }
+    if (profile.language) items.push({ key: 'Language', value: profile.language });
+
     const keyLabels = { name: 'Name', location: 'Location', responseStyle: 'Style', dominantUseCase: 'Top Use' };
     for (const [k, v] of Object.entries(facts)) {
       if (items.length >= 8) break;
+      if (['name', 'email', 'phone', 'city', 'country', 'language', 'location'].includes(k)) continue;
       items.push({ key: keyLabels[k] || k, value: v.value });
     }
-    if (prefs.responseStyle && !facts.responseStyle) items.push({ key: 'Response Style', value: prefs.responseStyle });
-    if (prefs.dominantUseCase) items.push({ key: 'Top Activity', value: prefs.dominantUseCase });
+    if (prefs.responseStyle && !facts.responseStyle && items.length < 8) items.push({ key: 'Response Style', value: prefs.responseStyle });
+    if (prefs.dominantUseCase && items.length < 8) items.push({ key: 'Top Activity', value: prefs.dominantUseCase });
     return items;
   }
 
@@ -701,10 +726,11 @@ class LukasMemory {
 
   clearAllMemory() {
     this.clearSession();
-    this.longTerm = { preferences: {}, facts: {}, projects: {}, patterns: [], interactionLog: [], sessionCount: 0 };
+    this.longTerm = { preferences: {}, facts: {}, projects: {}, patterns: [], interactionLog: [], sessionCount: 0, profile: { name: null, email: null, phone: null, city: null, country: null, language: null } };
     const prefix = `lukas_user_${this.currentUsername.toLowerCase()}_`;
     ['preferences','facts','projects','patterns','sessions','interactions']
       .forEach(k => localStorage.removeItem(prefix + k));
+    localStorage.removeItem(`lukas_user_${this.currentUsername.toLowerCase()}_profile`);
     console.log(`[LUKAS Memory] All memory cleared for user: ${this.currentUsername}.`);
   }
 }
