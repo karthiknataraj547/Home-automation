@@ -885,6 +885,201 @@ class LukasMultiTaskEngine {
     this.bubbleElement = null;
     this.statusMap = [];
     this.detailsMap = [];
+    this.transactionDevice = null;
+    
+    // Snapshot state
+    this.registrySnapshot = null;
+    this.climateSnapshot = null;
+    this.devicesSnapshot = null;
+    
+    // Expected state maps
+    this.expectedDeviceStates = {};
+    this.expectedClimateStates = {};
+    
+    // Modification tracking
+    this.modifiedDevicesList = [];
+    this.modifiedClimate = null;
+  }
+
+  _setDeviceStateAndTrack(devId, updates) {
+    const currentDev = home.dynamicDevices.find(d => d.id === devId);
+    if (!currentDev) return;
+    
+    if (!this.expectedDeviceStates[devId]) {
+      this.expectedDeviceStates[devId] = {};
+    }
+    
+    for (const [k, v] of Object.entries(updates)) {
+      this.expectedDeviceStates[devId][k] = v;
+    }
+    
+    if (!this.modifiedDevicesList.some(d => d.id === devId)) {
+      this.modifiedDevicesList.push({
+        id: devId,
+        name: currentDev.name,
+        category: currentDev.category,
+        originalState: { ...currentDev }
+      });
+    }
+
+    home.setDeviceState(devId, updates);
+  }
+
+  _setTargetTemperatureAndTrack(val) {
+    this.expectedClimateStates['targetTemp'] = val;
+    if (!this.modifiedClimate) {
+      this.modifiedClimate = {
+        originalState: { ...home.state.climate }
+      };
+    }
+    home.setTargetTemperature(val);
+  }
+
+  _setClimateModeAndTrack(mode) {
+    this.expectedClimateStates['mode'] = mode;
+    if (!this.modifiedClimate) {
+      this.modifiedClimate = {
+        originalState: { ...home.state.climate }
+      };
+    }
+    home.setClimateMode(mode);
+  }
+
+  _rollback() {
+    console.warn("[TRANSACTION] Rollback triggered!");
+    diag.logToTerminal("[TRANSACTION] ❌ Validation failure. Rolling back state...", "warn");
+    
+    if (this.registrySnapshot) {
+      home.dynamicDevices = JSON.parse(JSON.stringify(this.registrySnapshot));
+      home.saveDynamicDevices();
+    }
+    if (this.climateSnapshot) {
+      Object.assign(home.state.climate, this.climateSnapshot);
+    }
+    if (this.devicesSnapshot) {
+      Object.assign(home.state.devices, this.devicesSnapshot);
+    }
+    
+    if (typeof renderDynamicDevices === 'function') {
+      renderDynamicDevices();
+    }
+    if (typeof updateClimateWidget === 'function') {
+      updateClimateWidget();
+    }
+  }
+
+  _verifyStates() {
+    let passed = true;
+    const mismatchDetails = [];
+
+    for (const [devId, expectedProps] of Object.entries(this.expectedDeviceStates)) {
+      const dev = home.dynamicDevices.find(d => d.id === devId);
+      if (!dev) {
+        passed = false;
+        mismatchDetails.push(`Device ${devId} not found in registry.`);
+        continue;
+      }
+      for (const [prop, val] of Object.entries(expectedProps)) {
+        if (dev[prop] !== val) {
+          passed = false;
+          mismatchDetails.push(`Device "${dev.name}" ${prop} mismatch: expected ${val}, got ${dev[prop]}`);
+        }
+      }
+    }
+
+    for (const [prop, val] of Object.entries(this.expectedClimateStates)) {
+      if (home.state.climate[prop] !== val) {
+        passed = false;
+        mismatchDetails.push(`Climate ${prop} mismatch: expected ${val}, got ${home.state.climate[prop]}`);
+      }
+    }
+
+    return { passed, details: mismatchDetails.join(', ') };
+  }
+
+  _buildConfirmationResponse() {
+    const parts = [];
+    const reverseColorMap = {
+      '#ff0000': 'red', '#10b981': 'green', '#3b82f6': 'blue', '#a855f7': 'purple',
+      '#00f0ff': 'cyan', '#ff9f3b': 'orange', '#ffffff': 'white', '#eab308': 'yellow',
+      '#ec4899': 'pink', '#d946ef': 'magenta', '#84cc16': 'lime', '#14b8a6': 'teal',
+      '#f59e0b': 'gold', '#e11d48': 'crimson'
+    };
+
+    for (const item of this.modifiedDevicesList) {
+      const dev = home.dynamicDevices.find(d => d.id === item.id);
+      if (!dev) continue;
+
+      const changes = [];
+      const expected = this.expectedDeviceStates[item.id] || {};
+
+      const powerChanged = 'on' in expected && expected.on !== item.originalState.on;
+      const brightnessChanged = 'brightness' in expected && expected.brightness !== item.originalState.brightness;
+      const colorChanged = 'color' in expected && expected.color !== item.originalState.color;
+      const lockedChanged = 'locked' in expected && expected.locked !== item.originalState.locked;
+
+      if (dev.category === 'light') {
+        if (powerChanged) {
+          changes.push(`is ${dev.on ? 'on' : 'off'}`);
+        }
+        if (brightnessChanged) {
+          changes.push(`brightness set to ${dev.brightness}%`);
+        }
+        if (colorChanged) {
+          const colorName = reverseColorMap[dev.color.toLowerCase()] || dev.color;
+          changes.push(`color changed to ${colorName}`);
+        }
+      } else if (dev.category === 'security') {
+        if (lockedChanged) {
+          changes.push(`is ${dev.locked ? 'locked' : 'unlocked'}`);
+        }
+      }
+
+      if (changes.length > 0) {
+        if (changes.length === 1) {
+          parts.push(`${dev.name} ${changes[0]}`);
+        } else if (changes.length === 2) {
+          parts.push(`${dev.name} ${changes[0]} and ${changes[1]}`);
+        } else {
+          const last = changes.pop();
+          parts.push(`${dev.name} ${changes.join(', ')}, and ${last}`);
+        }
+      }
+    }
+
+    if (this.modifiedClimate) {
+      const changes = [];
+      const expected = this.expectedClimateStates;
+      const original = this.modifiedClimate.originalState;
+      const current = home.state.climate;
+
+      if ('targetTemp' in expected && expected.targetTemp !== original.targetTemp) {
+        changes.push(`temperature set to ${current.targetTemp}°C`);
+      }
+      if ('mode' in expected && expected.mode !== original.mode) {
+        changes.push(`mode configured to ${current.mode}`);
+      }
+
+      if (changes.length > 0) {
+        parts.push(`Thermostat ${changes.join(' and ')}`);
+      }
+    }
+
+    if (parts.length === 0) {
+      return "All systems are already at their requested states.";
+    }
+
+    if (parts.length === 1) {
+      return parts[0].charAt(0).toUpperCase() + parts[0].slice(1) + ".";
+    } else if (parts.length === 2) {
+      const start = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+      return start + " and " + parts[1] + ".";
+    } else {
+      const last = parts.pop();
+      const start = parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+      parts[0] = start;
+      return parts.join(', ') + ", and " + last + ".";
+    }
   }
 
   async run(actions, apiKey, apiProvider) {
@@ -906,64 +1101,104 @@ class LukasMultiTaskEngine {
       coreBtn.classList.add('processing');
     }
 
-    let allSuccessful = true;
+    this.registrySnapshot = JSON.parse(JSON.stringify(home.dynamicDevices));
+    this.climateSnapshot = JSON.parse(JSON.stringify(home.state.climate));
+    this.devicesSnapshot = JSON.parse(JSON.stringify(home.state.devices));
+
+    let transactionSuccess = false;
     let finalSpeechResponse = "";
     
-    for (let i = 0; i < actions.length; i++) {
-      this.currentIndex = i;
-      this.statusMap[i] = 'running';
-      this._updateQueueUI();
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      diag.logToTerminal(`[TRANSACTION] Starting execution attempt ${attempt}/2...`, "info");
       
-      await new Promise(resolve => setTimeout(resolve, 800));
+      this.expectedDeviceStates = {};
+      this.expectedClimateStates = {};
+      this.modifiedDevicesList = [];
+      this.modifiedClimate = null;
+      this.transactionDevice = null;
+      
+      home.dynamicDevices = JSON.parse(JSON.stringify(this.registrySnapshot));
+      home.saveDynamicDevices();
+      Object.assign(home.state.climate, this.climateSnapshot);
+      Object.assign(home.state.devices, this.devicesSnapshot);
+      
+      let allSuccessful = true;
+      let halted = false;
+      let haltMessage = "";
+      
+      for (let i = 0; i < actions.length; i++) {
+        this.currentIndex = i;
+        this.statusMap[i] = 'running';
+        this._updateQueueUI();
+        
+        await new Promise(resolve => setTimeout(resolve, 800));
 
-      const action = actions[i];
-      try {
-        const result = await this._executeSingleAction(action);
-        if (result.status === 'ambiguous') {
-          this.statusMap[i] = 'ambiguous';
-          this.detailsMap[i] = `Ambiguous device: ${result.message}`;
-          this._updateQueueUI();
-          
-          allSuccessful = false;
-          const msg = `Wait, I found multiple matches for "${action.targetDeviceName}": ${result.matches.map(m => m.name).join(', ')}. Which one did you mean?`;
-          this._speakAndOutput(msg, true);
-          break;
-        } else if (result.status === 'failed') {
+        const action = actions[i];
+        try {
+          const result = await this._executeSingleAction(action);
+          if (result.status === 'ambiguous') {
+            this.statusMap[i] = 'ambiguous';
+            this.detailsMap[i] = `Ambiguous device: ${result.message}`;
+            this._updateQueueUI();
+            
+            allSuccessful = false;
+            halted = true;
+            haltMessage = `Wait, I found multiple matches for "${action.targetDeviceName}": ${result.matches.map(m => m.name).join(', ')}. Which one did you mean?`;
+            break;
+          } else if (result.status === 'failed') {
+            this.statusMap[i] = 'failed';
+            this.detailsMap[i] = result.message;
+            this._updateQueueUI();
+            allSuccessful = false;
+            break;
+          } else {
+            this.statusMap[i] = 'completed';
+            this.detailsMap[i] = result.message;
+            this._updateQueueUI();
+          }
+        } catch (err) {
+          console.error(err);
           this.statusMap[i] = 'failed';
-          this.detailsMap[i] = result.message;
+          this.detailsMap[i] = `Error: ${err.message}`;
           this._updateQueueUI();
           allSuccessful = false;
-          const msg = `Task failed: ${result.message}`;
-          this._speakAndOutput(msg);
+          break;
+        }
+      }
+
+      if (halted) {
+        this._rollback();
+        this._speakAndOutput(haltMessage, true);
+        this.isRunning = false;
+        return;
+      }
+
+      if (allSuccessful) {
+        const verification = this._verifyStates();
+        if (verification.passed) {
+          transactionSuccess = true;
+          finalSpeechResponse = this._buildConfirmationResponse();
           break;
         } else {
-          this.statusMap[i] = 'completed';
-          this.detailsMap[i] = result.message;
-          this._updateQueueUI();
-          if (finalSpeechResponse) finalSpeechResponse += " ";
-          finalSpeechResponse += result.message;
+          console.warn(`[TRANSACTION] Verification failed: ${verification.details}`);
+          diag.logToTerminal(`[TRANSACTION] ⚠️ State verification mismatch: ${verification.details}. Retrying...`, "warn");
         }
-      } catch (err) {
-        console.error(err);
-        this.statusMap[i] = 'failed';
-        this.detailsMap[i] = `Error: ${err.message}`;
-        this._updateQueueUI();
-        allSuccessful = false;
-        this._speakAndOutput(`Error running task: ${err.message}`);
-        break;
+      } else {
+        diag.logToTerminal(`[TRANSACTION] ⚠️ Attempt ${attempt} failed execution. Retrying...`, "warn");
+      }
+      
+      if (attempt < 2) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 
     this.isRunning = false;
 
-    if (allSuccessful && actions.length > 0) {
-      this._speakAndOutput(finalSpeechResponse || "All actions completed successfully.");
+    if (transactionSuccess) {
+      this._speakAndOutput(finalSpeechResponse);
     } else {
-      isProcessingCommand = false;
-      if (coreBtn) {
-        coreBtn.classList.remove('processing');
-        coreBtn.classList.remove('listening');
-      }
+      this._rollback();
+      this._speakAndOutput("I was unable to apply some of the device actions successfully. Rolling back the entire command.");
     }
   }
 
@@ -1066,11 +1301,21 @@ class LukasMultiTaskEngine {
     };
 
     if (parsed && parsed.category && parsed.category !== 'unknown') {
-      const res = resolveDevice(parsed.targetDeviceName, parsed.category);
-      if (res.ambiguous) {
-        return { status: 'ambiguous', matches: res.matches, message: `Ambiguous target "${parsed.targetDeviceName}"` };
+      let targetDevice = null;
+      const isModifier = ['brightness', 'color'].includes(parsed.action) || parsed.category === 'climate';
+      
+      if (isModifier && this.transactionDevice && (!parsed.targetDeviceName || parsed.targetDeviceName.toLowerCase() === 'it' || parsed.targetDeviceName.toLowerCase() === 'them')) {
+        targetDevice = this.transactionDevice;
+      } else {
+        const res = resolveDevice(parsed.targetDeviceName, parsed.category);
+        if (res.ambiguous) {
+          return { status: 'ambiguous', matches: res.matches, message: `Ambiguous target "${parsed.targetDeviceName}"` };
+        }
+        targetDevice = res.device;
+        if (targetDevice && !this.transactionDevice) {
+          this.transactionDevice = targetDevice;
+        }
       }
-      const targetDevice = res.device;
 
       // LIGHTS
       if (parsed.category === 'light') {
@@ -1094,66 +1339,84 @@ class LukasMultiTaskEngine {
             actionLabel = "deactivated";
           } else if (parsed.action === 'color' && parsed.value) {
             const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
-            updates.on = true;
             updates.color = hex;
-            actionLabel = `set to ${parsed.value}`;
+            actionLabel = `set to color ${parsed.value}`;
           } else if (parsed.action === 'brightness' && parsed.value) {
             const val = parseInt(parsed.value);
-            updates.on = true;
             updates.brightness = isNaN(val) ? 50 : val;
-            actionLabel = `dimmed to ${updates.brightness}%`;
+            actionLabel = `set to brightness ${updates.brightness}%`;
           } else {
-            updates.on = !targetDevice.on;
-            actionLabel = !targetDevice.on ? "activated" : "deactivated";
+            if (parsed.action === 'toggle') {
+              updates.on = !targetDevice.on;
+              actionLabel = !targetDevice.on ? "activated" : "deactivated";
+            } else {
+              const val = parsed.value;
+              if (val) {
+                const isColor = colorMap[val.toLowerCase()] || /^#[0-9a-fA-F]{6}$/.test(val);
+                const isNum = !isNaN(parseInt(val));
+                if (isColor) {
+                  updates.color = colorMap[val.toLowerCase()] || val;
+                  actionLabel = `set to color ${val}`;
+                } else if (isNum) {
+                  updates.brightness = parseInt(val);
+                  actionLabel = `set to brightness ${val}%`;
+                }
+              }
+            }
           }
-          home.setDeviceState(targetDevice.id, updates);
-          return { status: 'success', message: `I have successfully ${actionLabel} the ${targetDevice.name}.` };
+          if (Object.keys(updates).length > 0) {
+            this._setDeviceStateAndTrack(targetDevice.id, updates);
+            return { status: 'success', message: `I have successfully updated the ${targetDevice.name}.` };
+          }
+          return { status: 'success', message: `No updates needed for ${targetDevice.name}.` };
         } else if (parsed.isGlobal || (!targetZone && !parsed.targetDeviceName)) {
           if (turnOn) {
-            home.setDeviceState(DEVICES.LIVING_ROOM, { on: true });
-            home.setDeviceState(DEVICES.BEDROOM, { on: true });
-            home.setDeviceState(DEVICES.KITCHEN, { on: true });
+            this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { on: true });
+            this._setDeviceStateAndTrack(DEVICES.BEDROOM, { on: true });
+            this._setDeviceStateAndTrack(DEVICES.KITCHEN, { on: true });
             for (const dev of home.dynamicDevices) {
-              if (dev.category === 'light') home.setDeviceState(dev.id, { on: true });
+              if (dev.category === 'light') this._setDeviceStateAndTrack(dev.id, { on: true });
             }
             return { status: 'success', message: "Re-initialized all lighting arrays." };
           } else if (turnOff) {
-            home.setDeviceState(DEVICES.LIVING_ROOM, { on: false });
-            home.setDeviceState(DEVICES.BEDROOM, { on: false });
-            home.setDeviceState(DEVICES.KITCHEN, { on: false });
+            this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { on: false });
+            this._setDeviceStateAndTrack(DEVICES.BEDROOM, { on: false });
+            this._setDeviceStateAndTrack(DEVICES.KITCHEN, { on: false });
             for (const dev of home.dynamicDevices) {
-              if (dev.category === 'light') home.setDeviceState(dev.id, { on: false });
+              if (dev.category === 'light') this._setDeviceStateAndTrack(dev.id, { on: false });
             }
             return { status: 'success', message: "Powering down all lighting grids." };
           } else if (parsed.action === 'color' && parsed.value) {
             const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
-            home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, color: hex });
-            home.setDeviceState(DEVICES.BEDROOM, { on: true, color: hex });
-            home.setDeviceState(DEVICES.KITCHEN, { on: true, color: hex });
+            this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { color: hex });
+            this._setDeviceStateAndTrack(DEVICES.BEDROOM, { color: hex });
+            this._setDeviceStateAndTrack(DEVICES.KITCHEN, { color: hex });
             for (const dev of home.dynamicDevices) {
-              if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, color: hex });
+              if (dev.category === 'light') this._setDeviceStateAndTrack(dev.id, { color: hex });
             }
             return { status: 'success', message: `Changing all light spectrums to ${parsed.value}.` };
           } else if (parsed.action === 'brightness' && parsed.value) {
             const val = parseInt(parsed.value);
             const percent = isNaN(val) ? 50 : val;
-            home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, brightness: percent });
-            home.setDeviceState(DEVICES.BEDROOM, { on: true, brightness: percent });
-            home.setDeviceState(DEVICES.KITCHEN, { on: true, brightness: percent });
+            this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { brightness: percent });
+            this._setDeviceStateAndTrack(DEVICES.BEDROOM, { brightness: percent });
+            this._setDeviceStateAndTrack(DEVICES.KITCHEN, { brightness: percent });
             for (const dev of home.dynamicDevices) {
-              if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, brightness: percent });
+              if (dev.category === 'light') this._setDeviceStateAndTrack(dev.id, { brightness: percent });
             }
             return { status: 'success', message: `Adjusting light levels to ${percent} percent.` };
           } else {
-            const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
-            const newState = !isAnyOn;
-            home.setDeviceState(DEVICES.LIVING_ROOM, { on: newState });
-            home.setDeviceState(DEVICES.BEDROOM, { on: newState });
-            home.setDeviceState(DEVICES.KITCHEN, { on: newState });
-            for (const dev of home.dynamicDevices) {
-              if (dev.category === 'light') home.setDeviceState(dev.id, { on: newState });
+            if (parsed.action === 'toggle') {
+              const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
+              const newState = !isAnyOn;
+              this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { on: newState });
+              this._setDeviceStateAndTrack(DEVICES.BEDROOM, { on: newState });
+              this._setDeviceStateAndTrack(DEVICES.KITCHEN, { on: newState });
+              for (const dev of home.dynamicDevices) {
+                if (dev.category === 'light') this._setDeviceStateAndTrack(dev.id, { on: newState });
+              }
+              return { status: 'success', message: `Toggling all lighting grids ${newState ? 'ON' : 'OFF'}.` };
             }
-            return { status: 'success', message: `Toggling all lighting grids ${newState ? 'ON' : 'OFF'}.` };
           }
         } else if (targetZone) {
           const updates = {};
@@ -1166,26 +1429,28 @@ class LukasMultiTaskEngine {
             actionLabel = "deactivated";
           } else if (parsed.action === 'color' && parsed.value) {
             const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
-            updates.on = true;
             updates.color = hex;
             actionLabel = `set to ${parsed.value}`;
           } else if (parsed.action === 'brightness' && parsed.value) {
             const val = parseInt(parsed.value);
-            updates.on = true;
             updates.brightness = isNaN(val) ? 50 : val;
             actionLabel = `dimmed to ${updates.brightness}%`;
           } else {
-            const isCurrentOn = home.state.devices[targetZone].on;
-            updates.on = !isCurrentOn;
-            actionLabel = !isCurrentOn ? "activated" : "deactivated";
-          }
-          home.setDeviceState(targetZone, updates);
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light' && dev.zone === zoneLabel) {
-              home.setDeviceState(dev.id, updates);
+            if (parsed.action === 'toggle') {
+              const isCurrentOn = home.state.devices[targetZone].on;
+              updates.on = !isCurrentOn;
+              actionLabel = !isCurrentOn ? "activated" : "deactivated";
             }
           }
-          return { status: 'success', message: `Perfect, I have ${actionLabel} the lighting grid in the ${zoneLabel}.` };
+          if (Object.keys(updates).length > 0) {
+            this._setDeviceStateAndTrack(targetZone, updates);
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light' && dev.zone === zoneLabel) {
+                this._setDeviceStateAndTrack(dev.id, updates);
+              }
+            }
+            return { status: 'success', message: `Perfect, I have ${actionLabel} the lighting grid in the ${zoneLabel}.` };
+          }
         }
       }
       
@@ -1194,13 +1459,13 @@ class LukasMultiTaskEngine {
         if (parsed.action === 'temp' && parsed.value) {
           const val = parseInt(parsed.value);
           if (!isNaN(val)) {
-            home.setTargetTemperature(val);
+            this._setTargetTemperatureAndTrack(val);
             return { status: 'success', message: `Eco-Thermostat target set to ${val} degrees Celsius.` };
           }
         } else if (parsed.action === 'mode' && parsed.value) {
           const mode = parsed.value.toLowerCase();
           if (['cool', 'heat', 'eco'].includes(mode)) {
-            home.setClimateMode(mode);
+            this._setClimateModeAndTrack(mode);
             return { status: 'success', message: `Configuring eco-thermostat matrix to ${mode.toUpperCase()} mode.` };
           }
         } else if (parsed.action === 'status') {
@@ -1215,11 +1480,11 @@ class LukasMultiTaskEngine {
         
         if (targetDevice) {
           const isLocked = unlock ? false : (lock ? true : !targetDevice.locked);
-          home.setDeviceState(targetDevice.id, { locked: isLocked });
+          this._setDeviceStateAndTrack(targetDevice.id, { locked: isLocked });
           return { status: 'success', message: `I have successfully ${isLocked ? 'locked' : 'unlocked'} the ${targetDevice.name}.` };
         } else {
           const isLocked = unlock ? false : (lock ? true : !home.state.devices[DEVICES.OUTDOOR].locked);
-          home.setDeviceState(DEVICES.OUTDOOR, { locked: isLocked });
+          this._setDeviceStateAndTrack(DEVICES.OUTDOOR, { locked: isLocked });
           return { status: 'success', message: isLocked ? "Perimeter locks engaged. Main entryway secured." : "Security locks disengaged. Main entryway is now unlocked." };
         }
       }
