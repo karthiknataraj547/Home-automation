@@ -499,12 +499,9 @@ function bootSequenceAnimation() {
 
     const startVoiceSystem = () => {
       voice.warmUpMic();
+      isWakingUp = true;
+      lastCommandSource = 'voice';
       handleAssistantResponse("Lukas Core initialized. Systems are secure and operational on port 3000. How can I assist you, Commander?");
-      if (isPassiveListenEnabled) {
-        setTimeout(() => {
-          voice.startWakeWordListener();
-        }, 1200);
-      }
       document.removeEventListener('click', startVoiceSystem);
       document.removeEventListener('touchstart', startVoiceSystem);
     };
