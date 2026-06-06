@@ -35,3 +35,6 @@ openai_creds.json
 .env
 .env.local
 .env.*.local
+
+# Electron build output
+dist-electron/

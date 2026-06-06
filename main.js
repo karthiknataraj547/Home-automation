@@ -6265,3 +6265,34 @@ function initAuth() {
     });
   }
 }
+
+// ── PWA Installation Orchestration ──────────────────────────────────────────
+let deferredPrompt = null;
+const pwaInstallBtn = document.getElementById('pwaInstallBtn');
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  if (pwaInstallBtn) {
+    pwaInstallBtn.style.display = 'flex';
+  }
+  console.log('[PWA Engine] App is eligible for standalone installation.');
+});
+
+if (pwaInstallBtn) {
+  pwaInstallBtn.addEventListener('click', async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    console.log(`[PWA Engine] User choice outcome: ${outcome}`);
+    deferredPrompt = null;
+    pwaInstallBtn.style.display = 'none';
+  });
+}
+
+window.addEventListener('appinstalled', () => {
+  console.log('[PWA Engine] App installed successfully.');
+  if (pwaInstallBtn) {
+    pwaInstallBtn.style.display = 'none';
+  }
+});

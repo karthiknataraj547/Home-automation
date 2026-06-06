@@ -5,6 +5,20 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>LUKAS // AI Home Automation & Assistant</title>
+    <!-- PWA Web Manifest & Assets -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js')
+            .then(reg => console.log('PWA Service Worker registered:', reg.scope))
+            .catch(err => console.error('PWA Service Worker registration failed:', err));
+        });
+      }
+    </script>
     <!-- FontAwesome for high-tech icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <!-- hls.js for in-browser HLS playback (camera feed) -->
@@ -810,6 +824,11 @@
               </div>
               <div style="font-size:0.52rem; color:#64748b; line-height:1.3; text-align:center;">
                 ⚠️ Reboot restarts proxy streams. Reset wipes registered nodes.
+              </div>
+              <div style="margin-top: 0.2rem; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 0.5rem;" id="pwaInstallContainer">
+                <button id="pwaInstallBtn" class="btn-routine" style="width:100%; border-color:var(--cyan-neon); color:var(--cyan-neon); font-size:0.58rem; padding:0.4rem 0.2rem; cursor:pointer; display:none; align-items:center; justify-content:center; gap:0.4rem; font-family:var(--font-mono); font-weight:bold;">
+                  <i class="fa-solid fa-download"></i> INSTALL LUKAS APP (PWA)
+                </button>
               </div>
             </div>
           </div>

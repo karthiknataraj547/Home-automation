@@ -234,16 +234,28 @@ class LukasVoiceController {
           return;
         }
 
-        // For other serious errors (blocked mic, no permission, etc.), stop everything to prevent infinite loops
-        this.isCommandListeningActive = false;
-        this.isListening = false;
-        this.isListeningForWakeWord = false;
-        this.isLongConversation = false;
-        this.pendingStart = false;
-        this.consecutiveErrors++;
-        
-        if (this.onRecognitionStateChange) {
-          this.onRecognitionStateChange('off', event.error);
+        // Differentiate between fatal errors (permission blocked, unsupported, etc.) and transient errors (network blips)
+        const fatalErrors = ['not-allowed', 'service-not-allowed', 'language-not-supported'];
+        const isFatal = fatalErrors.includes(event.error);
+
+        if (isFatal) {
+          console.error(`[voice.js] Fatal speech recognition error: "${event.error}". Halting speech listener.`);
+          this.isCommandListeningActive = false;
+          this.isListening = false;
+          this.isListeningForWakeWord = false;
+          this.isLongConversation = false;
+          this.pendingStart = false;
+          this.consecutiveErrors++;
+          
+          if (this.onRecognitionStateChange) {
+            this.onRecognitionStateChange('off', event.error);
+          }
+        } else {
+          // Non-fatal, transient errors (like network/audio-capture glitches).
+          // We increment consecutiveErrors, but DO NOT shut down the passive listener flags.
+          // The onend event callback will handle restarting with a graceful backoff.
+          console.warn(`[voice.js] Transient speech recognition error: "${event.error}". Recovery sequence engaged.`);
+          this.consecutiveErrors++;
         }
       };
 

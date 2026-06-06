@@ -1,0 +1,17 @@
+{
+  "name": "LUKAS AI Home Automation & Assistant",
+  "short_name": "LUKAS",
+  "description": "Futuristic AI home automation core and personal conversational assistant.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d0e15",
+  "theme_color": "#0d0e15",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
