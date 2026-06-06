@@ -24,7 +24,14 @@ const originalFetch = window.fetch;
 window.fetch = async function (resource, options) {
   let url = typeof resource === 'string' ? resource : (resource.url || '');
   
-  if (url.startsWith('/api/')) {
+  let pathname = '';
+  try {
+    pathname = new URL(url, window.location.origin).pathname;
+  } catch (e) {
+    pathname = url;
+  }
+  
+  if (pathname.startsWith('/api/')) {
     const isStaticDeployment = window.location.hostname !== 'localhost' && 
                              window.location.hostname !== '127.0.0.1';
                              
@@ -125,6 +132,29 @@ let currentWeatherCity = "";
 let activeFollowUp = null;
 let conversationActive = false;   // TRUE while we keep mic hot after a voice exchange
 let conversationTimer = null;     // Timer to revert to passive after conversation window
+
+// Keep mic active for follow-up commands after a voice exchange (15 second window)
+function keepConversationAlive(durationMs = 15000) {
+  conversationActive = true;
+  if (conversationTimer) clearTimeout(conversationTimer);
+  conversationTimer = setTimeout(() => {
+    conversationActive = false;
+    conversationTimer = null;
+    // Only drop to passive if we're not already in an active state
+    if (!voice.isCommandListeningActive && !voice.isLongConversation && !voice.isListeningForWakeWord) {
+      if (isPassiveListenEnabled) {
+        diag.logToTerminal("[AI CORE] Conversation window closed. Returning to passive wake-word mode.", "info");
+        voice.startWakeWordListener();
+      }
+    }
+  }, durationMs);
+}
+
+function endConversation() {
+  conversationActive = false;
+  if (conversationTimer) { clearTimeout(conversationTimer); conversationTimer = null; }
+}
+
 let activePlatform = "Spotify";
 let tuyaConfigured = false;
 let lastCommandSource = 'user';
@@ -785,28 +815,6 @@ function bindUIEvents() {
       clearTimeout(noCommandTimeout);
       noCommandTimeout = null;
     }
-  }
-
-  // Keep mic active for follow-up commands after a voice exchange (15 second window)
-  function keepConversationAlive(durationMs = 15000) {
-    conversationActive = true;
-    if (conversationTimer) clearTimeout(conversationTimer);
-    conversationTimer = setTimeout(() => {
-      conversationActive = false;
-      conversationTimer = null;
-      // Only drop to passive if we're not already in an active state
-      if (!voice.isCommandListeningActive && !voice.isLongConversation && !voice.isListeningForWakeWord) {
-        if (isPassiveListenEnabled) {
-          diag.logToTerminal("[AI CORE] Conversation window closed. Returning to passive wake-word mode.", "info");
-          voice.startWakeWordListener();
-        }
-      }
-    }, durationMs);
-  }
-
-  function endConversation() {
-    conversationActive = false;
-    if (conversationTimer) { clearTimeout(conversationTimer); conversationTimer = null; }
   }
 
   function startSilenceTimeout() {
