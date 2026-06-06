@@ -46,6 +46,7 @@ let conversationActive = false;   // TRUE while we keep mic hot after a voice ex
 let conversationTimer = null;     // Timer to revert to passive after conversation window
 let activePlatform = "Spotify";
 let tuyaConfigured = false;
+let lastCommandSource = 'user';
 
 // ═══════════════════ REMINDER & TASK ENGINE ═══════════════════
 let lukasReminders = JSON.parse(localStorage.getItem('lukas_reminders') || '[]');
@@ -853,13 +854,9 @@ function bindUIEvents() {
 
     if (voice.isLongConversation) return; // Long convo manages itself
 
-    // After ANY voice response, keep the mic active for follow-up commands (8s window)
-    // This allows the user to continue the conversation without saying the wake word again
-    const lastReplyText = voice.lastSpokenText || "";
-    const isQuestion = lastReplyText.trim().endsWith('?') || lastReplyText.includes('?');
-
-    if (isQuestion || activeFollowUp || conversationActive) {
-      diag.logToTerminal("[AI CORE] Staying active for follow-up commands (conversation window open)...", "info");
+    // Dynamic voice command flow: if the directive came via voice, keep the mic active for natural follow-ups
+    if (lastCommandSource === 'voice') {
+      diag.logToTerminal("[AI CORE] Staying active for follow-up commands (15s conversation window)...", "info");
       
       if (coreBtn) {
         coreBtn.classList.remove('waking');
@@ -3420,6 +3417,7 @@ function executeConversationalAction(act) {
 
 async function processCommand(rawCommand, source) {
   try {
+    lastCommandSource = source || 'user';
     // Clear any active voice capturing timeouts immediately
     if (typeof noCommandTimeout !== 'undefined' && noCommandTimeout) {
       clearTimeout(noCommandTimeout);
