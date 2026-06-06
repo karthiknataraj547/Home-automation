@@ -52,104 +52,122 @@ class LukasReasoningEngine {
   }
 
   /**
-   * Assess the detailed accuracy scores (Confidence, Evidence, Context, Completeness)
-   * @returns {{score: number, confidence: number, evidence: number, context: number, completeness: number, issues: string[], action: 'respond'|'ask_clarification'}}
+   * Assess the detailed accuracy scores through the 6-stage Nexus validation gates:
+   * 1. Context Check (memory contexts loaded)
+   * 2. Intent Check (response matches orchestrator's classified intent)
+   * 3. Memory Check (previous discussed facts / projects integrated)
+   * 4. Accuracy Check (response is complete, not truncated)
+   * 5. Natural Language Check (excludes robotic disclaimer / apologies)
+   * 6. Personality Check (aligns with the selected personality mode style)
+   * @returns {{score: number, issues: string[], action: 'respond'|'ask_clarification'}}
    */
-  evaluateAccuracy(userInput, responseText, memory = null, searchResult = null) {
-    let confidence = 1.0;
-    let evidence = 1.0;
-    let context = 1.0;
-    let completeness = 1.0;
+  evaluateAccuracy(userInput, responseText, memory = null, activeIntent = 'conversation') {
     const issues = [];
-
     const lowerInput = userInput.toLowerCase().trim();
     const lowerResp = responseText ? responseText.toLowerCase().trim() : '';
+    
+    const prefs = memory ? memory.getAllPreferences() : {};
+    const activePersonality = prefs.personalityMode || prefs.personality_mode || 'casual';
 
-    // 1. Confidence Evaluation
-    const vaguePhrases = [
-      /\bdo that\b/, /\bdo it\b/, /\bthing\b/, /\bstuff\b/, 
-      /\bwhat is it\b/, /\bdo something\b/, /\bthat thing\b/,
-      /^\b(yes|no|ok|okay|sure|cool|yeah|yup|nah)\b$/
-    ];
-    let vagueMatches = 0;
-    for (const re of vaguePhrases) {
-      if (re.test(lowerInput)) vagueMatches++;
+    // ── GATE 1: CONTEXT CHECK ──
+    let contextPass = true;
+    if (memory) {
+      const summary = memory.getWorkingMemorySummary();
+      if (!summary) {
+        contextPass = false;
+        issues.push("[GATE 1: CONTEXT] Working memory context state is not populated.");
+      }
     }
-    if (vagueMatches > 0) {
-      confidence -= 0.35 * vagueMatches;
-    }
-    if (lowerInput.length < 5) {
-      confidence -= 0.3;
-    }
-    confidence = Math.max(0.1, Math.min(1.0, confidence));
 
-    // 2. Evidence Evaluation
+    // ── GATE 2: INTENT CHECK ──
+    let intentPass = true;
+    if (activeIntent === 'weather') {
+      if (!lowerResp.includes('weather') && !lowerResp.includes('temp') && !lowerResp.includes('degree') && !lowerResp.includes('forecast')) {
+        intentPass = false;
+        issues.push("[GATE 2: INTENT] Response does not address weather conditions.");
+      }
+    } else if (activeIntent === 'home_control') {
+      const controls = ['light', 'climate', 'thermostat', 'lock', 'routine', 'device', 'appliance', 'sprinkler', 'camera'];
+      const hasControlWord = controls.some(c => lowerResp.includes(c));
+      if (!hasControlWord) {
+        intentPass = false;
+        issues.push("[GATE 2: INTENT] Response fails to confirm execution of home automation device request.");
+      }
+    }
+
+    // ── GATE 3: MEMORY CHECK ──
+    let memoryPass = true;
     if (memory) {
       const projects = memory.getAllProjects();
-      const mentionsProject = projects.some(p => lowerInput.includes(p.name.toLowerCase()));
-      const containsProjectWord = /\bproject\b/i.test(lowerInput);
-      if (containsProjectWord && !mentionsProject) {
-        evidence -= 0.3;
-        issues.push("Referenced project is not registered in active memory.");
-      }
-    }
-    if (lowerInput.includes('search') || lowerInput.includes('find') || lowerInput.includes('who is') || lowerInput.includes('weather')) {
-      if (searchResult && (!searchResult.answer || searchResult.answer.length < 10)) {
-        evidence -= 0.4;
-        issues.push("Search query execution produced zero evidence.");
-      }
-    }
-    evidence = Math.max(0.1, Math.min(1.0, evidence));
-
-    // 3. Context Evaluation
-    if (memory) {
-      const historyCount = memory.shortTerm.messages.length;
-      if (historyCount === 0) {
-        context -= 0.2;
-      }
-      const hasProject = memory.shortTerm.currentProject;
-      if (!hasProject && lowerInput.includes('goal')) {
-        context -= 0.3;
-        issues.push("Context lacks active working memory project.");
-      }
-    }
-    context = Math.max(0.1, Math.min(1.0, context));
-
-    // 4. Completeness Evaluation
-    if (!responseText || responseText.length < 8) {
-      completeness = 0.1;
-      issues.push("Response length is insufficient.");
-    } else {
-      if (responseText.endsWith('...') || responseText.includes('...\n')) {
-        completeness -= 0.3;
-        issues.push("Response appears truncated.");
-      }
-      const limitations = ['cannot search', 'do not have access', 'offline assistant', 'knowledge cutoff', 'as an ai'];
-      for (const lim of limitations) {
-        if (lowerResp.includes(lim)) {
-          completeness -= 0.2;
-          issues.push(`Robotic internet limitation disclaimer: "${lim}"`);
+      const mentionsProjectWord = /\bproject\b/i.test(lowerInput);
+      if (mentionsProjectWord) {
+        const matchesAny = projects.some(p => lowerInput.includes(p.name.toLowerCase()) || lowerResp.includes(p.name.toLowerCase()));
+        if (!matchesAny && projects.length > 0) {
+          memoryPass = false;
+          issues.push("[GATE 3: MEMORY] Response references project goals without retrieving correct project details.");
         }
       }
     }
-    completeness = Math.max(0.1, Math.min(1.0, completeness));
 
-    // Composite Score
-    const compositeScore = (confidence * 0.4 + evidence * 0.2 + context * 0.2 + completeness * 0.2);
-    
-    // Low confidence threshold route check
-    let action = 'respond';
-    if (confidence < 0.6) {
-      action = 'ask_clarification';
-      issues.push("Confidence score is below the 0.6 threshold. Halting for clarification.");
+    // ── GATE 4: ACCURACY & COMPLETENESS CHECK ──
+    let accuracyPass = true;
+    if (!responseText || responseText.length < 8) {
+      accuracyPass = false;
+      issues.push("[GATE 4: ACCURACY] Response is empty or too short.");
+    } else if (responseText.endsWith('...') || responseText.includes('...\n')) {
+      accuracyPass = false;
+      issues.push("[GATE 4: ACCURACY] Response has been truncated or cut off.");
     }
 
+    // ── GATE 5: NATURAL LANGUAGE CHECK ──
+    let naturalPass = true;
+    const aiDisclaimers = [
+      'as an ai', 'language model', 'cannot search', 'offline assistant', 
+      'knowledge cutoff', 'do not have access', 'limitations', 'sorry for the confusion',
+      'i apologize', 'apologize for the'
+    ];
+    for (const disclaimer of aiDisclaimers) {
+      if (lowerResp.includes(disclaimer)) {
+        naturalPass = false;
+        issues.push(`[GATE 5: NATURAL LANGUAGE] Contains robotic disclaimer/apology: "${disclaimer}"`);
+      }
+    }
+
+    // ── GATE 6: PERSONALITY CHECK ──
+    let personalityPass = true;
+    if (activePersonality === 'professional') {
+      const casualSlang = ['gonna', 'wanna', 'hey there', 'whats up', 'what\'s up', 'chill', 'dude'];
+      for (const slang of casualSlang) {
+        if (lowerResp.includes(slang)) {
+          personalityPass = false;
+          issues.push(`[GATE 6: PERSONALITY] Response used informal/casual slang in professional mode: "${slang}"`);
+        }
+      }
+    } else if (activePersonality === 'technical') {
+      if (lowerInput.includes('code') || lowerInput.includes('function') || lowerInput.includes('script')) {
+        const hasCodeKeyword = ['const', 'function', 'class', 'let', 'import', 'def', 'package', 'code'].some(k => lowerResp.includes(k));
+        if (!hasCodeKeyword) {
+          personalityPass = false;
+          issues.push("[GATE 6: PERSONALITY] Technical mode requested but response lacks engineering syntax or code blocks.");
+        }
+      }
+    }
+
+    // Composite scoring logic
+    let score = 1.0;
+    if (!contextPass) score -= 0.15;
+    if (!intentPass) score -= 0.15;
+    if (!memoryPass) score -= 0.15;
+    if (!accuracyPass) score -= 0.20;
+    if (!naturalPass) score -= 0.20;
+    if (!personalityPass) score -= 0.15;
+    score = Math.max(0.1, score);
+
+    // If critical natural language or accuracy checks fail, trigger clarification/retake
+    const action = score < 0.7 ? 'ask_clarification' : 'respond';
+
     return {
-      score: compositeScore,
-      confidence,
-      evidence,
-      context,
-      completeness,
+      score,
       issues,
       action
     };
@@ -160,10 +178,11 @@ class LukasReasoningEngine {
    * @param {string} userInput - The user's original input query
    * @param {string} responseText - Generated assistant text
    * @param {LukasMemory} [memory] - Lukas memory class
+   * @param {string} [intent] - Routing intent name
    * @returns {{valid: boolean, score: number, issues: string[], action: 'respond'|'ask_clarification'}}
    */
-  validate(userInput, responseText, memory = null) {
-    const accuracy = this.evaluateAccuracy(userInput, responseText, memory);
+  validate(userInput, responseText, memory = null, intent = 'conversation') {
+    const accuracy = this.evaluateAccuracy(userInput, responseText, memory, intent);
     const scaleScore = Math.round(accuracy.score * 100);
     return {
       valid: scaleScore >= this.MIN_ACCEPTABLE_SCORE,

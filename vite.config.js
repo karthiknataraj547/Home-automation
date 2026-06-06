@@ -552,6 +552,73 @@ export default defineConfig({
       server.middlewares.use(async (req, res, next) => {
         const url = req.url.split('?')[0];
 
+        // ── POST /api/storage/sync ── local file-backed secure synchronization ─────
+        if (url === '/api/storage/sync' && req.method === 'POST') {
+          try {
+            const bodyStr = await readBody(req);
+            const data = JSON.parse(bodyStr);
+            const { type, payload } = data;
+            if (!type || !payload) {
+              return json(res, { success: false, error: 'Missing type or payload.' }, 400);
+            }
+            
+            const dbDir = path.resolve(process.cwd(), 'db');
+            if (!fs.existsSync(dbDir)) {
+              fs.mkdirSync(dbDir, { recursive: true });
+            }
+            
+            const filePath = path.resolve(dbDir, `${type}.json`);
+            fs.writeFileSync(filePath, JSON.stringify({ payload, updatedAt: Date.now() }), 'utf8');
+            return json(res, { success: true, message: `${type} synced successfully.` });
+          } catch (err) {
+            return json(res, { success: false, error: err.message }, 500);
+          }
+        }
+
+        // ── GET /api/storage/load ── local file-backed secure database load ─────
+        if (url === '/api/storage/load' && req.method === 'GET') {
+          try {
+            const urlParts = req.url.split('?');
+            const query = urlParts[1] || '';
+            const typeParam = query.split('&').find(p => p.startsWith('type='));
+            const type = typeParam ? decodeURIComponent(typeParam.split('=')[1]) : null;
+
+            if (!type) {
+              return json(res, { success: false, error: 'Missing type parameter.' }, 400);
+            }
+            
+            const dbDir = path.resolve(process.cwd(), 'db');
+            const filePath = path.resolve(dbDir, `${type}.json`);
+            
+            if (!fs.existsSync(filePath)) {
+              return json(res, { success: true, found: false, payload: null });
+            }
+            
+            const fileData = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            return json(res, { success: true, found: true, payload: fileData.payload, updatedAt: fileData.updatedAt });
+          } catch (err) {
+            return json(res, { success: false, error: err.message }, 500);
+          }
+        }
+
+        // ── POST /api/storage/purge ── purge all file-backed secure storage ─────
+        if (url === '/api/storage/purge' && req.method === 'POST') {
+          try {
+            const dbDir = path.resolve(process.cwd(), 'db');
+            if (fs.existsSync(dbDir)) {
+              const files = fs.readdirSync(dbDir);
+              for (const file of files) {
+                if (file.endsWith('.json')) {
+                  fs.unlinkSync(path.join(dbDir, file));
+                }
+              }
+            }
+            return json(res, { success: true, message: 'Local storage purged successfully.' });
+          } catch (err) {
+            return json(res, { success: false, error: err.message }, 500);
+          }
+        }
+
         // ── GET /api/scan-tuya ── scan Tuya developer platform devices ─────
         if (url === '/api/scan-tuya' && req.method === 'GET') {
           try {

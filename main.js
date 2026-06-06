@@ -535,6 +535,27 @@ function initializeDashboard() {
   diag.initChartTooltip();
   initReminders();
 
+  // Load secure server backup on startup if enabled
+  const syncEnabled = localStorage.getItem('lukas_sync_enabled') === 'true';
+  const syncPassphrase = localStorage.getItem('lukas_sync_passphrase') || '';
+  if (syncEnabled && syncPassphrase) {
+    diag.logToTerminal("[NEXUS SYNC] Restoring secure database from server...", "info");
+    lukasMemory.loadFromServer(syncPassphrase).then(res => {
+      if (res.success && res.loaded) {
+        diag.logToTerminal("[NEXUS SYNC] Zero-knowledge backup loaded. Memory matrix synchronized.", "info");
+        updateMemoryPanel();
+        
+        // Update the personality mode dropdown to match the loaded preferences
+        const personalityModeSelect = document.getElementById('personalityModeSelect');
+        if (personalityModeSelect) {
+          const loadedMode = lukasMemory.getPreference('personalityMode', 'casual');
+          personalityModeSelect.value = loadedMode;
+          localStorage.setItem('lukas_personality_mode', loadedMode);
+        }
+      }
+    });
+  }
+
   // Validate Speech Recognition availability and HTTPS protocol (Secure Context requirements)
   const isSecure = window.location.protocol === 'https:' || 
                    window.location.hostname === 'localhost' || 
@@ -2661,7 +2682,6 @@ function bindUIEvents() {
     });
   }
 
-  // ── Continuous Conversation Mode Timeout ────────────────────────────────
   const continuousConvoSelect = document.getElementById('continuousConvoSelect');
   if (continuousConvoSelect) {
     const savedTimeout = localStorage.getItem('lukas_continuous_convo_timeout') || '15000';
@@ -2671,6 +2691,109 @@ function bindUIEvents() {
       const selectedTimeout = continuousConvoSelect.value;
       localStorage.setItem('lukas_continuous_convo_timeout', selectedTimeout);
       diag.logToTerminal(`[SETTINGS] Continuous conversation mode changed: ${selectedTimeout === '0' ? 'Disabled' : (selectedTimeout / 1000) + 's window'}.`, 'info');
+    });
+  }
+
+  // ── LUKAS Nexus Dynamic Personality Mode ───────────────────────────────
+  const personalityModeSelect = document.getElementById('personalityModeSelect');
+  if (personalityModeSelect) {
+    const savedMode = localStorage.getItem('lukas_personality_mode') || 'casual';
+    personalityModeSelect.value = savedMode;
+    // Sync into active preference block
+    lukasMemory.setPreference('personalityMode', savedMode);
+    
+    personalityModeSelect.addEventListener('change', () => {
+      const selectedMode = personalityModeSelect.value;
+      localStorage.setItem('lukas_personality_mode', selectedMode);
+      lukasMemory.setPreference('personalityMode', selectedMode);
+      diag.logToTerminal(`[SETTINGS] LUKAS personality mode changed to: ${selectedMode.toUpperCase()}.`, 'info');
+      updateMemoryPanel();
+    });
+  }
+
+  // ── LUKAS Nexus Database Synchronization ───────────────────────────────
+  const nexusSyncCheckbox = document.getElementById('nexusSyncCheckbox');
+  const nexusSyncPassphrase = document.getElementById('nexusSyncPassphrase');
+  const triggerSyncBtn = document.getElementById('triggerSyncBtn');
+  const purgeDatabaseBtn = document.getElementById('purgeDatabaseBtn');
+
+  if (nexusSyncCheckbox) {
+    const syncEnabled = localStorage.getItem('lukas_sync_enabled') === 'true';
+    nexusSyncCheckbox.checked = syncEnabled;
+    nexusSyncCheckbox.addEventListener('change', () => {
+      const enabled = nexusSyncCheckbox.checked;
+      localStorage.setItem('lukas_sync_enabled', enabled ? 'true' : 'false');
+      diag.logToTerminal(`[NEXUS SYNC] Secure Server Synchronization ${enabled ? 'ENABLED' : 'DISABLED'}.`, 'info');
+    });
+  }
+
+  if (nexusSyncPassphrase) {
+    nexusSyncPassphrase.value = localStorage.getItem('lukas_sync_passphrase') || '';
+    nexusSyncPassphrase.addEventListener('input', () => {
+      localStorage.setItem('lukas_sync_passphrase', nexusSyncPassphrase.value.trim());
+    });
+  }
+
+  if (triggerSyncBtn) {
+    triggerSyncBtn.addEventListener('click', async () => {
+      const enabled = localStorage.getItem('lukas_sync_enabled') === 'true';
+      const passphrase = localStorage.getItem('lukas_sync_passphrase') || '';
+      
+      if (!enabled) {
+        diag.logToTerminal('[NEXUS SYNC] ❌ Sync is disabled. Enable Secure Server Synchronization first.', 'warn');
+        return;
+      }
+      if (!passphrase) {
+        diag.logToTerminal('[NEXUS SYNC] ❌ Encryption passphrase required.', 'warn');
+        return;
+      }
+
+      diag.logToTerminal('[NEXUS SYNC] Initiating manual zero-knowledge database sync...', 'info');
+      triggerSyncBtn.disabled = true;
+      const originalText = triggerSyncBtn.innerHTML;
+      triggerSyncBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> SYNCING...';
+
+      try {
+        const res = await lukasMemory.syncWithServer(passphrase);
+        if (res.success) {
+          diag.logToTerminal('[NEXUS SYNC] Zero-knowledge database sync successfully completed.', 'info');
+          updateMemoryPanel();
+        } else {
+          diag.logToTerminal(`[NEXUS SYNC] ❌ Sync failed: ${res.error}`, 'error');
+        }
+      } catch (err) {
+        diag.logToTerminal(`[NEXUS SYNC] ❌ Sync exception: ${err.message}`, 'error');
+      } finally {
+        triggerSyncBtn.disabled = false;
+        triggerSyncBtn.innerHTML = originalText;
+      }
+    });
+  }
+
+  if (purgeDatabaseBtn) {
+    purgeDatabaseBtn.addEventListener('click', async () => {
+      if (!confirm('Are you sure you want to purge all memory? This will clear short-term memory, long-term memory, local browser storage, and the server-backed secure database.')) {
+        return;
+      }
+      diag.logToTerminal('[NEXUS SYNC] Purging memory database...', 'warn');
+      lukasMemory.clearAllMemory();
+      
+      const enabled = localStorage.getItem('lukas_sync_enabled') === 'true';
+      if (enabled) {
+        try {
+          const resp = await fetch('/api/storage/purge', { method: 'POST' });
+          const resData = await resp.json();
+          if (resData.success) {
+            diag.logToTerminal('[NEXUS SYNC] Local server secure storage database files wiped successfully.', 'info');
+          } else {
+            diag.logToTerminal(`[NEXUS SYNC] ❌ Failed to purge server storage: ${resData.error}`, 'error');
+          }
+        } catch (err) {
+          diag.logToTerminal(`[NEXUS SYNC] ❌ Failed to purge server storage: ${err.message}`, 'error');
+        }
+      }
+      updateMemoryPanel();
+      diag.logToTerminal('[NEXUS SYNC] Memory database purged successfully.', 'info');
     });
   }
 

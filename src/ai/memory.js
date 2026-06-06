@@ -57,6 +57,12 @@ class LukasMemory {
       localStorage.setItem('lukas_mem_projects', JSON.stringify(this.longTerm.projects));
       localStorage.setItem('lukas_mem_patterns', JSON.stringify(this.longTerm.patterns));
       localStorage.setItem('lukas_mem_sessions', JSON.stringify(this.longTerm.sessionCount));
+      
+      const enabled = localStorage.getItem('lukas_sync_enabled') === 'true';
+      const phrase = localStorage.getItem('lukas_sync_passphrase');
+      if (enabled && phrase) {
+        this.syncWithServer(phrase).catch(e => console.error('[LUKAS Memory] Auto-sync failed:', e));
+      }
     } catch (e) {
       console.warn('[LUKAS Memory] Storage write failed:', e);
     }
@@ -265,7 +271,20 @@ class LukasMemory {
     // [PROJECTS MEMORY]
     lines.push('\n### [PROJECTS MEMORY]');
     if (projects.length > 0) {
-      const projectList = projects
+      const activeProjName = (this.shortTerm.currentProject || '').toLowerCase();
+      // Select projects relevant to active session topics or current project, fallback to 2 most recent
+      let relevantProjects = projects.filter(p => {
+        const nameLower = p.name.toLowerCase();
+        return nameLower === activeProjName || topics.some(t => t.toLowerCase().includes(nameLower));
+      });
+
+      if (relevantProjects.length === 0) {
+        relevantProjects = projects
+          .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+          .slice(0, 2);
+      }
+
+      const projectList = relevantProjects
         .map(p => {
           let pLines = `• Project: ${p.name}${p.status ? ` [${p.status}]` : ''}${p.description ? `: ${p.description}` : ''}`;
           if (p.goals && p.goals.length > 0) {
@@ -285,6 +304,7 @@ class LukasMemory {
     // [LONG-TERM MEMORY]
     lines.push('\n### [LONG-TERM MEMORY]');
     if (prefs.responseStyle) lines.push(`Prefers: ${prefs.responseStyle} responses`);
+    if (prefs.personalityMode) lines.push(`Active Mode: ${prefs.personalityMode}`);
     if (prefs.language && prefs.language !== 'en') lines.push(`Language: ${prefs.language}`);
     const factKeys = Object.keys(facts).filter(k => !['name', 'location'].includes(k));
     if (factKeys.length > 0) {
@@ -503,6 +523,78 @@ class LukasMemory {
       },
       longTerm: this.longTerm,
     };
+  }
+
+  async syncWithServer(passphrase) {
+    if (!passphrase) return { success: false, error: 'No passphrase provided' };
+    try {
+      const { encryptData } = await import('./crypto.js');
+      
+      const encPreferences = await encryptData(JSON.stringify(this.longTerm.preferences), passphrase);
+      const encFacts = await encryptData(JSON.stringify(this.longTerm.facts), passphrase);
+      const encProjects = await encryptData(JSON.stringify(this.longTerm.projects), passphrase);
+      
+      const payloads = [
+        { type: 'preferences', payload: encPreferences },
+        { type: 'facts', payload: encFacts },
+        { type: 'projects', payload: encProjects }
+      ];
+      
+      for (const item of payloads) {
+        const response = await fetch('/api/storage/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(item)
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to sync ${item.type}`);
+        }
+      }
+      
+      console.log('[LUKAS Memory] Zero-Knowledge database sync successfully completed.');
+      return { success: true };
+    } catch (e) {
+      console.error('[LUKAS Memory] Sync failed:', e);
+      return { success: false, error: e.message };
+    }
+  }
+
+  async loadFromServer(passphrase) {
+    if (!passphrase) return { success: false, error: 'No passphrase provided' };
+    try {
+      const { decryptData } = await import('./crypto.js');
+      const types = ['preferences', 'facts', 'projects'];
+      let loadedAny = false;
+      
+      for (const type of types) {
+        const response = await fetch(`/api/storage/load?type=${type}`);
+        if (response.ok) {
+          const resData = await response.json();
+          if (resData.success && resData.found && resData.payload) {
+            const decrypted = await decryptData(resData.payload, passphrase);
+            const parsed = JSON.parse(decrypted);
+            
+            if (type === 'preferences') {
+              this.longTerm.preferences = { ...this.longTerm.preferences, ...parsed };
+            } else if (type === 'facts') {
+              this.longTerm.facts = { ...this.longTerm.facts, ...parsed };
+            } else if (type === 'projects') {
+              this.longTerm.projects = { ...this.longTerm.projects, ...parsed };
+            }
+            loadedAny = true;
+          }
+        }
+      }
+      
+      if (loadedAny) {
+        this._saveLongTerm(); // Cache to LocalStorage
+        console.log('[LUKAS Memory] Decrypted and loaded secure server database backup.');
+      }
+      return { success: true, loaded: loadedAny };
+    } catch (e) {
+      console.error('[LUKAS Memory] Load from server failed:', e);
+      return { success: false, error: e.message };
+    }
   }
 
   clearAllMemory() {

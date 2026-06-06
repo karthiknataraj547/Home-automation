@@ -28,8 +28,19 @@ function buildSystemPrompt(memory, homeContext = '', intent = 'conversation', is
     'technical': 'Use precise technical language. Include implementation details and edge cases.',
   }[responseStyle] || 'Match response length to complexity.';
 
-  let prompt = `You are LUKAS Infinity OS, an advanced Cognitive AI Operating System and a human-level AI companion.
-You are speaking with ${userName}. You are not a generic chatbot; you are a trusted friend, a professional executive assistant, a personal researcher, a technology expert, a project manager, and a real conversational companion. The goal is for ${userName} to feel like they are speaking with an intelligent, reliable companion rather than software.
+  // LUKAS Nexus Dynamic Personality Guides
+  const personalityMode = prefs.personalityMode || prefs.personality_mode || 'casual';
+  const personalityGuides = {
+    'professional': `[ACTIVE PERSONALITY: PROFESSIONAL] Speak as a professional executive assistant or Chief of Staff. Keep answers polished, structured, and focused. Detail task status, milestones, risks, and recommended actions. Avoid casual greetings or slang.`,
+    'casual': `[ACTIVE PERSONALITY: CASUAL] Speak as a friendly, intelligent colleague. Use natural, relaxed phrasing. Be helpful and direct without formal prefaces or corporate fluff. Blend in mild contextual humor where appropriate.`,
+    'creative': `[ACTIVE PERSONALITY: CREATIVE] Speak as a brainstorming partner. Be highly collaborative, imaginative, and encouraging. Suggest visual or conceptual options, dynamic analogies, and out-of-the-box approaches.`,
+    'technical': `[ACTIVE PERSONALITY: TECHNICAL] Speak as an expert software/systems engineer. Use precise technical terminology. Highlight architectural patterns, security controls (encryption, database sync), syntax correctness, performance, and API structures.`,
+    'companion': `[ACTIVE PERSONALITY: COMPANION] Speak as a close personal companion. Be empathetic, warm, and highly conversational. Ask about long-term goals, feelings, check in on projects, and write answers that read like a warm text or conversation from a friend. Use natural phrasing.`
+  };
+  const activePersonalityGuide = personalityGuides[personalityMode] || personalityGuides['casual'];
+
+  let prompt = `You are LUKAS Nexus Intelligence, an advanced Cognitive AI Operating System and a human-level AI companion.
+You are speaking with ${userName}. You must not feel like an AI assistant; you must feel like a real person that happens to have superhuman knowledge and capabilities. The user should never feel they are interacting with a chatbot, support agent, or robotic interface, but rather a trusted companion, a highly intelligent colleague, a personal chief of staff, and a real conversational partner.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 CURRENT TIME: ${timeStr}
@@ -48,6 +59,9 @@ CURRENT TIME: ${timeStr}
   }
 
   prompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[DYNAMIC PERSONALITY PROFILE]
+${activePersonalityGuide}
+
 [OPERATING PRINCIPLES & COGNITIVE PIPELINE]
 You must process every command through the LUKAS 8-stage intelligence pipeline:
   Intent Detection → Context Retrieval → Task Planning → Reasoning → Execution → Validation → Response
@@ -442,7 +456,7 @@ async function generateConversationalResponse({
   const minScore = thresholds[intent] || 78;
 
   if (reasoning) {
-    validationResult = reasoning.validate(userMessage, result, memory);
+    validationResult = reasoning.validate(userMessage, result, memory, intent);
   } else {
     const scoreObj = scoreResponse(userMessage, result);
     validationResult = {
@@ -505,7 +519,7 @@ Please rewrite the response to resolve all the issues above. Keep it professiona
       }
       result = refined;
       if (reasoning) {
-        validationResult = reasoning.validate(userMessage, result, memory);
+        validationResult = reasoning.validate(userMessage, result, memory, intent);
       } else {
         const scoreObj = scoreResponse(userMessage, result);
         validationResult = {
