@@ -16,6 +16,17 @@ class LukasVoiceController {
     const storedRate = parseFloat(localStorage.getItem('lukas_vocal_rate'));
     this.vocalVolume = isNaN(storedVol)  ? 1.0 : storedVol;
     this.vocalRate   = isNaN(storedRate) ? 1.0 : storedRate;
+    
+    // Infinity OS Custom Voice Parameters
+    this.preferredAccent = localStorage.getItem('lukas_voice_accent') || 'en-US';
+    this.speakingRateProfile = localStorage.getItem('lukas_voice_rate') || 'normal';
+    this.emotionalToneMode = localStorage.getItem('lukas_voice_emotional_tone') || 'adaptive';
+    this.speechQueue = [];
+    this.currentSegmentIndex = 0;
+    this.activeUtterance = null;
+    this.activeTimeout = null;
+    this.currentSpeechEmotion = null;
+
     this.isListening = false;
     this.isListeningForWakeWord = false;
     this.isLongConversation = false;
@@ -78,17 +89,20 @@ class LukasVoiceController {
     this.initSpeechRecognition();
   }
 
-  // Resolve the best voice option matching a target locale (like 'en-IN', 'hi-IN', etc.)
-  // Prefers premium/natural/neural voices in order of quality indicators.
   getVoiceForLanguage(langCode) {
     if (!this.synth) return null;
     const voices = this.synth.getVoices();
     if (voices.length === 0) return null;
 
-    const targetLang = (langCode || 'en-IN').toLowerCase();
+    let targetLang = (langCode || 'en-IN').toLowerCase();
     const langPrefix = targetLang.split('-')[0];
 
-    // Filter exact match (e.g. 'en-in')
+    // If target language is general English, map to preferred accent profile
+    if (langPrefix === 'en') {
+      targetLang = (this.preferredAccent || 'en-US').toLowerCase();
+    }
+
+    // Filter exact match (e.g. 'en-us')
     let matchedVoices = voices.filter(v => v.lang.toLowerCase() === targetLang);
 
     // Fallback to language prefix matching (e.g. 'en')
@@ -106,8 +120,12 @@ class LukasVoiceController {
       matchedVoices = voices;
     }
 
-    // Keywords prioritizing premium vocal engines (Microsoft Natural, Google TTS, Siri, etc.)
-    const premiumKeywords = ['natural', 'google', 'neural', 'premium', 'siri', 'aria', 'guy', 'danny', 'ravi', 'heera', 'david', 'zira', 'hazel', 'mark'];
+    // Keywords prioritizing premium vocal engines (Microsoft Natural, Google TTS, Siri, Alexa, etc.)
+    const premiumKeywords = [
+      'natural', 'google', 'neural', 'premium', 'siri', 'aria', 'guy', 'danny', 
+      'ravi', 'heera', 'david', 'zira', 'hazel', 'mark', 'george', 'susan', 
+      'ashley', 'karen', 'karan', 'neerja', 'linda', 'heather', 'catherine'
+    ];
     
     matchedVoices.sort((a, b) => {
       const nameA = a.name.toLowerCase();
@@ -539,13 +557,19 @@ class LukasVoiceController {
   }
 
   cancelSpeech() {
-    this.queuedUtterances = [];
+    this.speechQueue = [];
+    this.currentSegmentIndex = 0;
+    if (this.activeTimeout) {
+      clearTimeout(this.activeTimeout);
+      this.activeTimeout = null;
+    }
     if (this.activeUtterance) {
       this.activeUtterance.onstart = null;
       this.activeUtterance.onend = null;
       this.activeUtterance.onerror = null;
       this.activeUtterance = null;
     }
+    this.queuedUtterances = [];
     if (this.synth) {
       this.synth.cancel();
     }
@@ -666,32 +690,195 @@ class LukasVoiceController {
     return this.isMuted;
   }
 
-  // Vocalize responses — progressive sentence chunking for low latency
+  // Dynamic segments parser
+  _parseSpeechSegments(text) {
+    const segments = [];
+    const regex = /\[(EMOTION|PAUSE):\s*([^\]]+)\]/gi;
+    let lastIndex = 0;
+    let match;
+
+    while ((match = regex.exec(text)) !== null) {
+      const textSegment = text.slice(lastIndex, match.index).trim();
+      if (textSegment) {
+        segments.push({ type: 'text', content: textSegment });
+      }
+
+      const tagType = match[1].toUpperCase();
+      const tagValue = match[2].trim();
+
+      if (tagType === 'EMOTION') {
+        segments.push({ type: 'emotion', value: tagValue.toLowerCase() });
+      } else if (tagType === 'PAUSE') {
+        const duration = parseInt(tagValue, 10);
+        segments.push({ type: 'pause', duration: isNaN(duration) ? 200 : duration });
+      }
+
+      lastIndex = regex.lastIndex;
+    }
+
+    const remainingText = text.slice(lastIndex).trim();
+    if (remainingText) {
+      segments.push({ type: 'text', content: remainingText });
+    }
+
+    return segments;
+  }
+
+  // Vocalize responses — progressive sentence chunking for low latency with prosody
   speak(text) {
     this.lastSpokenText = text;
     this.latency.speechStartAt = Date.now();
     this.cancelSpeech();
 
-    // Split into sentences for progressive delivery
-    // First sentence plays immediately; rest are queued
-    const sentences = this._splitIntoSentences(text);
-    if (sentences.length <= 1) {
-      this.speakSentence(text);
+    // Set temporary speaking emotion based on configuration
+    this.currentSpeechEmotion = this.emotionalToneMode === 'adaptive' ? null : this.emotionalToneMode;
+
+    const segments = this._parseSpeechSegments(text);
+    const finalSegments = [];
+
+    for (const seg of segments) {
+      if (seg.type === 'text') {
+        const sentences = this._splitIntoSentences(seg.content);
+        for (let i = 0; i < sentences.length; i++) {
+          finalSegments.push({ type: 'text', content: sentences[i] });
+          // Inject a soft breathing/comma pause between sentences (180ms-250ms)
+          if (i < sentences.length - 1) {
+            finalSegments.push({ type: 'pause', duration: 200 });
+          }
+        }
+      } else {
+        finalSegments.push(seg);
+      }
+    }
+
+    this.speechQueue = finalSegments;
+    this.currentSegmentIndex = 0;
+
+    if (this.onSpeechStart && this.speechQueue.length > 0) {
+      this.onSpeechStart();
+    }
+
+    this._processNextSpeechSegment();
+  }
+
+  _processNextSpeechSegment() {
+    if (this.currentSegmentIndex >= this.speechQueue.length) {
+      this.speakingText = '';
+      if (this.onSpeechEnd) this.onSpeechEnd();
       return;
     }
 
-    // Speak first sentence right away
-    this.speakSentence(sentences[0]);
-    // Queue remaining sentences
-    for (let i = 1; i < sentences.length; i++) {
-      this.speakSentence(sentences[i]);
+    const seg = this.speechQueue[this.currentSegmentIndex];
+    this.currentSegmentIndex++;
+
+    if (seg.type === 'emotion') {
+      this.currentSpeechEmotion = seg.value.toLowerCase();
+      this._processNextSpeechSegment();
+    } else if (seg.type === 'pause') {
+      this.activeTimeout = setTimeout(() => {
+        this._processNextSpeechSegment();
+      }, seg.duration);
+    } else if (seg.type === 'text') {
+      this.speakSegmentText(seg.content);
     }
+  }
+
+  speakSegmentText(cleanedText) {
+    if (!cleanedText || !cleanedText.trim()) {
+      this._processNextSpeechSegment();
+      return;
+    }
+
+    if (!this.synth || this.isMuted) {
+      this._processNextSpeechSegment();
+      return;
+    }
+
+    const utterance = new SpeechSynthesisUtterance(cleanedText);
+    this.activeUtterance = utterance;
+
+    // Dynamic language detection
+    const detectedLang = this.detectLanguageOfText(cleanedText);
+    const speechLang = detectedLang || this.speechLang || 'en-IN';
+    const activeVoice = this.getVoiceForLanguage(speechLang);
+    if (activeVoice) {
+      utterance.voice = activeVoice;
+      utterance.lang = activeVoice.lang;
+    } else {
+      utterance.lang = speechLang;
+    }
+    
+    // Determine dynamic speaking rate
+    let baseRate = 1.0;
+    if (this.speakingRateProfile === 'slow') {
+      baseRate = 0.82;
+    } else if (this.speakingRateProfile === 'fast') {
+      baseRate = 1.25;
+    } else {
+      baseRate = this.vocalRate || 1.0;
+    }
+
+    let pitch = 0.95;
+    let rateMultiplier = 1.0;
+
+    const emotion = this.currentSpeechEmotion || 'normal';
+    if (emotion === 'excited' || emotion === 'enthusiastic') {
+      pitch = 1.08;
+      rateMultiplier = 1.15;
+    } else if (emotion === 'calm' || emotion === 'empathy' || emotion === 'empathetic') {
+      pitch = 0.92;
+      rateMultiplier = 0.88;
+    } else if (emotion === 'confident' || emotion === 'professional') {
+      pitch = 0.98;
+      rateMultiplier = 1.0;
+    } else if (emotion === 'urgency' || emotion === 'urgent') {
+      pitch = 1.05;
+      rateMultiplier = 1.25;
+    } else if (emotion === 'encouragement' || emotion === 'encouraging') {
+      pitch = 1.02;
+      rateMultiplier = 1.05;
+    }
+
+    utterance.pitch = pitch;
+    utterance.rate = baseRate * rateMultiplier;
+    utterance.volume = this.vocalVolume;
+
+    this.speakingText = cleanedText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+
+    if (this.recognition) {
+      try {
+        if (!this.isRecognitionActive) {
+          this.recognition.start();
+          this.isRecognitionActive = true;
+          this.lastStartTime = Date.now();
+        }
+      } catch(e) {
+        console.warn("[voice.js] Could not start recognition on speech start:", e.message);
+      }
+    }
+
+    utterance.onend = () => {
+      this.activeUtterance = null;
+      this._processNextSpeechSegment();
+    };
+
+    utterance.onerror = (err) => {
+      console.error("Speech Synthesis Utterance Error:", err);
+      this.activeUtterance = null;
+      this._processNextSpeechSegment();
+    };
+
+    this.synth.speak(utterance);
+  }
+
+  // Redirect legacy calls
+  speakSentence(text) {
+    this.speak(text);
   }
 
   // Split text on sentence boundaries for progressive TTS
   _splitIntoSentences(text) {
     const clean = text.replace(/[*_`]/g, '').replace(/\[.*?\]/g, '').trim();
-    // Split on . ? ! followed by space or end, but keep abbreviations safe
     const parts = clean.match(/[^.!?]+[.!?](?:\s|$)|[^.!?]+$/g) || [clean];
     return parts.map(s => s.trim()).filter(s => s.length > 1);
   }
@@ -748,79 +935,6 @@ class LukasVoiceController {
     return null;
   }
 
-  // Stream-compatible sentence speak handler
-  speakSentence(text) {
-    if (!text || !text.trim()) return;
-    
-    if (!this.synth || this.isMuted) {
-      if (this.onSpeechStart && this.queuedUtterances.length === 0) this.onSpeechStart();
-      setTimeout(() => {
-        if (this.queuedUtterances.length === 0 && this.onSpeechEnd) this.onSpeechEnd();
-      }, 800);
-      return;
-    }
-
-    const cleanedText = text.replace(/[*_`]/g, '').replace(/\[.*\]/g, '').trim();
-    if (!cleanedText) return;
-
-    const utterance = new SpeechSynthesisUtterance(cleanedText);
-    this.queuedUtterances.push(utterance);
-
-    // Dynamic language detection
-    const detectedLang = this.detectLanguageOfText(cleanedText);
-    const speechLang = detectedLang || this.speechLang || 'en-IN';
-    const activeVoice = this.getVoiceForLanguage(speechLang);
-    if (activeVoice) {
-      utterance.voice = activeVoice;
-      utterance.lang = activeVoice.lang;
-    } else {
-      utterance.lang = speechLang;
-    }
-    
-    // Set slightly robotic pitch/rate parameters
-    utterance.pitch = 0.95; 
-    utterance.volume = this.vocalVolume;
-    utterance.rate = this.vocalRate;
-
-    utterance.onstart = () => {
-      this.speakingText = cleanedText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-      if (this.onSpeechStart && this.queuedUtterances[0] === utterance) {
-        this.onSpeechStart();
-      }
-      // Always start/keep speech recognition active while speaking to support interrupts (e.g. stop command)
-      if (this.recognition) {
-        try {
-          if (!this.isRecognitionActive) {
-            this.recognition.start();
-            this.isRecognitionActive = true;
-            this.lastStartTime = Date.now();
-          }
-        } catch(e) {
-          console.warn("[voice.js] Could not start recognition on speech start:", e.message);
-        }
-      }
-    };
-
-    const handleFinished = () => {
-      const idx = this.queuedUtterances.indexOf(utterance);
-      if (idx !== -1) {
-        this.queuedUtterances.splice(idx, 1);
-      }
-      if (this.queuedUtterances.length === 0) {
-        this.speakingText = '';
-        if (this.onSpeechEnd) this.onSpeechEnd();
-      }
-    };
-
-    utterance.onend = handleFinished;
-    utterance.onerror = (err) => {
-      console.error("Speech Synthesis Utterance Error:", err);
-      handleFinished();
-    };
-
-    this.synth.speak(utterance);
-  }
-
   // Toggle listening recognition process
   toggleListening() {
     if (!this.recognition) {
@@ -867,6 +981,25 @@ class LukasVoiceController {
       this.preferredVoice = this.getVoiceForLanguage(lang);
       console.log(`[voice.js] Speech Synthesis voice updated: ${this.preferredVoice?.name || 'Default'} (${this.preferredVoice?.lang || 'unknown'})`);
     }
+  }
+
+  setAccent(accent) {
+    this.preferredAccent = accent;
+    localStorage.setItem('lukas_voice_accent', accent);
+    if (this.synth) {
+      this.preferredVoice = this.getVoiceForLanguage(this.speechLang || 'en-IN');
+      console.log(`[voice.js] Speech Synthesis voice updated for accent: ${this.preferredVoice?.name || 'Default'}`);
+    }
+  }
+
+  setSpeakingRateProfile(rateProfile) {
+    this.speakingRateProfile = rateProfile;
+    localStorage.setItem('lukas_voice_rate', rateProfile);
+  }
+
+  setEmotionalToneMode(toneMode) {
+    this.emotionalToneMode = toneMode;
+    localStorage.setItem('lukas_voice_emotional_tone', toneMode);
   }
 
   startListeningForCommand() {

@@ -552,6 +552,31 @@ function initializeDashboard() {
           personalityModeSelect.value = loadedMode;
           localStorage.setItem('lukas_personality_mode', loadedMode);
         }
+
+        // Update voice customizations from restored preferences
+        const voiceAccentSelect = document.getElementById('voiceAccentSelect');
+        if (voiceAccentSelect) {
+          const loadedAccent = lukasMemory.getPreference('voiceAccent', 'en-US');
+          voiceAccentSelect.value = loadedAccent;
+          localStorage.setItem('lukas_voice_accent', loadedAccent);
+          voice.setAccent(loadedAccent);
+        }
+
+        const voiceRateSelect = document.getElementById('voiceRateSelect');
+        if (voiceRateSelect) {
+          const loadedRate = lukasMemory.getPreference('voiceRate', 'normal');
+          voiceRateSelect.value = loadedRate;
+          localStorage.setItem('lukas_voice_rate', loadedRate);
+          voice.setSpeakingRateProfile(loadedRate);
+        }
+
+        const voiceEmotionalToneSelect = document.getElementById('voiceEmotionalToneSelect');
+        if (voiceEmotionalToneSelect) {
+          const loadedTone = lukasMemory.getPreference('voiceEmotionalTone', 'adaptive');
+          voiceEmotionalToneSelect.value = loadedTone;
+          localStorage.setItem('lukas_voice_emotional_tone', loadedTone);
+          voice.setEmotionalToneMode(loadedTone);
+        }
       }
     });
   }
@@ -2708,6 +2733,55 @@ function bindUIEvents() {
       lukasMemory.setPreference('personalityMode', selectedMode);
       diag.logToTerminal(`[SETTINGS] LUKAS personality mode changed to: ${selectedMode.toUpperCase()}.`, 'info');
       updateMemoryPanel();
+    });
+  }
+
+  // ── LUKAS Infinity Voice Customizations ─────────────────────────────────
+  const voiceAccentSelect = document.getElementById('voiceAccentSelect');
+  if (voiceAccentSelect) {
+    const savedAccent = localStorage.getItem('lukas_voice_accent') || lukasMemory.getPreference('voiceAccent', 'en-US');
+    voiceAccentSelect.value = savedAccent;
+    voice.setAccent(savedAccent);
+    lukasMemory.setPreference('voiceAccent', savedAccent);
+    
+    voiceAccentSelect.addEventListener('change', () => {
+      const selectedAccent = voiceAccentSelect.value;
+      voice.setAccent(selectedAccent);
+      localStorage.setItem('lukas_voice_accent', selectedAccent);
+      lukasMemory.setPreference('voiceAccent', selectedAccent);
+      diag.logToTerminal(`[SETTINGS] English accent profile changed to: ${selectedAccent.toUpperCase()}.`, 'info');
+    });
+  }
+
+  const voiceRateSelect = document.getElementById('voiceRateSelect');
+  if (voiceRateSelect) {
+    const savedRate = localStorage.getItem('lukas_voice_rate') || lukasMemory.getPreference('voiceRate', 'normal');
+    voiceRateSelect.value = savedRate;
+    voice.setSpeakingRateProfile(savedRate);
+    lukasMemory.setPreference('voiceRate', savedRate);
+    
+    voiceRateSelect.addEventListener('change', () => {
+      const selectedRate = voiceRateSelect.value;
+      voice.setSpeakingRateProfile(selectedRate);
+      localStorage.setItem('lukas_voice_rate', selectedRate);
+      lukasMemory.setPreference('voiceRate', selectedRate);
+      diag.logToTerminal(`[SETTINGS] Speaking rate profile changed to: ${selectedRate.toUpperCase()}.`, 'info');
+    });
+  }
+
+  const voiceEmotionalToneSelect = document.getElementById('voiceEmotionalToneSelect');
+  if (voiceEmotionalToneSelect) {
+    const savedTone = localStorage.getItem('lukas_voice_emotional_tone') || lukasMemory.getPreference('voiceEmotionalTone', 'adaptive');
+    voiceEmotionalToneSelect.value = savedTone;
+    voice.setEmotionalToneMode(savedTone);
+    lukasMemory.setPreference('voiceEmotionalTone', savedTone);
+    
+    voiceEmotionalToneSelect.addEventListener('change', () => {
+      const selectedTone = voiceEmotionalToneSelect.value;
+      voice.setEmotionalToneMode(selectedTone);
+      localStorage.setItem('lukas_voice_emotional_tone', selectedTone);
+      lukasMemory.setPreference('voiceEmotionalTone', selectedTone);
+      diag.logToTerminal(`[SETTINGS] Emotional tone mode changed to: ${selectedTone.toUpperCase()}.`, 'info');
     });
   }
 
