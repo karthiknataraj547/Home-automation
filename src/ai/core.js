@@ -357,61 +357,138 @@ async function generateConversationalResponse({
   apiProvider,
   streamCallback = null,
   isVoice = false,
+  systemPrompt = null,
+  temperature = 0.75,
+  maxTokens = 1500,
 }) {
-  const systemPrompt = buildSystemPrompt(memory, homeContext, intent, isVoice);
+  const finalSystemPrompt = systemPrompt || buildSystemPrompt(memory, homeContext, intent, isVoice);
 
-  const result = await callLukasAI({
-    systemPrompt,
+  let result = await callLukasAI({
+    systemPrompt: finalSystemPrompt,
     userMessage,
     memory,
     apiKey,
     apiProvider,
-    temperature: 0.75,
-    maxTokens: 1500,
+    temperature,
+    maxTokens,
     jsonMode: false,
-    includeHistory: true,
+    includeHistory: !!memory,
     streamCallback,
   });
 
+  // If streaming is active, we cannot intercept to refine, so return immediately
+  if (streamCallback) return result;
+
+  // ── LUKAS Response Quality Self-Reflection & Refinement Algorithm ──
+  let scoreObj = scoreResponse(userMessage, result);
+  let attempts = 0;
+
+  while (scoreObj.score < 85 && attempts < 2) {
+    console.log(`[Self-Reflection] Response scored low (${scoreObj.score}/100). Regrets:`, scoreObj.issues);
+
+    const reflectionPrompt = `You are LUKAS's response refinement engine. The previous response was evaluated and had some issues:
+${scoreObj.issues.map(i => `- ${i}`).join('\n')}
+
+Original user query: "${userMessage}"
+Previous response: "${result}"
+
+Please rewrite the response to resolve all the issues above. Keep it professional, Jarvis-style, natural, concise, and completely accurate. Do NOT apologize, do NOT say "as an AI", and do NOT explain your edits; return ONLY the refined response text.`;
+
+    const refined = await callLukasAI({
+      systemPrompt: "You are LUKAS, an advanced AI Operating System. You refine and polish your own text to be perfect.",
+      userMessage: reflectionPrompt,
+      memory: null,
+      apiKey,
+      apiProvider,
+      temperature: 0.45, // lower temperature for target correction
+      maxTokens: Math.max(600, maxTokens),
+      jsonMode: false,
+      includeHistory: false,
+    });
+
+    if (refined && refined.trim().length > 5) {
+      result = refined;
+      scoreObj = scoreResponse(userMessage, result);
+    }
+    attempts++;
+  }
+
+  console.log(`[Self-Reflection] Final response score: ${scoreObj.score}/100 after ${attempts} refinement attempts.`);
   return result;
 }
 
 /**
  * Quality scoring — evaluate response before delivering.
- * Returns { score, issues, improved } where score is 0-100.
+ * Returns { score, issues } where score is 0-100.
  */
 function scoreResponse(userInput, response) {
   if (!response) return { score: 0, issues: ['No response generated'] };
 
   const issues = [];
   let score = 100;
+  const lowerResp = response.toLowerCase().trim();
 
-  // Length checks
-  if (response.length < 10) { issues.push('Response too short'); score -= 40; }
-  if (response.length > 3000) { issues.push('Response may be too verbose'); score -= 5; }
+  // 1. Length checks
+  if (response.length < 8) { issues.push('Response too short'); score -= 40; }
+  if (response.length > 2500) { issues.push('Response may be too verbose'); score -= 5; }
 
-  // AI wording check
-  const badPhrases = ['as an ai', 'as a language model', 'i cannot', 'i am unable to', 'i don\'t have the ability'];
-  for (const phrase of badPhrases) {
-    if (response.toLowerCase().includes(phrase)) {
-      issues.push(`Contains generic AI phrasing: "${phrase}"`);
-      score -= 15;
-      break;
+  // 2. AI disclaimers and internet limitation checks (since live search is active)
+  const limitations = [
+    'cannot search', 'do not have access to real-time', 'do not have real-time',
+    'cut-off date', 'knowledge cutoff', 'offline assistant', 'as a language model',
+    'as an ai', 'do not have access to live', 'not connected to the internet'
+  ];
+  for (const phrase of limitations) {
+    if (lowerResp.includes(phrase)) {
+      issues.push(`Mentions AI real-time/internet limitations when search is active: "${phrase}"`);
+      score -= 25;
     }
   }
 
-  // Relevance check — basic keyword overlap
-  const inputWords = new Set(userInput.toLowerCase().split(/\s+/).filter(w => w.length > 3));
-  const responseWords = new Set(response.toLowerCase().split(/\s+/));
+  // 3. Robotic/AI filler checks
+  const badPhrases = ['i am unable to', 'i don\'t have the ability', 'i cannot answer', 'as an assistant', 'as an ai assistant'];
+  for (const phrase of badPhrases) {
+    if (lowerResp.includes(phrase)) {
+      issues.push(`Contains generic robotic phrasing: "${phrase}"`);
+      score -= 15;
+    }
+  }
+
+  // 4. Robotic transition words
+  const roboticTransitions = ['furthermore', 'in summary', 'consequently', 'firstly', 'secondly', 'lastly'];
+  let transitionCount = 0;
+  for (const transition of roboticTransitions) {
+    if (lowerResp.includes(transition)) {
+      transitionCount++;
+    }
+  }
+  if (transitionCount > 1) {
+    issues.push(`Contains multiple robotic transition words (${transitionCount})`);
+    score -= transitionCount * 5;
+  }
+
+  // 5. Apologetic phrases
+  const apologies = ['apologize for', 'sorry for the confusion', 'i apologize', 'i\'m sorry'];
+  for (const apology of apologies) {
+    if (lowerResp.includes(apology)) {
+      issues.push(`Contains apologetic phrases: "${apology}"`);
+      score -= 10;
+    }
+  }
+
+  // 6. Relevance check — basic keyword overlap
+  const stopWords = ['what', 'when', 'where', 'please', 'tell', 'show', 'about', 'is', 'the', 'a', 'an', 'and'];
+  const inputWords = new Set(userInput.toLowerCase().split(/\s+/).filter(w => w.length > 3 && !stopWords.includes(w)));
+  const responseWords = new Set(lowerResp.split(/\s+/));
   const overlap = [...inputWords].filter(w => responseWords.has(w)).length;
-  if (overlap === 0 && inputWords.size > 3) {
-    issues.push('Response may not address the query');
+  if (overlap === 0 && inputWords.size > 2) {
+    issues.push('Response does not overlap with key words of the query');
     score -= 20;
   }
 
-  // Check for incomplete responses
+  // 7. Check for incomplete responses
   if (response.endsWith('...') || response.includes('...\n')) {
-    issues.push('Response appears incomplete');
+    issues.push('Response appears incomplete or cut off');
     score -= 15;
   }
 

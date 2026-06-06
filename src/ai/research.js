@@ -3,7 +3,7 @@
 // Sources: Wikipedia, DuckDuckGo Instant, Serper/Google (via API), Web Scraping
 // ═══════════════════════════════════════════════════════════════════════
 
-import { callLukasAI } from './core.js';
+import { callLukasAI, generateConversationalResponse } from './core.js';
 
 class LukasResearchAgent {
   constructor() {
@@ -384,15 +384,14 @@ Rules:
     const userPrompt = `User asked: "${query}"\n\nReal-time search results:\n${sourceText}\n\nProvide a clear, accurate, conversational answer.`;
 
     try {
-      const result = await callLukasAI({
-        systemPrompt,
+      const result = await generateConversationalResponse({
         userMessage: userPrompt,
         memory: null,
         apiKey,
         apiProvider,
+        systemPrompt,
         temperature: 0.3,
         maxTokens: 600,
-        includeHistory: false,
       });
       return result;
     } catch (e) {
