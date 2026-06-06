@@ -215,6 +215,39 @@ class LukasVoiceController {
         // Interrupt check while speaking
         if (this.synth && this.synth.speaking) {
           const userSpeech = fullTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+          
+          // Check if userSpeech is a stop command
+          const stopWords = ['stop', 'cancel', 'shut up', 'quiet', 'stop talking', 'stop listening', 'stand down', 'go to sleep'];
+          const isStopCommand = stopWords.some(word => userSpeech === word || userSpeech.startsWith(word + ' '));
+          
+          if (isStopCommand) {
+            console.log(`[INTERRUPT] Stop command detected during speech: "${userSpeech}"`);
+            this.cancelSpeech();
+            this.speakingText = '';
+            
+            // Trigger speech end animations
+            if (this.onSpeechEnd) this.onSpeechEnd();
+            
+            // Stop active conversation and return to passive wake word listener
+            this.isLongConversation = false;
+            this.isCommandListeningActive = false;
+            this.isListeningForWakeWord = true;
+            this.accumulatedSpeechText = "";
+            this.lastSessionTranscript = "";
+            
+            // Stop recognition and restart in wake word mode
+            try { this.recognition.stop(); } catch(e) {}
+            setTimeout(() => {
+              this.startWakeWordListener();
+            }, 100);
+            
+            // Forward deactivation command to orchestrator/processCommand
+            if (this.onCommandRecognized) {
+              this.onCommandRecognized('stop');
+            }
+            return;
+          }
+          
           const isEcho = this.speakingText && (this.speakingText.includes(userSpeech) || userSpeech.includes(this.speakingText));
           if (!isEcho && userSpeech.length > 2) {
             console.log(`[INTERRUPT] User spoke during vocalization: "${userSpeech}"`);
@@ -433,12 +466,7 @@ class LukasVoiceController {
       return;
     }
     if (this.isRecognitionActive) return;
-    if (this.synth && this.synth.speaking) {
-      console.log("[voice.js] Delaying speech recognition start because synthesis is active.");
-      if (this.retryStartTimeout) clearTimeout(this.retryStartTimeout);
-      this.retryStartTimeout = setTimeout(() => this.startRecognitionInternal(), 600);
-      return;
-    }
+    // Allow starting recognition while speaking to support wake word or stop interrupts
 
     // Prevent hot-looping if started too recently (throttling)
     const now = Date.now();
@@ -579,10 +607,17 @@ class LukasVoiceController {
       if (this.onSpeechStart && this.queuedUtterances[0] === utterance) {
         this.onSpeechStart();
       }
-      if (this.isLongConversation) {
+      // Always start/keep speech recognition active while speaking to support interrupts (e.g. stop command)
+      if (this.recognition) {
         try {
-          this.recognition.start();
-        } catch(e) {}
+          if (!this.isRecognitionActive) {
+            this.recognition.start();
+            this.isRecognitionActive = true;
+            this.lastStartTime = Date.now();
+          }
+        } catch(e) {
+          console.warn("[voice.js] Could not start recognition on speech start:", e.message);
+        }
       }
     };
 

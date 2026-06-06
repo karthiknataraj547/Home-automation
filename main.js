@@ -3772,16 +3772,16 @@ async function handleResearchIntent(rawCommand, apiKey, apiProvider, source = 'u
   if (result && result.answer) {
     diag.logToTerminal(`[RESEARCH AGENT] Research finished with confidence: ${Math.round(result.confidence * 100)}%`, "info");
     
-    // Split for spoken readout (first two sentences)
+    // Split for spoken readout (first two sentences for terminal logging only)
     const sentences = result.answer.split(/(?<=[.!?])\s+/);
     const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(" ");
     
-    diag.logToTerminal(`[LUKAS REPLY] "${speechSummary}"`, 'info');
+    diag.logToTerminal(`[LUKAS REPLY] "${speechSummary}..."`, 'info');
     
     const displayAnswer = `${result.answer}\n\n*Sources: ${result.sources.join(', ') || 'Web Search'}*`;
     appendChatBubble(displayAnswer, 'assistant');
     voice.stopWakeWordListener();
-    voice.speak(speechSummary);
+    voice.speak(result.answer);
     
     lukasMemory.addMessage('assistant', displayAnswer, 'research');
     keepConversationAlive(12000); // Hold mic active for follow-ups
@@ -4777,10 +4777,10 @@ function runWikipediaSearchFallback(rawCommand) {
       const sentences = result.summary.split(/(?<=[.!?])\s+/);
       const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(" ");
       
-      diag.logToTerminal(`[LUKAS REPLY] "${speechSummary}"`, 'info');
+      diag.logToTerminal(`[LUKAS REPLY] "${speechSummary}..."`, 'info');
       appendChatBubble(`${result.title}: ${result.summary}`, 'assistant', result.url);
       voice.stopWakeWordListener();
-      voice.speak(speechSummary);
+      voice.speak(result.summary);
     } else {
       const fallbackText = `I searched my local databases and the web for "${rawCommand}", but couldn't locate any matching records. Would you like me to run smart home diagnostics or perform a broader Wikipedia search?`;
       activeFollowUp = {
