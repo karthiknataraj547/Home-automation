@@ -56,18 +56,62 @@ class LukasVoiceController {
     this.initSpeechRecognition();
   }
 
+  // Resolve the best voice option matching a target locale (like 'en-IN', 'hi-IN', etc.)
+  // Prefers premium/natural/neural voices in order of quality indicators.
+  getVoiceForLanguage(langCode) {
+    if (!this.synth) return null;
+    const voices = this.synth.getVoices();
+    if (voices.length === 0) return null;
+
+    const targetLang = (langCode || 'en-IN').toLowerCase();
+    const langPrefix = targetLang.split('-')[0];
+
+    // Filter exact match (e.g. 'en-in')
+    let matchedVoices = voices.filter(v => v.lang.toLowerCase() === targetLang);
+
+    // Fallback to language prefix matching (e.g. 'en')
+    if (matchedVoices.length === 0) {
+      matchedVoices = voices.filter(v => v.lang.toLowerCase().startsWith(langPrefix));
+    }
+
+    // Fallback to any English voice
+    if (matchedVoices.length === 0) {
+      matchedVoices = voices.filter(v => v.lang.toLowerCase().startsWith('en'));
+    }
+
+    // Ultimate fallback to whatever is available
+    if (matchedVoices.length === 0) {
+      matchedVoices = voices;
+    }
+
+    // Keywords prioritizing premium vocal engines (Microsoft Natural, Google TTS, Siri, etc.)
+    const premiumKeywords = ['natural', 'google', 'neural', 'premium', 'siri', 'aria', 'guy', 'danny', 'ravi', 'heera', 'david', 'zira', 'hazel', 'mark'];
+    
+    matchedVoices.sort((a, b) => {
+      const nameA = a.name.toLowerCase();
+      const nameB = b.name.toLowerCase();
+      
+      const scoreA = premiumKeywords.findIndex(kw => nameA.includes(kw));
+      const scoreB = premiumKeywords.findIndex(kw => nameB.includes(kw));
+      
+      const valA = scoreA === -1 ? 999 : scoreA;
+      const valB = scoreB === -1 ? 999 : scoreB;
+      
+      return valA - valB;
+    });
+
+    return matchedVoices[0] || null;
+  }
+
   // Find a suitable futuristic/clean voice
   initSpeechSynthesis() {
     if (!this.synth) return;
     
     // Voices are loaded asynchronously
     const loadVoices = () => {
-      const voices = this.synth.getVoices();
-      // Search for high-quality English voices
-      // Prefer Google US English, Microsoft David, or general English male/female
-      this.preferredVoice = voices.find(v => v.name.includes('Google US English') || v.name.includes('Natural') || v.name.includes('David')) || 
-                           voices.find(v => v.lang.startsWith('en-')) || 
-                           voices[0];
+      const activeLang = this.speechLang || localStorage.getItem('lukas_speech_lang') || 'en-IN';
+      this.preferredVoice = this.getVoiceForLanguage(activeLang);
+      console.log(`[voice.js] Speech Synthesis voice initialized: ${this.preferredVoice?.name || 'Default'} (${this.preferredVoice?.lang || 'unknown'})`);
     };
     
     loadVoices();
@@ -593,8 +637,13 @@ class LukasVoiceController {
     const utterance = new SpeechSynthesisUtterance(cleanedText);
     this.queuedUtterances.push(utterance);
 
-    if (this.preferredVoice) {
-      utterance.voice = this.preferredVoice;
+    const speechLang = this.speechLang || 'en-IN';
+    const activeVoice = this.getVoiceForLanguage(speechLang);
+    if (activeVoice) {
+      utterance.voice = activeVoice;
+      utterance.lang = activeVoice.lang;
+    } else {
+      utterance.lang = speechLang;
     }
     
     // Set slightly robotic pitch/rate parameters
@@ -682,6 +731,10 @@ class LukasVoiceController {
           this.recognition.stop();
         } catch(e) {}
       }
+    }
+    if (this.synth) {
+      this.preferredVoice = this.getVoiceForLanguage(lang);
+      console.log(`[voice.js] Speech Synthesis voice updated: ${this.preferredVoice?.name || 'Default'} (${this.preferredVoice?.lang || 'unknown'})`);
     }
   }
 
