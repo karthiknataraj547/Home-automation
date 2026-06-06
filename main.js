@@ -155,6 +155,10 @@ let isVoiceRetrainingActive = false;
 let voiceRetrainingName = '';
 let voiceRetrainingStep = '';
 
+let pendingProfileUpdate = null;
+let isProfileUpdateConfirmationActive = false;
+let pendingDirectProfileQuery = '';
+
 // Keep mic active for follow-up commands after a voice exchange (respects user timeout selection)
 function keepConversationAlive(durationMs = null) {
   const timeoutStr = localStorage.getItem('lukas_continuous_convo_timeout');
@@ -557,6 +561,19 @@ function applyUserPreferencesToVoiceAndUI(username) {
   // Switch memory namespace
   lukasMemory.switchUser(username);
   
+  // Initialize defaults for new users
+  if (username !== 'Guest' && !lukasMemory.getFact('name')) {
+    lukasMemory.addFact('name', username, 'User Confirmed', 'Direct User Input');
+    lukasMemory.setPreference('name', username);
+    lukasMemory.setPreference('speechLang', 'en-IN');
+    lukasMemory.setPreference('voiceAccent', 'indian_english');
+    lukasMemory.setPreference('personalityMode', 'casual');
+    lukasMemory.setPreference('voiceVolume', '1.0');
+    lukasMemory.setPreference('voiceRateVal', '1.0');
+    lukasMemory.setPreference('voiceRate', 'normal');
+    lukasMemory.setPreference('voiceEmotionalTone', 'adaptive');
+  }
+  
   // Now load preferences from memory
   const volume = parseFloat(lukasMemory.getPreference('voiceVolume', '1.0'));
   const rate = parseFloat(lukasMemory.getPreference('voiceRateVal', '1.0'));
@@ -674,6 +691,34 @@ function applyUserPreferencesToVoiceAndUI(username) {
   
   // Refresh Voice Profiles list
   renderVoiceProfilesList();
+
+  // Update header active user display
+  const currentUserBadge = document.getElementById('currentUserBadge');
+  if (currentUserBadge) {
+    currentUserBadge.innerHTML = `<i class="fa-solid fa-user"></i> ${username.toUpperCase()}`;
+  }
+
+  // Update details inside profile manager modal
+  const activeProfileUsername = document.getElementById('activeProfileUsername');
+  const activeProfileFactName = document.getElementById('activeProfileFactName');
+  const activeProfileAccent = document.getElementById('activeProfileAccent');
+  const activeProfileSessions = document.getElementById('activeProfileSessions');
+
+  if (activeProfileUsername) activeProfileUsername.textContent = username;
+  if (activeProfileFactName) activeProfileFactName.textContent = lukasMemory.getFact('name') || 'Unknown';
+  const rawAccent = lukasMemory.getPreference('voiceAccent', 'indian_english');
+  const accentLabels = {
+    indian_english: 'Indian English',
+    bengaluru_professional: 'Bengaluru Professional',
+    neutral_corporate: 'Neutral Corporate India',
+    kannada_native: 'Kannada Native',
+    'en-US': 'American Accent',
+    'en-GB': 'British Accent',
+    'en-AU': 'Australian Accent',
+    'en-CA': 'Canadian Accent'
+  };
+  if (activeProfileAccent) activeProfileAccent.textContent = accentLabels[rawAccent] || rawAccent;
+  if (activeProfileSessions) activeProfileSessions.textContent = lukasMemory.longTerm.sessionCount || 0;
 }
 
 // Initialize dashboard core components (invoked upon verified clearance)
@@ -806,6 +851,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize terminal security authentication
   initAuth();
+  
+  // Initialize profile manager modal
+  initProfileManager();
   
   // Apply initial Guest space preferences
   applyUserPreferencesToVoiceAndUI('Guest');
@@ -4611,6 +4659,237 @@ async function processCommand(rawCommand, source) {
       }
     }
 
+    // ── Profile update confirmation dialogue ──
+    if (typeof isProfileUpdateConfirmationActive !== 'undefined' && isProfileUpdateConfirmationActive) {
+      isProcessingCommand = false;
+      isProfileUpdateConfirmationActive = false;
+      
+      const yesWords = ['yes', 'sure', 'yeah', 'yep', 'ok', 'okay', 'update', 'change', 'please'];
+      if (yesWords.some(w => cmd.includes(w))) {
+        const { key, value } = pendingProfileUpdate;
+        lukasMemory.addFact(key, value, 'User Confirmed', 'Direct User Input');
+        
+        // Update parallel preferences where applicable
+        if (key === 'name') lukasMemory.setPreference('name', value);
+        if (key === 'language') lukasMemory.setPreference('speechLang', value);
+        if (key === 'accent') lukasMemory.setPreference('voiceAccent', value);
+        if (key === 'style') lukasMemory.setPreference('personalityMode', value);
+        
+        handleAssistantResponse(`Thanks. I've updated your ${key} to ${value} in your profile.`);
+      } else {
+        handleAssistantResponse(`Understood. Keeping your ${pendingProfileUpdate.key} as ${lukasMemory.getFact(pendingProfileUpdate.key) || 'not set'}.`);
+      }
+      pendingProfileUpdate = null;
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+
+    // ── Direct profile query response dialogue ──
+    if (typeof pendingDirectProfileQuery !== 'undefined' && pendingDirectProfileQuery !== '') {
+      isProcessingCommand = false;
+      const key = pendingDirectProfileQuery;
+      pendingDirectProfileQuery = '';
+      
+      const cleanVal = rawCommand.trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+      if (cleanVal.length < 2) {
+        handleAssistantResponse(`Aborted. The provided value was too short.`);
+      } else {
+        lukasMemory.addFact(key, cleanVal, 'User Confirmed', 'Direct User Input');
+        if (key === 'name') lukasMemory.setPreference('name', cleanVal);
+        if (key === 'language') lukasMemory.setPreference('speechLang', cleanVal);
+        if (key === 'accent') lukasMemory.setPreference('voiceAccent', cleanVal);
+        if (key === 'style') lukasMemory.setPreference('personalityMode', cleanVal);
+        
+        handleAssistantResponse(`Thanks. I'll remember that and use it when appropriate.`);
+      }
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+
+    // ── CRUD Profile Commands ──
+    if (cmd === 'view profile' || cmd === 'show profile' || cmd === 'show my profile' || cmd === 'view my profile') {
+      isProcessingCommand = false;
+      const facts = lukasMemory.longTerm.facts;
+      const prefs = lukasMemory.longTerm.preferences;
+      
+      const profileLines = [
+        "**[PROFILE DETAILS]**",
+        `Name: ${lukasMemory.getFact('name') || 'Not set'}`,
+        `Country: ${lukasMemory.getFact('country') || 'Not set'}`,
+        `City: ${lukasMemory.getFact('city') || 'Not set'}`,
+        `Preferred Language: ${lukasMemory.getFact('language') || prefs.speechLang || 'en-IN'}`,
+        `Preferred Accent: ${lukasMemory.getFact('accent') || prefs.voiceAccent || 'indian_english'}`,
+        `Time Zone: ${lukasMemory.getFact('timezone') || 'Asia/Kolkata'}`,
+        `Profession: ${lukasMemory.getFact('profession') || 'Not set'}`,
+        `Interests: ${lukasMemory.getFact('interests') || 'Not set'}`,
+        `Projects: ${lukasMemory.getFact('projects') || 'Not set'}`,
+        `Communication Style: ${lukasMemory.getFact('style') || prefs.personalityMode || 'casual'}`
+      ];
+      
+      handleAssistantResponse(profileLines.join('\n'));
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+    
+    if (cmd === 'reset profile' || cmd === 'clear profile' || cmd === 'delete my profile') {
+      isProcessingCommand = false;
+      lukasMemory.resetProfile();
+      applyUserPreferencesToVoiceAndUI(lukasMemory.currentUsername);
+      handleAssistantResponse("Your profile has been reset to defaults.");
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+    
+    const deleteFactMatch = cmd.match(/^delete (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style) from profile$/i)
+      || cmd.match(/^delete (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style)$/i)
+      || cmd.match(/^remove (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style) from profile$/i)
+      || cmd.match(/^remove (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style)$/i);
+      
+    if (deleteFactMatch) {
+      isProcessingCommand = false;
+      const key = deleteFactMatch[1].toLowerCase().trim();
+      const ok = lukasMemory.deleteFact(key);
+      if (ok) {
+        handleAssistantResponse(`I've deleted your ${key} from your profile.`);
+      } else {
+        handleAssistantResponse(`There was no stored ${key} in your profile.`);
+      }
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+
+    // ── Direct profile query retrieval ──
+    const nameQueries = ['what is my name', 'do you know my name', 'tell me my name'];
+    const countryQueries = ['what is my country', 'tell me my country', 'where am i from', 'which country am i from'];
+    const cityQueries = ['what city do i live in', 'what is my city', 'which city do i live in', 'where do i live'];
+    const langQueries = ['what language do i prefer', 'what is my preferred language', 'which language do i prefer'];
+    const professionQueries = ['what is my profession', 'what is my job', 'what do i do for work', 'what do i do'];
+    const interestsQueries = ['what are my interests', 'what do i like', 'what are my hobbies'];
+    const projectsQueries = ['what are my projects', 'what projects do i have', 'what projects am i working on'];
+    const styleQueries = ['what is my communication style', 'what style do i prefer'];
+
+    let targetQueryKey = null;
+    let queryPrompt = '';
+    
+    if (nameQueries.includes(cmd)) {
+      const name = lukasMemory.getFact('name');
+      if (name) {
+        isProcessingCommand = false;
+        handleAssistantResponse(`Your name is ${name}.`);
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      targetQueryKey = 'name';
+      queryPrompt = "I don't know your name yet. What would you like me to call you?";
+    } else if (countryQueries.includes(cmd)) {
+      const country = lukasMemory.getFact('country');
+      if (country) {
+        isProcessingCommand = false;
+        handleAssistantResponse(`You are from ${country}.`);
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      targetQueryKey = 'country';
+      queryPrompt = "I don't know your country yet. Which country are you from?";
+    } else if (cityQueries.includes(cmd)) {
+      const city = lukasMemory.getFact('city');
+      if (city) {
+        isProcessingCommand = false;
+        handleAssistantResponse(`You live in ${city}.`);
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      targetQueryKey = 'city';
+      queryPrompt = "I don't know your city yet. Which city do you live in?";
+    } else if (langQueries.includes(cmd)) {
+      const lang = lukasMemory.getFact('language') || lukasMemory.getPreference('speechLang');
+      if (lang) {
+        isProcessingCommand = false;
+        handleAssistantResponse(`Your preferred language is ${lang}.`);
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      targetQueryKey = 'language';
+      queryPrompt = "I don't know your preferred language yet. Which language do you prefer?";
+    } else if (professionQueries.includes(cmd)) {
+      const profession = lukasMemory.getFact('profession');
+      if (profession) {
+        isProcessingCommand = false;
+        handleAssistantResponse(`Your profession is ${profession}.`);
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      targetQueryKey = 'profession';
+      queryPrompt = "I don't know your profession yet. What is your profession?";
+    } else if (interestsQueries.includes(cmd)) {
+      const interests = lukasMemory.getFact('interests');
+      if (interests) {
+        isProcessingCommand = false;
+        handleAssistantResponse(`Your interests are ${interests}.`);
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      targetQueryKey = 'interests';
+      queryPrompt = "I don't know your interests yet. What are your main interests?";
+    } else if (projectsQueries.includes(cmd)) {
+      const projects = lukasMemory.getFact('projects');
+      if (projects) {
+        isProcessingCommand = false;
+        handleAssistantResponse(`Your projects are ${projects}.`);
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      targetQueryKey = 'projects';
+      queryPrompt = "I don't know your projects yet. What projects are you working on?";
+    } else if (styleQueries.includes(cmd)) {
+      const style = lukasMemory.getFact('style') || lukasMemory.getPreference('personalityMode');
+      if (style) {
+        isProcessingCommand = false;
+        handleAssistantResponse(`Your communication style is ${style}.`);
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      targetQueryKey = 'style';
+      queryPrompt = "I don't know your preferred communication style yet. What communication style do you prefer?";
+    }
+
+    if (targetQueryKey) {
+      isProcessingCommand = false;
+      pendingDirectProfileQuery = targetQueryKey;
+      handleAssistantResponse(queryPrompt);
+      keepConversationAlive(15000);
+      return;
+    }
+
+    // ── Verbal fact updates detection ──
+    const updatePatterns = [
+      { re: /\b(?:my name is|call me|change my name to)\s+([a-z\s]+)$/i, key: 'name' },
+      { re: /\b(?:i am from|my country is|change my country to)\s+([a-z\s]+)$/i, key: 'country' },
+      { re: /\b(?:i live in|my city is|change my city to)\s+([a-z\s]+)$/i, key: 'city' },
+      { re: /\b(?:i prefer|my preferred language is|change my language to)\s+([a-z\s]+)$/i, key: 'language' },
+      { re: /\b(?:my profession is|i work as|i run a)\s+([a-z\s]+)$/i, key: 'profession' },
+      { re: /\b(?:my interests are|i am interested in)\s+([a-z\s]+)$/i, key: 'interests' },
+      { re: /\b(?:my projects are|i am working on)\s+([a-z\s]+)$/i, key: 'projects' },
+      { re: /\b(?:my communication style is|i prefer style|change my style to)\s+([a-z\s]+)$/i, key: 'style' }
+    ];
+
+    for (const { re, key } of updatePatterns) {
+      const match = cmd.match(re);
+      if (match) {
+        const newValue = match[1].trim();
+        const oldValue = lukasMemory.getFact(key) || (key === 'language' ? lukasMemory.getPreference('speechLang') : (key === 'style' ? lukasMemory.getPreference('personalityMode') : null));
+        
+        if (oldValue && oldValue.toLowerCase() !== newValue.toLowerCase()) {
+          isProcessingCommand = false;
+          pendingProfileUpdate = { key, value: newValue };
+          isProfileUpdateConfirmationActive = true;
+          handleAssistantResponse(`I currently have your ${key} stored as ${oldValue}. Would you like me to update it to ${newValue}?`);
+          keepConversationAlive(15000);
+          return;
+        }
+      }
+    }
+
     // ── Voice print training via UI ──
     if (typeof isVoicePrintTrainingActive !== 'undefined' && isVoicePrintTrainingActive) {
       isProcessingCommand = false;
@@ -7620,6 +7899,261 @@ function initAuth() {
           authStatusBar.innerHTML = `<i class="fa-solid fa-circle-xmark"></i> ${res.message.toUpperCase()}`;
           playAlexaErrorChime();
         }
+      }
+    });
+  }
+}
+
+// Profile Manager Modal initialization
+function initProfileManager() {
+  const profileManagerModal = document.getElementById('profileManagerModal');
+  const openProfileBtn = document.getElementById('openProfileBtn');
+  const closeProfileManagerBtn = document.getElementById('closeProfileManagerBtn');
+  const profileManagerList = document.getElementById('profileManagerList');
+  const profileCreateForm = document.getElementById('profileCreateForm');
+  const profileRegUsername = document.getElementById('profileRegUsername');
+  const profileRegPassword = document.getElementById('profileRegPassword');
+  const profileCreateStatus = document.getElementById('profileCreateStatus');
+
+  if (openProfileBtn && profileManagerModal) {
+    openProfileBtn.addEventListener('click', () => {
+      profileManagerModal.style.display = 'flex';
+      renderProfileManagerList();
+      profileCreateStatus.style.display = 'none';
+      profileRegUsername.value = '';
+      profileRegPassword.value = '';
+    });
+  }
+
+  if (closeProfileManagerBtn && profileManagerModal) {
+    closeProfileManagerBtn.addEventListener('click', () => {
+      profileManagerModal.style.display = 'none';
+    });
+  }
+
+  // Close when clicking outside modal content
+  if (profileManagerModal) {
+    profileManagerModal.addEventListener('click', (e) => {
+      if (e.target === profileManagerModal) {
+        profileManagerModal.style.display = 'none';
+      }
+    });
+  }
+
+  // Render profiles list with switch and inline login capabilities
+  function renderProfileManagerList() {
+    if (!profileManagerList) return;
+    profileManagerList.innerHTML = '';
+
+    const accounts = JSON.parse(localStorage.getItem('lukas_accounts') || '{}');
+    const accountList = Object.values(accounts);
+
+    if (accountList.length === 0) {
+      profileManagerList.innerHTML = '<div style="color:#64748b; font-style:italic; font-size:0.65rem; padding: 0.5rem 0;">No other profiles registered yet.</div>';
+      return;
+    }
+
+    accountList.forEach(acc => {
+      const username = acc.username;
+      const isCurrent = username.toLowerCase() === lukasMemory.currentUsername.toLowerCase();
+
+      const itemCard = document.createElement('div');
+      itemCard.className = 'node-item-card';
+      itemCard.style.gridTemplateColumns = '1fr auto';
+      itemCard.style.padding = '0.5rem 0.75rem';
+      itemCard.style.background = 'rgba(255, 255, 255, 0.01)';
+      itemCard.style.border = '1px solid rgba(255, 255, 255, 0.04)';
+      itemCard.style.borderRadius = '6px';
+      itemCard.style.gap = '0.5rem';
+
+      // Meta details column
+      const metaCol = document.createElement('div');
+      metaCol.className = 'node-meta';
+      
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'node-display-name';
+      nameSpan.textContent = username;
+      nameSpan.style.fontSize = '0.75rem';
+      metaCol.appendChild(nameSpan);
+
+      const roleSpan = document.createElement('span');
+      roleSpan.className = 'node-display-zone';
+      roleSpan.textContent = isCurrent ? 'ACTIVE SESSION' : 'SECURE TERMINAL PROFILE';
+      roleSpan.style.fontSize = '0.55rem';
+      roleSpan.style.color = isCurrent ? 'var(--emerald-neon)' : '#64748b';
+      metaCol.appendChild(roleSpan);
+      itemCard.appendChild(metaCol);
+
+      // Controls column
+      const controlCol = document.createElement('div');
+      controlCol.className = 'node-controls';
+
+      if (isCurrent) {
+        const activeBadge = document.createElement('span');
+        activeBadge.className = 'node-status-indicator';
+        activeBadge.style.color = 'var(--emerald-neon)';
+        activeBadge.style.fontSize = '0.65rem';
+        activeBadge.innerHTML = '<i class="fa-solid fa-circle-check"></i> ACTIVE';
+        controlCol.appendChild(activeBadge);
+      } else {
+        const switchBtn = document.createElement('button');
+        switchBtn.className = 'btn-routine';
+        switchBtn.style.padding = '0.25rem 0.5rem';
+        switchBtn.style.fontSize = '0.58rem';
+        switchBtn.style.background = 'rgba(0, 240, 255, 0.05)';
+        switchBtn.style.borderColor = 'rgba(0, 240, 255, 0.3)';
+        switchBtn.style.color = 'var(--cyan-neon)';
+        switchBtn.style.cursor = 'pointer';
+        switchBtn.style.height = 'auto';
+        switchBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i> SWITCH';
+        
+        switchBtn.addEventListener('click', () => {
+          // Replace switchBtn with inline password form
+          controlCol.innerHTML = '';
+          
+          const inlineForm = document.createElement('div');
+          inlineForm.style.display = 'flex';
+          inlineForm.style.gap = '0.3rem';
+          inlineForm.style.alignItems = 'center';
+
+          const passInput = document.createElement('input');
+          passInput.type = 'password';
+          passInput.placeholder = 'Keyphrase...';
+          passInput.style.background = 'rgba(0,0,0,0.6)';
+          passInput.style.border = '1px solid rgba(255,255,255,0.12)';
+          passInput.style.borderRadius = '4px';
+          passInput.style.color = '#fff';
+          passInput.style.padding = '0.2rem 0.4rem';
+          passInput.style.fontSize = '0.62rem';
+          passInput.style.width = '100px';
+          passInput.style.height = '22px';
+          passInput.style.fontFamily = 'var(--font-sans)';
+          inlineForm.appendChild(passInput);
+
+          const submitBtn = document.createElement('button');
+          submitBtn.className = 'btn-routine';
+          submitBtn.style.padding = '0 0.4rem';
+          submitBtn.style.fontSize = '0.55rem';
+          submitBtn.style.borderColor = 'var(--cyan-neon)';
+          submitBtn.style.color = 'var(--cyan-neon)';
+          submitBtn.style.background = 'rgba(0, 240, 255, 0.05)';
+          submitBtn.style.height = '22px';
+          submitBtn.style.cursor = 'pointer';
+          submitBtn.textContent = 'DECRYPT';
+          inlineForm.appendChild(submitBtn);
+
+          const cancelBtn = document.createElement('button');
+          cancelBtn.className = 'btn-routine';
+          cancelBtn.style.padding = '0 0.4rem';
+          cancelBtn.style.fontSize = '0.55rem';
+          cancelBtn.style.borderColor = 'rgba(255,255,255,0.15)';
+          cancelBtn.style.color = '#cbd5e1';
+          cancelBtn.style.height = '22px';
+          cancelBtn.style.cursor = 'pointer';
+          cancelBtn.textContent = 'X';
+          inlineForm.appendChild(cancelBtn);
+
+          controlCol.appendChild(inlineForm);
+          passInput.focus();
+
+          cancelBtn.addEventListener('click', () => {
+            renderProfileManagerList();
+          });
+
+          const attemptLogin = async () => {
+            const password = passInput.value;
+            if (!password) return;
+
+            submitBtn.textContent = '...';
+            submitBtn.disabled = true;
+
+            const res = await loginUser(username, password);
+            if (res.success) {
+              if (typeof voice !== 'undefined') {
+                voice.warmUpMic();
+              }
+              if (typeof playFuturisticBeep === 'function') playFuturisticBeep();
+              
+              applyUserPreferencesToVoiceAndUI(username);
+              
+              if (typeof diag !== 'undefined' && diag.logToTerminal) {
+                diag.logToTerminal(`[SYSTEM] Swapped terminal session to user: "${username}".`, 'info');
+              }
+              
+              profileManagerModal.style.display = 'none';
+            } else {
+              submitBtn.textContent = 'DECRYPT';
+              submitBtn.disabled = false;
+              playAlexaErrorChime();
+              
+              // Highlight red outline on input
+              passInput.style.borderColor = 'var(--rose-neon)';
+              passInput.value = '';
+              passInput.placeholder = 'Access Denied';
+              setTimeout(() => {
+                passInput.style.borderColor = 'rgba(255,255,255,0.12)';
+                passInput.placeholder = 'Keyphrase...';
+              }, 1500);
+            }
+          };
+
+          submitBtn.addEventListener('click', attemptLogin);
+          passInput.addEventListener('keydown', (ev) => {
+            if (ev.key === 'Enter') {
+              attemptLogin();
+            }
+          });
+        });
+
+        controlCol.appendChild(switchBtn);
+      }
+
+      itemCard.appendChild(controlCol);
+      profileManagerList.appendChild(itemCard);
+    });
+  }
+
+  // Handle Create Profile submit
+  if (profileCreateForm) {
+    profileCreateForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      
+      const newUsername = profileRegUsername.value.trim();
+      const newPassword = profileRegPassword.value;
+      
+      if (!newUsername || !newPassword) return;
+
+      profileCreateStatus.style.display = 'block';
+      profileCreateStatus.style.color = 'var(--cyan-neon)';
+      profileCreateStatus.textContent = 'Generating security credentials...';
+
+      const res = await registerUser(newUsername, newPassword);
+      if (res.success) {
+        profileCreateStatus.style.color = 'var(--emerald-neon)';
+        profileCreateStatus.textContent = 'ACCESS CLEARANCE CREATED.';
+
+        // Automatically login the user
+        const loginRes = await loginUser(newUsername, newPassword);
+        if (loginRes.success) {
+          if (typeof voice !== 'undefined') {
+            voice.warmUpMic();
+          }
+          if (typeof playFuturisticBeep === 'function') playFuturisticBeep();
+
+          setTimeout(() => {
+            applyUserPreferencesToVoiceAndUI(newUsername);
+            
+            if (typeof diag !== 'undefined' && diag.logToTerminal) {
+              diag.logToTerminal(`[SYSTEM] Initialized and logged in new profile: "${newUsername}".`, 'info');
+            }
+            
+            profileManagerModal.style.display = 'none';
+          }, 1000);
+        }
+      } else {
+        profileCreateStatus.style.color = 'var(--rose-neon)';
+        profileCreateStatus.textContent = res.message.toUpperCase();
+        playAlexaErrorChime();
       }
     });
   }

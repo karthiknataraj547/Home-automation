@@ -171,13 +171,50 @@ class LukasMemory {
 
   // ─── Long-Term Facts ─────────────────────────────────────────────────────
 
-  addFact(key, value) {
-    this.longTerm.facts[key] = { value, timestamp: Date.now() };
+  addFact(key, value, confidence = 'User Confirmed', source = 'Direct User Input') {
+    this.longTerm.facts[key] = {
+      value,
+      confidence,
+      source,
+      timestamp: Date.now(),
+      lastVerified: Date.now()
+    };
     this._saveLongTerm();
   }
 
   getFact(key) {
     return this.longTerm.facts[key]?.value ?? null;
+  }
+
+  getFullFact(key) {
+    return this.longTerm.facts[key] ?? null;
+  }
+
+  deleteFact(key) {
+    if (this.longTerm.facts[key]) {
+      delete this.longTerm.facts[key];
+      this._saveLongTerm();
+      return true;
+    }
+    return false;
+  }
+
+  resetProfile() {
+    const keepKeys = ['userId'];
+    for (const key of Object.keys(this.longTerm.facts)) {
+      if (!keepKeys.includes(key)) {
+        delete this.longTerm.facts[key];
+      }
+    }
+    this.longTerm.preferences = {
+      name: this.currentUsername !== 'Guest' ? this.currentUsername : '',
+      speechLang: 'en-IN',
+      voiceAccent: 'indian_english',
+      personalityMode: 'casual',
+      voiceRate: 'normal',
+      voiceEmotionalTone: 'adaptive'
+    };
+    this._saveLongTerm();
   }
 
   getAllFacts() {
@@ -272,10 +309,10 @@ class LukasMemory {
 
     // [WORKING MEMORY]
     lines.push('### [WORKING MEMORY]');
-    const name = prefs.name || facts.name?.value || null;
+    const name = this.getFact('name') || prefs.name || null;
     if (name) lines.push(`User's name: ${name}`);
-    if (prefs.location || facts.location?.value) {
-      lines.push(`User location: ${prefs.location || facts.location?.value}`);
+    if (this.getFact('city') || this.getFact('location') || prefs.location) {
+      lines.push(`User location: ${this.getFact('city') || this.getFact('location') || prefs.location}`);
     }
     if (this.shortTerm.currentProject) lines.push(`Current Project: ${this.shortTerm.currentProject}`);
     if (this.shortTerm.currentGoal) lines.push(`Current Goal: ${this.shortTerm.currentGoal}`);
@@ -284,50 +321,49 @@ class LukasMemory {
     }
     lines.push(`Session #${this.longTerm.sessionCount} with LUKAS`);
 
-    // [PROJECTS MEMORY]
-    lines.push('\n### [PROJECTS MEMORY]');
+    // [IDENTITY PROFILE]
+    lines.push('\n### [IDENTITY PROFILE]');
+    lines.push(`Name: ${this.getFact('name') || 'Unknown'}`);
+    lines.push(`Country: ${this.getFact('country') || 'Unknown'}`);
+    lines.push(`City: ${this.getFact('city') || 'Unknown'}`);
+    lines.push(`Profession: ${this.getFact('profession') || 'Unknown'}`);
+    lines.push(`Interests: ${this.getFact('interests') || 'Unknown'}`);
+
+    // [PREFERENCES PROFILE]
+    lines.push('\n### [PREFERENCES PROFILE]');
+    lines.push(`Preferred Language: ${this.getFact('language') || prefs.speechLang || 'en-IN'}`);
+    lines.push(`Preferred Accent: ${this.getFact('accent') || prefs.voiceAccent || 'indian_english'}`);
+    lines.push(`Communication Style: ${this.getFact('style') || prefs.personalityMode || 'casual'}`);
+    lines.push(`Time Zone: ${this.getFact('timezone') || 'Asia/Kolkata'}`);
+
+    // [PROJECTS PROFILE]
+    lines.push('\n### [PROJECTS PROFILE]');
+    lines.push(`Businesses: ${this.getFact('businesses') || 'None recorded'}`);
+    lines.push(`AI Projects: ${this.getFact('ai_projects') || 'None recorded'}`);
+    lines.push(`Websites: ${this.getFact('websites') || 'None recorded'}`);
     if (projects.length > 0) {
-      const activeProjName = (this.shortTerm.currentProject || '').toLowerCase();
-      // Select projects relevant to active session topics or current project, fallback to 2 most recent
-      let relevantProjects = projects.filter(p => {
-        const nameLower = p.name.toLowerCase();
-        return nameLower === activeProjName || topics.some(t => t.toLowerCase().includes(nameLower));
-      });
-
-      if (relevantProjects.length === 0) {
-        relevantProjects = projects
-          .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
-          .slice(0, 2);
-      }
-
-      const projectList = relevantProjects
-        .map(p => {
-          let pLines = `• Project: ${p.name}${p.status ? ` [${p.status}]` : ''}${p.description ? `: ${p.description}` : ''}`;
-          if (p.goals && p.goals.length > 0) {
-            pLines += `\n  - Goals: ${p.goals.join(', ')}`;
-          }
-          if (p.problems && p.problems.length > 0) {
-            pLines += `\n  - Problems/Issues: ${p.problems.join(', ')}`;
-          }
-          return pLines;
-        })
+      const projectList = projects
+        .map(p => `• Project: ${p.name}${p.status ? ` [${p.status}]` : ''}${p.description ? `: ${p.description}` : ''}`)
         .join('\n');
       lines.push(projectList);
-    } else {
-      lines.push('No active projects recorded.');
     }
 
-    // [LONG-TERM MEMORY]
-    lines.push('\n### [LONG-TERM MEMORY]');
-    if (prefs.responseStyle) lines.push(`Prefers: ${prefs.responseStyle} responses`);
-    if (prefs.personalityMode) lines.push(`Active Mode: ${prefs.personalityMode}`);
-    if (prefs.language && prefs.language !== 'en') lines.push(`Language: ${prefs.language}`);
-    const factKeys = Object.keys(facts).filter(k => !['name', 'location'].includes(k));
-    if (factKeys.length > 0) {
-      const factList = factKeys.map(k => `• ${k}: ${facts[k].value}`).join('\n');
-      lines.push(`Remembered facts:\n${factList}`);
-    } else {
-      lines.push('No long-term facts recorded.');
+    // [LONG-TERM GOALS PROFILE]
+    lines.push('\n### [LONG-TERM GOALS PROFILE]');
+    lines.push(`Personal Goals: ${this.getFact('personal_goals') || 'None recorded'}`);
+    lines.push(`Business Goals: ${this.getFact('business_goals') || 'None recorded'}`);
+
+    // [OTHER REMEMBERED FACTS]
+    const structuredKeys = [
+      'name', 'country', 'city', 'location', 'language', 'accent', 'timezone',
+      'profession', 'interests', 'projects', 'style', 'businesses', 'ai_projects',
+      'websites', 'personal_goals', 'business_goals', 'userId'
+    ];
+    const otherFactKeys = Object.keys(facts).filter(k => !structuredKeys.includes(k));
+    if (otherFactKeys.length > 0) {
+      lines.push('\n### [OTHER REMEMBERED FACTS]');
+      const factList = otherFactKeys.map(k => `• ${k}: ${facts[k].value}`).join('\n');
+      lines.push(factList);
     }
 
     return lines.join('\n');
