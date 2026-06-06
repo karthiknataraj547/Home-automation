@@ -497,16 +497,31 @@ function bootSequenceAnimation() {
       termEl.scrollTop = termEl.scrollHeight;
     }
 
+    let voiceStarted = false;
     const startVoiceSystem = () => {
+      if (voiceStarted) return;
+      voiceStarted = true;
+      
       voice.warmUpMic();
       isWakingUp = true;
       lastCommandSource = 'voice';
       handleAssistantResponse("Lukas Core initialized. Systems are secure and operational on port 3000. How can I assist you, Commander?");
+      
       document.removeEventListener('click', startVoiceSystem);
       document.removeEventListener('touchstart', startVoiceSystem);
     };
-    document.addEventListener('click', startVoiceSystem);
-    document.addEventListener('touchstart', startVoiceSystem);
+
+    // Try starting automatically since microphone was warmed up during click gesture
+    try {
+      startVoiceSystem();
+    } catch (e) {
+      console.log("Speech initialization delayed until dashboard click:", e);
+    }
+
+    if (!voiceStarted) {
+      document.addEventListener('click', startVoiceSystem);
+      document.addEventListener('touchstart', startVoiceSystem);
+    }
   }, 2900);
 }
 
@@ -5491,10 +5506,72 @@ function initAuth() {
     });
   }
 
-  // If already authenticated, bypass login
+  // If already authenticated, show secure Link verification screen to capture user click gesture (required for Speech APIs)
   if (isAuthenticated()) {
-    if (authTerminal) authTerminal.style.display = 'none';
-    initializeDashboard();
+    if (authTerminal) authTerminal.style.display = 'flex';
+    if (appContainer) appContainer.style.display = 'none';
+    if (authForm) authForm.style.display = 'none';
+    
+    const toggleArea = document.querySelector('.auth-toggle-area');
+    if (toggleArea) toggleArea.style.display = 'none';
+    
+    if (authStatusBar) {
+      authStatusBar.className = 'auth-status-bar verified';
+      authStatusBar.style.color = 'var(--cyan-neon)';
+      authStatusBar.innerHTML = '<span class="pulse-indicator" style="background:var(--cyan-neon); box-shadow:0 0 8px var(--cyan-neon);"></span> CREDENTIALS VALIDATED';
+    }
+    
+    const authCard = document.querySelector('.auth-card');
+    if (authCard) {
+      const quickLinkContainer = document.createElement('div');
+      quickLinkContainer.style.marginTop = '1.5rem';
+      quickLinkContainer.style.display = 'flex';
+      quickLinkContainer.style.flexDirection = 'column';
+      quickLinkContainer.style.alignItems = 'center';
+      quickLinkContainer.style.gap = '1rem';
+      
+      const fingerprintBtn = document.createElement('button');
+      fingerprintBtn.className = 'auth-submit-btn';
+      fingerprintBtn.style.background = 'rgba(0, 240, 255, 0.08)';
+      fingerprintBtn.style.border = '1px solid var(--cyan-neon)';
+      fingerprintBtn.style.color = 'var(--cyan-neon)';
+      fingerprintBtn.style.fontSize = '0.9rem';
+      fingerprintBtn.style.padding = '0.8rem 1.5rem';
+      fingerprintBtn.style.borderRadius = '6px';
+      fingerprintBtn.style.cursor = 'pointer';
+      fingerprintBtn.style.fontFamily = 'var(--font-title)';
+      fingerprintBtn.style.letterSpacing = '1px';
+      fingerprintBtn.style.boxShadow = '0 0 15px rgba(0, 240, 255, 0.1)';
+      fingerprintBtn.style.transition = 'all 0.3s ease';
+      fingerprintBtn.innerHTML = '<i class="fa-solid fa-fingerprint" style="font-size: 2.5rem; margin-bottom: 0.5rem; display: block; animation: pulse 1.5s infinite alternate;"></i> ENGAGE NEURAL LINK';
+      
+      fingerprintBtn.onmouseover = () => {
+        fingerprintBtn.style.background = 'var(--cyan-neon)';
+        fingerprintBtn.style.color = '#020617';
+        fingerprintBtn.style.boxShadow = '0 0 25px rgba(0, 240, 255, 0.4)';
+      };
+      fingerprintBtn.onmouseout = () => {
+        fingerprintBtn.style.background = 'rgba(0, 240, 255, 0.08)';
+        fingerprintBtn.style.color = 'var(--cyan-neon)';
+        fingerprintBtn.style.boxShadow = '0 0 15px rgba(0, 240, 255, 0.1)';
+      };
+      
+      fingerprintBtn.addEventListener('click', () => {
+        // Warm up microphone immediately during user click gesture
+        if (typeof voice !== 'undefined') {
+          voice.warmUpMic();
+        }
+        // Unlock browser audio context
+        if (typeof playFuturisticBeep === 'function') playFuturisticBeep();
+        
+        // Hide overlay and load dashboard
+        if (authTerminal) authTerminal.style.display = 'none';
+        initializeDashboard();
+      });
+      
+      quickLinkContainer.appendChild(fingerprintBtn);
+      authCard.appendChild(quickLinkContainer);
+    }
     return;
   }
 
@@ -5528,6 +5605,10 @@ function initAuth() {
   if (authForm) {
     authForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+      // Warm up microphone immediately during user click gesture
+      if (typeof voice !== 'undefined') {
+        voice.warmUpMic();
+      }
       const user = authUsername.value.trim();
       const pass = authPassword.value;
       
