@@ -3562,6 +3562,40 @@ async function processCommand(rawCommand, source) {
     appendChatBubble(rawCommand, 'user');
     diag.spikeCPU();
 
+    // ── Deactivation / Standby / Offline Trigger ──
+    const stopWords = ['stop', 'go to sleep', 'deactivate voice', 'mute microphone', 'stand down'];
+    if (stopWords.includes(cmd) || cmd.includes('offline mode')) {
+      diag.logToTerminal(`[AI CORE] Deactivation command detected: "${rawCommand}". Shutting down voice engine...`, "warn");
+      isPassiveListenEnabled = false;
+      voice.stopListeningForCommand();
+      clearSilenceTimeout();
+      if (proceedTimeout) clearTimeout(proceedTimeout);
+      accumulatedTranscript = "";
+      
+      const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
+      if (isAlexa) {
+        playAlexaErrorChime();
+      } else {
+        playShutdownBeep();
+      }
+      
+      const coreBtn = document.getElementById('lukasCoreBtn');
+      if (coreBtn) {
+        coreBtn.classList.remove('listening');
+        coreBtn.classList.remove('processing');
+        coreBtn.classList.remove('waking');
+      }
+      
+      const statusText = document.getElementById('voiceStatusText');
+      if (statusText) {
+        statusText.textContent = 'STANDBY';
+        statusText.style.color = 'var(--rose-neon)';
+      }
+      
+      handleAssistantResponse("Understood, Commander. Deactivating voice engine and entering offline standby mode.");
+      return;
+    }
+
     // ══ LUKAS MEMORY: Record user message + extract facts ══
     lukasMemory.addMessage('user', rawCommand);
     lukasMemory.extractAndStoreFacts(rawCommand);

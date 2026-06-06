@@ -112,6 +112,19 @@ class LukasResearchAgent {
         }
       }
 
+      // If direct match and opensearch both failed, use full-text query search API
+      if (!data || !data.extract) {
+        try {
+          const querySearchUrl = `${this.WIKIPEDIA_SEARCH}?action=query&list=search&srsearch=${encodeURIComponent(query)}&limit=3&format=json&origin=*`;
+          const querySearchData = await this._fetch(querySearchUrl);
+          if (querySearchData && querySearchData.query?.search?.length > 0) {
+            const bestMatchTitle = querySearchData.query.search[0].title;
+            const matchSlug = encodeURIComponent(bestMatchTitle.replace(/ /g, '_'));
+            data = await this._fetch(`${this.WIKIPEDIA_API}${matchSlug}`);
+          }
+        } catch (e) {}
+      }
+
       if (!data || !data.extract) return null;
 
       return {
