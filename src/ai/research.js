@@ -146,58 +146,60 @@ class LukasResearchAgent {
 
   async _searchDuckDuckGo(query) {
     try {
-      const url = `${this.DDG_API}?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`;
-      const data = await this._fetch(url);
-      if (!data) return null;
-
+      const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+      let html = null;
+      
+      // Try Proxy 1: corsproxy.io (faster, direct)
+      try {
+        const proxyUrl1 = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+        const res = await fetch(proxyUrl1, { headers: { 'Accept': 'text/html' } });
+        if (res.ok) {
+          html = await res.text();
+        }
+      } catch (e) {
+        console.warn("[Research] Proxy 1 (corsproxy.io) failed:", e.message);
+      }
+      
+      // Try Proxy 2: allorigins.win (Fallback)
+      if (!html) {
+        try {
+          const proxyUrl2 = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+          const res = await fetch(proxyUrl2);
+          if (res.ok) {
+            const json = await res.json();
+            html = json.contents;
+          }
+        } catch (e) {
+          console.warn("[Research] Proxy 2 (allorigins.win) failed:", e.message);
+        }
+      }
+      
+      if (!html) return null;
+      
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(html, 'text/html');
       const results = [];
-
-      // Abstract (main answer)
-      if (data.AbstractText && data.AbstractText.length > 20) {
-        results.push({
-          source: data.AbstractSource || 'DuckDuckGo',
-          url: data.AbstractURL || '',
-          title: data.Heading || query,
-          excerpt: data.AbstractText.slice(0, 600),
-          text: data.AbstractText,
-          confidence: 0.78,
-          type: 'abstract',
-        });
-      }
-
-      // Answer (direct answer box)
-      if (data.Answer && data.Answer.length > 5) {
-        results.push({
-          source: 'DuckDuckGo Answer',
-          url: '',
-          title: 'Direct Answer',
-          excerpt: data.Answer,
-          text: data.Answer,
-          confidence: 0.90,
-          type: 'direct_answer',
-        });
-      }
-
-      // Related topics
-      if (data.RelatedTopics?.length > 0) {
-        const related = data.RelatedTopics
-          .filter(t => t.Text && !t.Topics)
-          .slice(0, 2)
-          .map(t => ({
-            source: 'DuckDuckGo Related',
-            url: t.FirstURL || '',
-            title: t.Text?.split(' - ')[0] || '',
-            excerpt: t.Text?.slice(0, 300),
-            text: t.Text,
-            confidence: 0.60,
-            type: 'related',
-          }));
-        results.push(...related);
-      }
-
+      
+      const resultElements = doc.querySelectorAll('.result');
+      resultElements.forEach(el => {
+        const titleEl = el.querySelector('.result__a');
+        const snippetEl = el.querySelector('.result__snippet');
+        if (titleEl && snippetEl) {
+          results.push({
+            source: 'Web Search',
+            url: titleEl.getAttribute('href') || '',
+            title: titleEl.textContent.trim(),
+            excerpt: snippetEl.textContent.trim().slice(0, 600),
+            text: snippetEl.textContent.trim(),
+            confidence: 0.82,
+            type: 'web_result',
+          });
+        }
+      });
+      
       return results.length > 0 ? results : null;
     } catch (e) {
-      console.warn('[Research] DuckDuckGo error:', e.message);
+      console.warn('[Research] DuckDuckGo scraper error:', e.message);
       return null;
     }
   }

@@ -3707,6 +3707,27 @@ async function handleResearchIntent(rawCommand, apiKey, apiProvider, source = 'u
     query = cleanMatch[1].trim();
   }
 
+  // ── Context Enrichment for generic local queries (e.g., "who is the chief minister/cm") ──
+  const normalizedQuery = query.toLowerCase().trim().replace(/[.?]/g, '');
+  const isGenericCM = ['chief minister', 'the chief minister', 'current chief minister', 'current cm', 'cm', 'the cm'].includes(normalizedQuery);
+  if (isGenericCM) {
+    let suffix = "";
+    if (typeof currentWeatherCity !== 'undefined' && currentWeatherCity && currentWeatherCity !== "Local Area") {
+      suffix = " of " + currentWeatherCity;
+    } else {
+      try {
+        const geo = await fetch('https://ipapi.co/json/').then(r => r.json());
+        if (geo && geo.region) {
+          suffix = " of " + geo.region;
+        } else if (geo && geo.city) {
+          suffix = " of " + geo.city;
+        }
+      } catch (e) {}
+    }
+    query = query + suffix;
+    diag.logToTerminal(`[RESEARCH AGENT] Appended location context: "${query}"`, "info");
+  }
+
   let result = null;
   try {
     result = await lukasResearch.research(query, { apiKey, apiProvider, memory: lukasMemory });
