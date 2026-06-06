@@ -32,8 +32,9 @@ class LukasResearchAgent {
       };
     }
 
-    // If AI key available, synthesize; otherwise return best raw result
-    if (apiKey && results.sources.length > 0) {
+    // If AI key or Puter AI is available, synthesize; otherwise return best raw result
+    const hasAI = apiKey || (typeof window !== 'undefined' && window.puter?.ai);
+    if (hasAI && results.sources.length > 0) {
       const synthesized = await this._synthesize(query, results.sources, apiKey, apiProvider, memory);
       return {
         answer: synthesized,

@@ -2628,7 +2628,7 @@ async function searchInternet(query) {
       
       const response = await Promise.race([
         window.puter.ai.chat(prompt),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Puter AI request timed out")), 2000))
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Puter AI request timed out")), 15000))
       ]);
       
       // Puter returns response either as a string or a complex message object depending on SDK details
@@ -3605,7 +3605,7 @@ async function processCommand(rawCommand, source) {
         break;
 
       case INTENT.RESEARCH:
-        await handleResearchIntent(rawCommand, activeKey, activeProvider);
+        await handleResearchIntent(rawCommand, activeKey, activeProvider, source);
         break;
 
       case INTENT.MEMORY_QUERY:
@@ -3664,7 +3664,7 @@ async function handleHomeControlIntent(rawCommand, apiKey, apiProvider) {
   executeParsedHomeControl(parsed);
 }
 
-async function handleResearchIntent(rawCommand, apiKey, apiProvider) {
+async function handleResearchIntent(rawCommand, apiKey, apiProvider, source = 'user') {
   diag.logToTerminal(`[RESEARCH AGENT] Initiating web research for: "${rawCommand}"...`, "info");
   
   let query = rawCommand;
@@ -3673,7 +3673,12 @@ async function handleResearchIntent(rawCommand, apiKey, apiProvider) {
     query = cleanMatch[1].trim();
   }
 
-  const result = await lukasResearch.research(query, { apiKey, apiProvider, memory: lukasMemory });
+  let result = null;
+  try {
+    result = await lukasResearch.research(query, { apiKey, apiProvider, memory: lukasMemory });
+  } catch (err) {
+    console.error("Research agent error:", err);
+  }
   
   if (result && result.answer) {
     diag.logToTerminal(`[RESEARCH AGENT] Research finished with confidence: ${Math.round(result.confidence * 100)}%`, "info");
@@ -3692,7 +3697,8 @@ async function handleResearchIntent(rawCommand, apiKey, apiProvider) {
     lukasMemory.addMessage('assistant', displayAnswer, 'research');
     keepConversationAlive(12000); // Hold mic active for follow-ups
   } else {
-    handleAssistantResponse(`I performed a web search for "${query}" but found no matching records.`);
+    diag.logToTerminal(`[RESEARCH AGENT] No search results found. Falling back to Conversational AI.`, "info");
+    await handleConversationalIntent(rawCommand, INTENT.CONVERSATION, apiKey, apiProvider, source);
   }
 }
 
