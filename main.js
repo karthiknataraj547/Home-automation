@@ -1,4 +1,4 @@
-// main.js - LUKAS System Orchestrator
+// main.js - LUKAS AI Operating System Orchestrator
 import './src/style.css';
 import LukasVoiceController from './src/voice.js';
 import LukasAutomationHub, { DEVICES, ROUTINES } from './src/automation.js';
@@ -7,11 +7,22 @@ import LukasDiagnosticsHub from './src/diagnostics.js';
 import { fingerprintDevice, fingerprintBLE } from './src/deviceKnowledgeBase.js';
 import { loginUser, registerUser, isAuthenticated, logoutUser } from './src/auth.js';
 
+// ═══════ LUKAS Intelligence Layer ═══════
+import LukasMemory from './src/ai/memory.js';
+import LukasOrchestrator, { INTENT } from './src/ai/orchestrator.js';
+import LukasResearchAgent from './src/ai/research.js';
+import { generateConversationalResponse, parseHomeCommand, scoreResponse } from './src/ai/core.js';
+
 // Instantiate core hubs
 const voice = new LukasVoiceController();
 const home = new LukasAutomationHub();
 const cctv = new LukasCCTVManager();
 const diag = new LukasDiagnosticsHub();
+
+// ═══════ LUKAS Intelligence System ═══════
+const lukasMemory = new LukasMemory();
+const lukasOrchestrator = new LukasOrchestrator(lukasMemory);
+const lukasResearch = new LukasResearchAgent();
 
 // Local Media Tracks Playlist with copyright-free MP3 streams
 const playlist = [
@@ -3290,350 +3301,14 @@ function executeConversationalAction(act) {
 
 // Ask OpenAI for context-aware conversational response and dynamic device control
 async function askOpenAIAssistant(query, apiKey) {
-  try {
-    const isAlexa = document.body.classList.contains('alexa-mode');
-    const assistantName = isAlexa ? 'Alexa' : 'LUKAS';
-
-    // Gather current home metrics
-    const indoorTemp = home.state.climate.indoorTemp;
-    const targetTemp = home.state.climate.targetTemp;
-    const climateMode = home.state.climate.mode;
-    
-    const weatherDetails = document.getElementById('weatherDetailsText') 
-      ? document.getElementById('weatherDetailsText').textContent 
-      : 'Unknown';
-      
-    const activeLights = home.dynamicDevices
-      .filter(d => d.category === 'light' && d.on)
-      .map(d => d.name)
-      .join(', ') || 'None';
-
-    const systemStatus = `
-- Assistant Name: ${assistantName}
-- Current Local Time: ${new Date().toLocaleTimeString()}
-- Indoor Temperature: ${indoorTemp}°C
-- HVAC Target Temperature: ${targetTemp}°C
-- HVAC Mode: ${climateMode}
-- Outdoor Weather: ${weatherDetails}
-- Active Lights: ${activeLights}
-- Available Rooms/Zones: Living Room, Bedroom, Kitchen, Outdoor, Garden
-- Soil Moisture Level: ${home.state.garden.moisture}%
-- Sprinkler System: ${home.state.garden.sprinklerActive ? 'ON' : 'OFF'}
-- Sprinkler Active Zone: ${home.state.garden.zone}
-- Rain Irrigation Hold/Delay: ${home.state.garden.weatherDelay ? 'YES' : 'NO'}
-`;
-
-    const systemInstruction = `You are ${assistantName}, a premium human-like smart home voice assistant. You are capable of direct smart home control and conversational interactions. 
-Analyze the user's input, context, and take action if requested. 
-
-IMPORTANT: Reply ONLY with a valid JSON object matching this schema. Do not output markdown code blocks (no \`\`\`json), explanations, or extra text.
-
-JSON Schema:
-{
-  "response": "Conversational reply to the user (concise, natural, 1-2 sentences. Avoid listing device names unless asked. Be polite and helper-focused)",
-  "actions": [
-    {
-      "type": "climate_temp" | "climate_mode" | "device_power" | "device_color" | "device_brightness" | "media_control" | "media_route" | "cctv_feed" | "reminder_set" | "reminder_clear" | "system_diagnostics" | "system_reboot" | "theme_toggle" | "weather_refresh" | "garden_water" | "garden_zone",
-      "target": "thermostat" | "device_id" | "zone_name" | "media" | "cctv" | "reminder" | "system" | "theme" | "weather" | "garden",
-      "value": string | number | boolean | object
-    }
-  ]
-}
-
-Available Actions Guide:
-1. Adjust Thermostat Temp: {"type": "climate_temp", "target": "thermostat", "value": 24}
-2. Adjust Climate Mode: {"type": "climate_mode", "target": "thermostat", "value": "cool" | "heat" | "eco"}
-3. Turn Light/Device On/Off: {"type": "device_power", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": true | false}
-4. Adjust Light Color: {"type": "device_color", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": "#hexcolor"}
-5. Adjust Light Brightness: {"type": "device_brightness", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": 75}
-6. Media Control (play/pause/next/prev): {"type": "media_control", "target": "media", "value": "play" | "pause" | "stop" | "next" | "prev"}
-7. Route Media Playback (spotify/apple/amazon/youtube): {"type": "media_route", "target": "media", "value": "spotify" | "apple" | "amazon" | "youtube"}
-8. CCTV Feed Select (maximize channel 1-4): {"type": "cctv_feed", "target": "cctv", "value": 1 | 2 | 3 | 4}
-9. Set Reminder/Alarm: {"type": "reminder_set", "target": "reminder", "value": "buy milk in 10 minutes" | {"text": "do homework", "time": "in 1 hour"}}
-10. Clear All Reminders: {"type": "reminder_clear", "target": "reminder", "value": null}
-11. Run System Diagnostics: {"type": "system_diagnostics", "target": "system", "value": null}
-12. Reboot Dashboard System: {"type": "system_reboot", "target": "system", "value": null}
-13. Toggle Light/Dark Theme: {"type": "theme_toggle", "target": "theme", "value": "light" | "dark" | "toggle"}
-14. Sync/Refresh Weather: {"type": "weather_refresh", "target": "weather", "value": null}
-15. Turn Sprinkler On/Off: {"type": "garden_water", "target": "garden", "value": true | false}
-16. Select Sprinkler Zone: {"type": "garden_zone", "target": "garden", "value": "Lawn" | "Flowers" | "Vegetables"}
-
-Current System Context:
-${systemStatus}
-
-Think step-by-step. If the user asks for something related to the home climate, lights, locks, or sprinkler systems, return the appropriate command in the actions array. If they ask a general question (e.g. "what is the speed of sound"), reply in the "response" property with an empty "actions" array.`;
-
-    const url = "https://api.openai.com/v1/chat/completions";
-    const response = await Promise.race([
-      fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: "gpt-4o-mini",
-          messages: [
-            { role: "system", content: systemInstruction },
-            { role: "user", content: `User Question: "${query}"` }
-          ],
-          response_format: { type: "json_object" },
-          temperature: 0.7
-        })
-      }),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("OpenAI API request timed out")), 2000))
-    ]);
-
-    if (!response.ok) {
-      throw new Error(`OpenAI API returned status ${response.status}`);
-    }
-
-    const data = await response.json();
-    let resultJsonText = data.choices[0].message.content.trim();
-
-    let cleaned = resultJsonText.trim();
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      cleaned = jsonMatch[0];
-    }
-
-    const payload = JSON.parse(cleaned);
-
-    // Execute actions if returned
-    if (payload.actions && Array.isArray(payload.actions)) {
-      payload.actions.forEach(act => {
-        executeConversationalAction(act);
-      });
-    }
-
-    return payload.response;
-  } catch (e) {
-    console.warn("OpenAI conversational AI failed:", e);
-    diag.logToTerminal(`[AI CORE] OpenAI Conversational AI failed: ${e.message}`, "warn");
-    return null;
-  }
+  return await _callUnifiedAssistant(query, apiKey, 'openai');
 }
 
 // Ask Gemini or Puter client-side AI for context-aware conversational response and dynamic device control
 async function askGeminiAssistant(query, apiKey) {
-  try {
-    const isAlexa = document.body.classList.contains('alexa-mode');
-    const assistantName = isAlexa ? 'Alexa' : 'LUKAS';
-
-    // Gather current home metrics
-    const indoorTemp = home.state.climate.indoorTemp;
-    const targetTemp = home.state.climate.targetTemp;
-    const climateMode = home.state.climate.mode;
-    
-    const weatherDetails = document.getElementById('weatherDetailsText') 
-      ? document.getElementById('weatherDetailsText').textContent 
-      : 'Unknown';
-      
-    const activeLights = home.dynamicDevices
-      .filter(d => d.category === 'light' && d.on)
-      .map(d => d.name)
-      .join(', ') || 'None';
-
-    const systemStatus = `
-- Assistant Name: ${assistantName}
-- Current Local Time: ${new Date().toLocaleTimeString()}
-- Indoor Temperature: ${indoorTemp}°C
-- HVAC Target Temperature: ${targetTemp}°C
-- HVAC Mode: ${climateMode}
-- Outdoor Weather: ${weatherDetails}
-- Active Lights: ${activeLights}
-- Available Rooms/Zones: Living Room, Bedroom, Kitchen, Outdoor, Garden
-- Soil Moisture Level: ${home.state.garden.moisture}%
-- Sprinkler System: ${home.state.garden.sprinklerActive ? 'ON' : 'OFF'}
-- Sprinkler Active Zone: ${home.state.garden.zone}
-- Rain Irrigation Hold/Delay: ${home.state.garden.weatherDelay ? 'YES' : 'NO'}
-`;
-
-    const systemInstruction = `You are ${assistantName}, a premium human-like smart home voice assistant. You are capable of direct smart home control and conversational interactions. 
-Analyze the user's input, context, and take action if requested. 
-
-IMPORTANT: Reply ONLY with a valid JSON object matching this schema. Do not output markdown code blocks (no \`\`\`json), explanations, or extra text.
-
-JSON Schema:
-{
-  "response": "Conversational reply to the user (concise, natural, 1-2 sentences. Avoid listing device names unless asked. Be polite and helper-focused)",
-  "actions": [
-    {
-      "type": "climate_temp" | "climate_mode" | "device_power" | "device_color" | "device_brightness" | "media_control" | "media_route" | "cctv_feed" | "reminder_set" | "reminder_clear" | "system_diagnostics" | "system_reboot" | "theme_toggle" | "weather_refresh" | "garden_water" | "garden_zone",
-      "target": "thermostat" | "device_id" | "zone_name" | "media" | "cctv" | "reminder" | "system" | "theme" | "weather" | "garden",
-      "value": string | number | boolean | object
-    }
-  ]
+  return await _callUnifiedAssistant(query, apiKey || null, apiKey ? 'gemini' : 'puter');
 }
 
-Available Actions Guide:
-1. Adjust Thermostat Temp: {"type": "climate_temp", "target": "thermostat", "value": 24}
-2. Adjust Climate Mode: {"type": "climate_mode", "target": "thermostat", "value": "cool" | "heat" | "eco"}
-3. Turn Light/Device On/Off: {"type": "device_power", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": true | false}
-4. Adjust Light Color: {"type": "device_color", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": "#hexcolor"}
-5. Adjust Light Brightness: {"type": "device_brightness", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": 75}
-6. Media Control (play/pause/next/prev): {"type": "media_control", "target": "media", "value": "play" | "pause" | "stop" | "next" | "prev"}
-7. Route Media Playback (spotify/apple/amazon/youtube): {"type": "media_route", "target": "media", "value": "spotify" | "apple" | "amazon" | "youtube"}
-8. CCTV Feed Select (maximize channel 1-4): {"type": "cctv_feed", "target": "cctv", "value": 1 | 2 | 3 | 4}
-9. Set Reminder/Alarm: {"type": "reminder_set", "target": "reminder", "value": "buy milk in 10 minutes" | {"text": "do homework", "time": "in 1 hour"}}
-10. Clear All Reminders: {"type": "reminder_clear", "target": "reminder", "value": null}
-11. Run System Diagnostics: {"type": "system_diagnostics", "target": "system", "value": null}
-12. Reboot Dashboard System: {"type": "system_reboot", "target": "system", "value": null}
-13. Toggle Light/Dark Theme: {"type": "theme_toggle", "target": "theme", "value": "light" | "dark" | "toggle"}
-14. Sync/Refresh Weather: {"type": "weather_refresh", "target": "weather", "value": null}
-15. Turn Sprinkler On/Off: {"type": "garden_water", "target": "garden", "value": true | false}
-16. Select Sprinkler Zone: {"type": "garden_zone", "target": "garden", "value": "Lawn" | "Flowers" | "Vegetables"}
-
-Current System Context:
-${systemStatus}
-
-Think step-by-step. If the user asks for something related to the home climate, lights, locks, or sprinkler systems, return the appropriate command in the actions array. If they ask a general question (e.g. "what is the speed of sound"), reply in the "response" property with an empty "actions" array.`;
-
-    let resultJsonText = "";
-
-    if (apiKey) {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-      const response = await Promise.race([
-        fetch(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{
-              parts: [{ text: `${systemInstruction}\n\nUser Question: "${query}"` }]
-            }],
-            generationConfig: { responseMimeType: "application/json" }
-          })
-        }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Gemini API request timed out")), 2000))
-      ]);
-
-      if (response.ok) {
-        const data = await response.json();
-        resultJsonText = data.candidates[0].content.parts[0].text.trim();
-      }
-    }
-
-    if (!resultJsonText && window.puter && window.puter.ai) {
-      const prompt = `System Instructions: ${systemInstruction}\n\nUser Question: "${query}"`;
-      const response = await Promise.race([
-        window.puter.ai.chat(prompt),
-        new Promise((_, reject) => setTimeout(() => reject(new Error("Puter AI request timed out")), 2000))
-      ]);
-      if (response) {
-        if (typeof response === 'string') resultJsonText = response;
-        else if (response.message && response.message.content) {
-          const content = response.message.content;
-          if (typeof content === 'string') resultJsonText = content;
-          else if (Array.isArray(content)) {
-            resultJsonText = content.map(b => (typeof b === 'string' ? b : (b.text || ''))).join('');
-          }
-        } else if (response.text) {
-          resultJsonText = response.text;
-        }
-      }
-    }
-
-    if (!resultJsonText) {
-      throw new Error("No AI responders available.");
-    }
-
-    let cleaned = resultJsonText.trim();
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      cleaned = jsonMatch[0];
-    }
-
-    const payload = JSON.parse(cleaned);
-
-    // Execute actions if returned
-    if (payload.actions && Array.isArray(payload.actions)) {
-      payload.actions.forEach(act => {
-        executeConversationalAction(act);
-      });
-    }
-
-    return payload.response;
-  } catch (e) {
-    console.warn("Conversational AI failed:", e);
-    diag.logToTerminal(`[AI CORE] Conversational AI failed: ${e.message}`, "warn");
-    return null;
-  }
-}
-
-
-// AI-assisted zero-key client-side natural language parser using Puter.js
-async function parseCommandWithAI(rawCommand) {
-  if (!window.puter || !window.puter.ai) {
-    diag.logToTerminal("[AI PARSER] Puter SDK not loaded. Falling back to local parser.", "warn");
-    return null;
-  }
-  
-  try {
-    const systemPrompt = `You are a Smart Home intent parsing engine. Analyze the user's natural language directive and map it to a structured JSON object. 
-
-IMPORTANT: Reply ONLY with valid JSON. Do not include markdown code block syntax (like \`\`\`json), explanations, greetings, or extra characters.
-
-JSON Schema:
-{
-  "category": "light" | "climate" | "security" | "routine" | "media" | "diagnostics" | "greetings" | "time" | "date" | "weather" | "crypto" | "cctv" | "reminder" | "unknown",
-  "isGlobal": boolean,
-  "targetDeviceName": string | null,
-  "targetZone": "Living Room" | "Bedroom" | "Kitchen" | "Outdoor" | null,
-  "action": "on" | "off" | "toggle" | "color" | "brightness" | "temp" | "mode" | "play" | "pause" | "stop" | "next" | "prev" | "status" | "hello" | null,
-  "value": string | number | null
-}
-
-Mappings Guide:
-- "set All light colour to yellow" -> {"category":"light","isGlobal":true,"targetDeviceName":null,"targetZone":null,"action":"color","value":"yellow"}
-- "turn on bedroom light" -> {"category":"light","isGlobal":false,"targetDeviceName":"bedroom light","targetZone":"Bedroom","action":"on","value":null}
-- "convert all lights to red" -> {"category":"light","isGlobal":true,"targetDeviceName":null,"targetZone":null,"action":"color","value":"red"}
-- "make it cooler" -> {"category":"climate","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"mode","value":"cool"}
-- "what is the temperature?" -> {"category":"climate","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"status","value":null}
-- "what's the weather in Seattle?" -> {"category":"weather","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":"Seattle"}
-- "how is the system running" -> {"category":"diagnostics","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"status","value":null}
-- "play next track" -> {"category":"media","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"next","value":null}
-- "show camera feed" -> {"category":"cctv","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"on","value":null}
-- "stop music" -> {"category":"media","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"stop","value":null}
-- "remind me in 5 minutes to go home" -> {"category":"reminder","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":"in 5 minutes to go home"}
-- "set a reminder" -> {"category":"reminder","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":null}`;
-
-    const prompt = `System Instructions: ${systemPrompt}\n\nUser Directive: "${rawCommand}"`;
-    const response = await Promise.race([
-      window.puter.ai.chat(prompt),
-      new Promise((_, reject) => setTimeout(() => reject(new Error("Puter AI request timed out")), 2000))
-    ]);
-    
-    let contentText = "";
-    if (response) {
-      if (typeof response === 'string') {
-        contentText = response;
-      } else if (response.message && response.message.content) {
-        const content = response.message.content;
-        if (typeof content === 'string') contentText = content;
-        else if (Array.isArray(content)) {
-          contentText = content.map(b => (typeof b === 'string' ? b : (b.text || ''))).join('');
-        }
-      } else if (response.text) {
-        contentText = response.text;
-      }
-    }
-    
-    let cleaned = contentText.trim();
-    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      cleaned = jsonMatch[0];
-    }
-    
-    diag.logToTerminal(`[AI PARSER] Structured parser result: ${cleaned}`, "info");
-    const parsed = JSON.parse(cleaned);
-    return parsed;
-  } catch (e) {
-    console.warn("AI parser failed:", e);
-    return null;
-  }
-}
-
-// 5. Intelligent rule-based command interpreter
 async function processCommand(rawCommand, source) {
   try {
     // Clear any active voice capturing timeouts immediately
@@ -3649,6 +3324,11 @@ async function processCommand(rawCommand, source) {
   const cmd = rawCommand.toLowerCase().trim();
   appendChatBubble(rawCommand, 'user');
   diag.spikeCPU();
+
+  // ══ LUKAS MEMORY: Record user message + extract facts ══
+  lukasMemory.addMessage('user', rawCommand);
+  lukasMemory.extractAndStoreFacts(rawCommand);
+
 
   const coreBtn = document.getElementById('lukasCoreBtn');
   if (coreBtn) {
