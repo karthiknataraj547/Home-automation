@@ -2628,6 +2628,220 @@ body.light-theme .text-primary {
   color: #1e293b;
 }
 
+/* ═══════════════════ SETTINGS MODAL & REGISTRY OVERRIDES ═══════════════════ */
+body.light-theme .modal-overlay {
+  background: rgba(15, 23, 42, 0.35) !important;
+}
+
+body.light-theme #nodeManagerModal .modal-content {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border-color: rgba(14, 165, 233, 0.3) !important;
+  color: #1e293b !important;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.12) !important;
+}
+
+/* Form groups, text wrappers and subcontainers in Settings Tab */
+body.light-theme .node-form-section > div,
+body.light-theme .node-list-section > div {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.02) !important;
+}
+
+/* In Settings, sub-widget-titles should be dark steel */
+body.light-theme .node-form-section .sub-widget-title,
+body.light-theme .node-list-section .sub-widget-title,
+body.light-theme .node-list-section span,
+body.light-theme .node-form-section span {
+  color: #0f172a !important;
+}
+
+/* Form inputs & select overrides */
+body.light-theme .node-form-section select,
+body.light-theme .node-list-section select,
+body.light-theme .node-form-section input[type="text"],
+body.light-theme .node-list-section input[type="text"],
+body.light-theme .node-form-section input[type="password"],
+body.light-theme .node-list-section input[type="password"],
+body.light-theme #registrySearchInput {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border: 1px solid rgba(15, 23, 42, 0.14) !important;
+  color: #0f172a !important;
+}
+
+body.light-theme .node-form-section option,
+body.light-theme .node-list-section option {
+  background: #ffffff !important;
+  color: #0f172a !important;
+}
+
+/* Accent customizer button presets */
+body.light-theme .theme-accent-btn {
+  background: rgba(255, 255, 255, 0.9) !important;
+  border: 1px solid rgba(15, 23, 42, 0.1) !important;
+  color: #475569 !important;
+}
+
+body.light-theme .theme-accent-btn.active {
+  background: var(--cyan-neon-glow, rgba(0, 240, 255, 0.12)) !important;
+  border-color: var(--cyan-neon) !important;
+  color: #0284c7 !important;
+  box-shadow: 0 2px 8px rgba(14, 165, 233, 0.15) !important;
+}
+
+/* Alexa Brief Mode label */
+body.light-theme label[for="briefModeCheckbox"] {
+  color: #1e293b !important;
+}
+
+/* Diagnostics console box inside tab */
+body.light-theme .node-form-section div[style*="background:rgba(0,0,0,0.3)"] {
+  background: rgba(255, 255, 255, 0.9) !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+}
+
+body.light-theme .node-form-section div[style*="background:rgba(0,0,0,0.3)"] span {
+  color: #475569 !important;
+}
+
+body.light-theme .node-form-section div[style*="background:rgba(0,0,0,0.3)"] span[style*="color:#fff"] {
+  color: #0f172a !important;
+  font-weight: bold;
+}
+
+/* Active Registered Nodes List item cards */
+body.light-theme .node-item-card {
+  background: rgba(255, 255, 255, 0.8) !important;
+  border: 1px solid rgba(15, 23, 42, 0.06) !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.01) !important;
+}
+
+body.light-theme .node-item-card:hover {
+  background: rgba(14, 165, 233, 0.04) !important;
+  border-color: rgba(14, 165, 233, 0.25) !important;
+}
+
+body.light-theme .node-display-name {
+  color: #0f172a !important;
+}
+
+body.light-theme .node-display-zone {
+  color: #64748b !important;
+}
+
+body.light-theme .node-details {
+  color: #475569 !important;
+}
+
+body.light-theme .node-details span {
+  color: #475569 !important;
+}
+
+body.light-theme .node-net-badge {
+  background: #f1f5f9 !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #475569 !important;
+}
+
+body.light-theme .status-value.normal {
+  background: rgba(16, 185, 129, 0.1) !important;
+  border-color: #10b981 !important;
+  color: #047857 !important;
+}
+
+body.light-theme .status-value.warn {
+  background: rgba(245, 158, 11, 0.1) !important;
+  border-color: #f59e0b !important;
+  color: #b45309 !important;
+}
+
+body.light-theme .status-value.error {
+  background: rgba(244, 63, 94, 0.1) !important;
+  border-color: #f43f5e !important;
+  color: #be123c !important;
+}
+
+/* Active pairing wizard tab inside Settings */
+body.light-theme #settingsWizardView {
+  background: rgba(255, 255, 255, 0.7) !important;
+  border: 1px dashed rgba(14, 165, 233, 0.25) !important;
+}
+
+body.light-theme #settingsWizardView div[style*="color:#64748b"],
+body.light-theme #settingsWizardView div[style*="color:#94a3b8"],
+body.light-theme #settingsWizardView div[style*="color:#cbd5e1"] {
+  color: #475569 !important;
+}
+
+body.light-theme #settingsWizardView button#cancelWizardBtn {
+  background: rgba(255, 255, 255, 0.9) !important;
+  border-color: rgba(15, 23, 42, 0.1) !important;
+  color: #475569 !important;
+}
+
+body.light-theme #settingsWizardView button#cancelWizardBtn:hover {
+  background: #cbd5e1 !important;
+  color: #0f172a !important;
+}
+
+/* Wizard Progress Bar */
+body.light-theme #settingsWizardView div[style*="background:rgba(255,255,255,0.05)"] {
+  background: #e2e8f0 !important;
+}
+
+/* Brand selector cards in Step 1 */
+body.light-theme .brand-select-card {
+  background: rgba(255, 255, 255, 0.85) !important;
+  border-color: rgba(15, 23, 42, 0.08) !important;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.01) !important;
+}
+
+body.light-theme .brand-select-card div[style*="color:#fff"] {
+  color: #1e293b !important;
+}
+
+body.light-theme .brand-select-card div[style*="color:#64748b"] {
+  color: #64748b !important;
+}
+
+/* Step 2 Dynamic form instructions info banner */
+body.light-theme #wizardStep2 div[style*="background:rgba(0,240,255,0.04)"] {
+  background: rgba(14, 165, 233, 0.06) !important;
+  border-color: rgba(14, 165, 233, 0.25) !important;
+}
+
+body.light-theme #wizardActiveBrandLabel {
+  color: #0ea5e9 !important;
+}
+
+/* Step 3 radar loader logs */
+body.light-theme #wizardStep3 div[style*="color:#fff"],
+body.light-theme #wizardStep3 #wizardPairingStatusText {
+  color: #0f172a !important;
+}
+
+body.light-theme #wizardStep3 #wizardPairingLog {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+  color: #334155 !important;
+}
+
+/* Step 4 confirmation previews */
+body.light-theme #wizardStep4 div[style*="color:#fff"] {
+  color: #0f172a !important;
+}
+
+body.light-theme #wizardStep4 div[style*="background:rgba(255,255,255,0.02)"] {
+  background: rgba(255, 255, 255, 0.95) !important;
+  border: 1px solid rgba(15, 23, 42, 0.08) !important;
+}
+
+body.light-theme #wizardPreviewName {
+  color: #0f172a !important;
+}
+
+
+
 
 /* ═══════════════════ HOLOGRAPHIC AUTH SCREEN ═══════════════════ */
 .auth-terminal-container {
