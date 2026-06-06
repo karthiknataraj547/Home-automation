@@ -924,6 +924,10 @@ function bindUIEvents() {
 
   voice.onWakeWordDetected = () => {
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
+    // Re-enable passive listening whenever wake word is detected (even from STANDBY)
+    isPassiveListenEnabled = true;
+    isWakingUp = true;
+    
     if (isAlexa) {
       playAlexaWakeChime();
     } else {
@@ -942,7 +946,6 @@ function bindUIEvents() {
     voiceStatusText.textContent = isAlexa ? 'ALEXA AWAKE' : 'LUKAS AWAKE';
     voiceStatusText.style.color = 'var(--cyan-neon)';
 
-    isWakingUp = true;
     const greeting = isAlexa ? "Yes?" : "Yes, Commander?";
     
     // Display greeting bubble
@@ -1003,13 +1006,10 @@ function bindUIEvents() {
       coreBtn.classList.remove('waking');
     }
 
-    // Return to passive wake-word listening
-    if (isPassiveListenEnabled) {
-      diag.logToTerminal("[AI CORE] Returning to passive wake-word mode.", "info");
-      setTimeout(() => voice.startWakeWordListener(), 300);
-    } else {
-      diag.logToTerminal("Lukas core offline. Standing standby.", "warn");
-    }
+    // ★ Always-On Wake Word: return to passive listen regardless of standby state
+    // This means saying 'LUKAS' always works, just like Alexa.
+    diag.logToTerminal("[AI CORE] Returning to passive wake-word mode.", "info");
+    setTimeout(() => voice.startWakeWordListener(), 300);
   };
 
   // Click core for voice trigger shortcut (Single-turn voice command listening)
@@ -3563,7 +3563,7 @@ async function processCommand(rawCommand, source) {
     // ── Deactivation / Standby / Offline Trigger ──
     const stopWords = ['stop', 'go to sleep', 'deactivate voice', 'mute microphone', 'stand down'];
     if (stopWords.includes(cmd) || cmd.includes('offline mode')) {
-      diag.logToTerminal(`[AI CORE] Deactivation command detected: "${rawCommand}". Shutting down voice engine...`, "warn");
+      diag.logToTerminal(`[AI CORE] Deactivation command detected: "${rawCommand}". Pausing command mode, keeping wake-word alive...`, "warn");
       isPassiveListenEnabled = false;
       voice.stopListeningForCommand();
       clearSilenceTimeout();
@@ -3586,11 +3586,14 @@ async function processCommand(rawCommand, source) {
       
       const statusText = document.getElementById('voiceStatusText');
       if (statusText) {
-        statusText.textContent = 'STANDBY';
+        statusText.textContent = 'STANDBY — Say LUKAS to wake';
         statusText.style.color = 'var(--rose-neon)';
       }
       
-      handleAssistantResponse("Understood, Commander. Deactivating voice engine and entering offline standby mode.");
+      handleAssistantResponse("Understood, Commander. Entering standby. Say \"LUKAS\" anytime to wake me.");
+      
+      // ★ Always keep wake-word listener alive so LUKAS can be woken from any state
+      setTimeout(() => voice.startWakeWordListener(), 1500);
       return;
     }
 
@@ -3616,6 +3619,39 @@ async function processCommand(rawCommand, source) {
 
     // Run structured 6-step Voice Intelligence reasoning cycle
     lukasReasoning.runReasoningCycle(rawCommand, diag.logToTerminal.bind(diag));
+
+    // ── FAST PATH: Temperature / Thermostat (instant regex, no AI wait) ──────
+    // Matches: "set temperature to 25", "adjust temp to 22 degrees", "change thermostat to 24", etc.
+    const tempFastMatch = cmd.match(
+      /(?:set|adjust|change|make|put|increase|decrease|raise|lower|turn(?:\s+up|\s+down)?)\s+(?:the\s+)?(?:temp(?:erature)?|thermostat|ac|air\s*con(?:ditioning)?|climate|heat(?:ing)?|cool(?:ing)?)\s+(?:to\s+)?(\d{1,2})(?:\s*°?\s*(?:celsius|centigrade|degrees?|c))?/i
+    ) || cmd.match(/(?:temp(?:erature)?|thermostat)\s+(?:to\s+)?(\d{1,2})/i)
+      || cmd.match(/(\d{1,2})\s*(?:°|degrees?|celsius|c)\b/i);
+
+    const climateModeFast = cmd.match(/(?:set|switch|change|put)\s+(?:the\s+)?(?:ac|thermostat|climate|hvac)\s+(?:to\s+|mode\s+(?:to\s+)?)?(cool(?:ing)?|heat(?:ing)?|eco|fan|auto)/i)
+      || cmd.match(/(?:cooling|heating|eco)\s+mode/i);
+
+    if (tempFastMatch && (cmd.includes('temp') || cmd.includes('thermostat') || cmd.includes('heat') || cmd.includes('cool') || cmd.includes('ac') || cmd.includes('climate') || cmd.includes('degree') || cmd.includes('celsius'))) {
+      const val = parseInt(tempFastMatch[1]);
+      if (!isNaN(val) && val >= 16 && val <= 35) {
+        diag.logToTerminal(`[FAST PATH] Temperature command detected. Setting thermostat to ${val}°C`, 'info');
+        home.setTargetTemperature(val);
+        handleAssistantResponse(`Acknowledged, Commander. Eco-Thermostat target adjusted to ${val} degrees Celsius.`, true);
+        keepConversationAlive(8000);
+        return;
+      }
+    }
+
+    if (climateModeFast && !tempFastMatch) {
+      const modeRaw = (climateModeFast[1] || '').toLowerCase();
+      const mode = modeRaw.startsWith('cool') ? 'cool' : modeRaw.startsWith('heat') ? 'heat' : 'eco';
+      diag.logToTerminal(`[FAST PATH] Climate mode command detected: ${mode.toUpperCase()}`, 'info');
+      home.setClimateMode(mode);
+      handleAssistantResponse(`Climate matrix switching to ${mode.toUpperCase()} mode.`, true);
+      keepConversationAlive(8000);
+      return;
+    }
+    // ── END FAST PATH ─────────────────────────────────────────────────────────
+
 
     const openaiApiKey = localStorage.getItem('openai_api_key');
     const geminiApiKey = localStorage.getItem('gemini_api_key');
