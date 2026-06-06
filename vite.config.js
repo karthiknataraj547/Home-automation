@@ -736,7 +736,86 @@ export default defineConfig({
             });
           } catch(e) { json(res, { error: e.message, devices: [] }, 500); }
 
+        } else if ((url === '/api/search') && req.method === 'POST') {
+          // ── POST /api/search ── real-time multi-source search backend ──────
+          try {
+            const body = await readBody(req);
+            const { query } = JSON.parse(body);
+            if (!query) return json(res, { error: 'Missing query' }, 400);
+
+            const q = query.trim();
+            const results = [];
+
+            // 1. DuckDuckGo Instant Answers (server-side, no CORS)
+            try {
+              const ddgRes = await new Promise((resolve, reject) => {
+                const apiUrl = `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`;
+                https.get(apiUrl, { timeout: 5000 }, (r) => {
+                  let data = '';
+                  r.on('data', chunk => data += chunk);
+                  r.on('end', () => resolve(data));
+                }).on('error', reject).on('timeout', () => reject(new Error('timeout')));
+              });
+              const ddgData = JSON.parse(ddgRes);
+              if (ddgData.Answer) {
+                results.push({ source: 'DuckDuckGo Instant', title: ddgData.Heading || q, text: ddgData.Answer, url: '', confidence: 0.92, type: 'instant_answer' });
+              }
+              if (ddgData.AbstractText) {
+                results.push({ source: `DuckDuckGo (${ddgData.AbstractSource || 'Web'})`, title: ddgData.Heading || q, text: ddgData.AbstractText, url: ddgData.AbstractURL || '', confidence: 0.84, type: 'abstract' });
+              }
+            } catch(e) { console.warn('[Search] DDG failed:', e.message); }
+
+            // 2. Wikipedia (server-side)
+            try {
+              const wikiSearchUrl = `https://en.wikipedia.org/w/api.php?action=query&list=search&srsearch=${encodeURIComponent(q)}&limit=2&format=json`;
+              const wikiSearchRaw = await new Promise((resolve, reject) => {
+                https.get(wikiSearchUrl, { timeout: 5000 }, (r) => {
+                  let d = ''; r.on('data', c => d += c); r.on('end', () => resolve(d));
+                }).on('error', reject);
+              });
+              const wikiSearch = JSON.parse(wikiSearchRaw);
+              if (wikiSearch.query?.search?.length > 0) {
+                const title = wikiSearch.query.search[0].title;
+                const summaryUrl = `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title.replace(/ /g, '_'))}`;
+                const summaryRaw = await new Promise((resolve, reject) => {
+                  https.get(summaryUrl, { timeout: 5000 }, (r) => {
+                    let d = ''; r.on('data', c => d += c); r.on('end', () => resolve(d));
+                  }).on('error', reject);
+                });
+                const wiki = JSON.parse(summaryRaw);
+                if (wiki.extract) {
+                  results.push({ source: 'Wikipedia', title: wiki.title, text: wiki.extract, url: wiki.content_urls?.desktop?.page || '', confidence: 0.82, type: 'encyclopedia' });
+                }
+              }
+            } catch(e) { console.warn('[Search] Wikipedia failed:', e.message); }
+
+            // 3. Google Serper (if key configured)
+            const serperKey = process.env.SERPER_API_KEY || '';
+            if (serperKey && results.length < 2) {
+              try {
+                const serperBody = JSON.stringify({ q, num: 5, gl: 'in', hl: 'en' });
+                const serperRaw = await new Promise((resolve, reject) => {
+                  const opts = { hostname: 'google.serper.dev', path: '/search', method: 'POST', headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(serperBody) }, timeout: 5000 };
+                  const req2 = https.request(opts, (r) => { let d = ''; r.on('data', c => d += c); r.on('end', () => resolve(d)); });
+                  req2.on('error', reject); req2.write(serperBody); req2.end();
+                });
+                const serper = JSON.parse(serperRaw);
+                if (serper.answerBox) {
+                  const text = serper.answerBox.answer || serper.answerBox.snippet || '';
+                  if (text) results.unshift({ source: 'Google Featured Snippet', title: serper.answerBox.title || q, text, url: serper.answerBox.link || '', confidence: 0.96, type: 'answer_box' });
+                }
+                for (const item of (serper.organic || []).slice(0, 3)) {
+                  if (item.snippet) results.push({ source: `Google (${item.domain || ''})`, title: item.title || '', text: item.snippet, url: item.link || '', confidence: 0.87, type: 'organic' });
+                }
+              } catch(e) { console.warn('[Search] Serper failed:', e.message); }
+            }
+
+            results.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
+            json(res, { query: q, found: results.length > 0, results: results.slice(0, 6), timestamp: new Date().toISOString(), backend: 'lukas-search-vite' });
+          } catch(e) { json(res, { error: e.message, found: false, results: [] }, 500); }
+
         } else { next(); }
+
       });
     }
   }]

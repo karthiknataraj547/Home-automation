@@ -160,6 +160,40 @@ let activePlatform = "Spotify";
 let tuyaConfigured = false;
 let lastCommandSource = 'user';
 
+// ── Voice silence-timeout state (module-level so processCommand can reach it) ──
+let noCommandTimeout = null;
+let proceedTimeout = null;
+let accumulatedTranscript = "";
+
+function clearSilenceTimeout() {
+  if (noCommandTimeout) {
+    clearTimeout(noCommandTimeout);
+    noCommandTimeout = null;
+  }
+}
+
+function startSilenceTimeout() {
+  clearSilenceTimeout();
+  if (proceedTimeout) clearTimeout(proceedTimeout);
+  accumulatedTranscript = "";
+
+  noCommandTimeout = setTimeout(() => {
+    diag.logToTerminal("[AI CORE] 15 seconds of silence. No command detected.", "warn");
+    voice.stopListeningForCommand();
+    endConversation();
+    const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
+    if (isAlexa) { playAlexaErrorChime(); } else { playShutdownBeep(); }
+    if (isPassiveListenEnabled) {
+      setTimeout(() => voice.startWakeWordListener(), 500);
+    }
+    const coreBtn = document.getElementById('lukasCoreBtn');
+    if (coreBtn) {
+      coreBtn.classList.remove('listening');
+      coreBtn.classList.remove('processing');
+    }
+  }, 15000);
+}
+
 // ═══════════════════ REMINDER & TASK ENGINE ═══════════════════
 let lukasReminders = JSON.parse(localStorage.getItem('lukas_reminders') || '[]');
 let reminderTimers = new Map();
@@ -807,45 +841,8 @@ function bindUIEvents() {
     }
   };
 
-  let noCommandTimeout = null;
-  let proceedTimeout = null;
-  let accumulatedTranscript = "";
-
-  function clearSilenceTimeout() {
-    if (noCommandTimeout) {
-      clearTimeout(noCommandTimeout);
-      noCommandTimeout = null;
-    }
-  }
-
-  function startSilenceTimeout() {
-    clearSilenceTimeout();
-    if (proceedTimeout) clearTimeout(proceedTimeout);
-    accumulatedTranscript = "";
-
-    noCommandTimeout = setTimeout(() => {
-      diag.logToTerminal("[AI CORE] 15 seconds of silence. No command detected.", "warn");
-      voice.stopListeningForCommand();
-      endConversation();
-      
-      const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
-      if (isAlexa) {
-        playAlexaErrorChime();
-      } else {
-        playShutdownBeep();
-      }
-      
-      if (isPassiveListenEnabled) {
-        setTimeout(() => voice.startWakeWordListener(), 500);
-      }
-      
-      const coreBtn = document.getElementById('lukasCoreBtn');
-      if (coreBtn) {
-        coreBtn.classList.remove('listening');
-        coreBtn.classList.remove('processing');
-      }
-    }, 15000);
-  }
+  // noCommandTimeout, proceedTimeout, accumulatedTranscript, clearSilenceTimeout, startSilenceTimeout
+  // are now module-level (hoisted above bindUIEvents) so processCommand can access them.
 
   function handleVoiceInput(transcript, isFinal = false) {
     clearSilenceTimeout();
