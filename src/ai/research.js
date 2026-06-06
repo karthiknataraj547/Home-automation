@@ -160,17 +160,30 @@ class LukasResearchAgent {
         console.warn("[Research] Proxy 1 (corsproxy.io) failed:", e.message);
       }
       
-      // Try Proxy 2: allorigins.win (Fallback)
+      // Try Proxy 2: api.codetabs.com (CORS-friendly direct text/html proxy)
       if (!html) {
         try {
-          const proxyUrl2 = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+          const proxyUrl2 = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
           const res = await fetch(proxyUrl2);
+          if (res.ok) {
+            html = await res.text();
+          }
+        } catch (e) {
+          console.warn("[Research] Proxy 2 (api.codetabs.com) failed:", e.message);
+        }
+      }
+      
+      // Try Proxy 3: allorigins.win (Fallback)
+      if (!html) {
+        try {
+          const proxyUrl3 = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+          const res = await fetch(proxyUrl3);
           if (res.ok) {
             const json = await res.json();
             html = json.contents;
           }
         } catch (e) {
-          console.warn("[Research] Proxy 2 (allorigins.win) failed:", e.message);
+          console.warn("[Research] Proxy 3 (allorigins.win) failed:", e.message);
         }
       }
       

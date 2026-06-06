@@ -24,14 +24,15 @@ const originalFetch = window.fetch;
 window.fetch = async function (resource, options) {
   let url = typeof resource === 'string' ? resource : (resource.url || '');
   
-  let pathname = '';
+  let isOwnApi = false;
   try {
-    pathname = new URL(url, window.location.origin).pathname;
+    const parsedUrl = new URL(url, window.location.origin);
+    isOwnApi = parsedUrl.origin === window.location.origin && parsedUrl.pathname.startsWith('/api/');
   } catch (e) {
-    pathname = url;
+    isOwnApi = url.startsWith('/api/') || url.startsWith('api/') || url.startsWith('./api/');
   }
   
-  if (pathname.startsWith('/api/')) {
+  if (isOwnApi) {
     const isStaticDeployment = window.location.hostname !== 'localhost' && 
                              window.location.hostname !== '127.0.0.1';
                              
