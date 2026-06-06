@@ -752,7 +752,7 @@ function bindUIEvents() {
     const coreBtn = document.getElementById('lukasCoreBtn');
     
     if (voice.isListening) {
-      isPassiveListenEnabled = false;
+      isPassiveListenEnabled = true;
       endConversation();
       voice.stopListeningForCommand();
       if (isAlexa) {
@@ -760,11 +760,12 @@ function bindUIEvents() {
       } else {
         playShutdownBeep();
       }
-      diag.logToTerminal("[AI CORE] Voice activation closed.", "info");
+      diag.logToTerminal("[AI CORE] Voice activation closed. Returning to standby.", "info");
       if (coreBtn) {
         coreBtn.classList.remove('listening');
         coreBtn.classList.remove('processing');
       }
+      setTimeout(() => voice.startWakeWordListener(), 500);
     } else {
       isPassiveListenEnabled = true;
       voice.startListeningForCommand();
@@ -1020,7 +1021,7 @@ function bindUIEvents() {
     
     if (voice.isListening || isWakingUp) {
       isWakingUp = false;
-      isPassiveListenEnabled = false;
+      isPassiveListenEnabled = true;
       voice.stopListeningForCommand();
       clearSilenceTimeout();
       if (proceedTimeout) clearTimeout(proceedTimeout);
@@ -1031,12 +1032,13 @@ function bindUIEvents() {
       } else {
         playShutdownBeep();
       }
-      diag.logToTerminal("[AI CORE] Voice activation closed.", "info");
+      diag.logToTerminal("[AI CORE] Voice activation closed. Returning to standby.", "info");
       if (coreBtn) {
         coreBtn.classList.remove('listening');
         coreBtn.classList.remove('processing');
         coreBtn.classList.remove('waking');
       }
+      setTimeout(() => voice.startWakeWordListener(), 500);
     } else {
       isPassiveListenEnabled = true;
       voice.startListeningForCommand();
@@ -3563,8 +3565,9 @@ async function processCommand(rawCommand, source) {
     // ── Deactivation / Standby / Offline Trigger ──
     const stopWords = ['stop', 'go to sleep', 'deactivate voice', 'mute microphone', 'stand down'];
     if (stopWords.includes(cmd) || cmd.includes('offline mode')) {
-      diag.logToTerminal(`[AI CORE] Deactivation command detected: "${rawCommand}". Pausing command mode, keeping wake-word alive...`, "warn");
-      isPassiveListenEnabled = false;
+      diag.logToTerminal(`[AI CORE] Deactivation command detected: "${rawCommand}". Entering standby mode...`, "warn");
+      lastCommandSource = 'standby';
+      isPassiveListenEnabled = true;
       voice.stopListeningForCommand();
       clearSilenceTimeout();
       if (proceedTimeout) clearTimeout(proceedTimeout);
