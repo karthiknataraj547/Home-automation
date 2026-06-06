@@ -479,6 +479,11 @@ function bootSequenceAnimation() {
     const startVoiceSystem = () => {
       voice.warmUpMic();
       handleAssistantResponse("Lukas Core initialized. Systems are secure and operational on port 3000. How can I assist you, Commander?");
+      if (isPassiveListenEnabled) {
+        setTimeout(() => {
+          voice.startWakeWordListener();
+        }, 1200);
+      }
       document.removeEventListener('click', startVoiceSystem);
       document.removeEventListener('touchstart', startVoiceSystem);
     };
@@ -601,11 +606,13 @@ function bindUIEvents() {
   voice.onRecognitionStateChange = (state, error) => {
     const coreBtn = document.getElementById('lukasCoreBtn');
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
+    const activeLang = voice.speechLang || 'en-IN';
+    
     if (state === 'command') {
       micBtn.classList.add('active');
-      voiceStatusText.textContent = isAlexa ? 'ALEXA ACTIVE' : 'LUKAS ACTIVE';
+      voiceStatusText.textContent = (isAlexa ? 'ALEXA ACTIVE' : 'LUKAS ACTIVE') + ` (${activeLang})`;
       voiceStatusText.style.color = isAlexa ? 'var(--cyan-neon)' : 'var(--purple-neon)';
-      diag.logToTerminal(isAlexa ? "Alexa voice link active..." : "Lukas voice link active...", "info");
+      diag.logToTerminal(isAlexa ? `Alexa voice link active (${activeLang})...` : `Lukas voice link active (${activeLang})...`, "info");
       audioPlayer.volume = 0.08; // Duck music during mic capture
       if (coreBtn) {
         coreBtn.classList.add('listening');
@@ -613,7 +620,7 @@ function bindUIEvents() {
       }
     } else if (state === 'wakeword') {
       micBtn.classList.remove('active');
-      voiceStatusText.textContent = 'PASSIVE LISTEN';
+      voiceStatusText.textContent = `PASSIVE LISTEN (${activeLang})`;
       voiceStatusText.style.color = 'var(--purple-neon)';
       if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
       if (coreBtn) {
@@ -630,7 +637,7 @@ function bindUIEvents() {
       }
 
       if (voice.isListeningForWakeWord) {
-        voiceStatusText.textContent = 'PASSIVE LISTEN';
+        voiceStatusText.textContent = `PASSIVE LISTEN (${activeLang})`;
         voiceStatusText.style.color = 'var(--purple-neon)';
         if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
       } else {
@@ -666,8 +673,8 @@ function bindUIEvents() {
     }
   }
 
-  // Keep mic active for follow-up commands after a voice exchange (8 second window)
-  function keepConversationAlive(durationMs = 8000) {
+  // Keep mic active for follow-up commands after a voice exchange (15 second window)
+  function keepConversationAlive(durationMs = 15000) {
     conversationActive = true;
     if (conversationTimer) clearTimeout(conversationTimer);
     conversationTimer = setTimeout(() => {
@@ -694,7 +701,7 @@ function bindUIEvents() {
     accumulatedTranscript = "";
 
     noCommandTimeout = setTimeout(() => {
-      diag.logToTerminal("[AI CORE] 8 seconds of silence. No command detected.", "warn");
+      diag.logToTerminal("[AI CORE] 15 seconds of silence. No command detected.", "warn");
       voice.stopListeningForCommand();
       endConversation();
       
@@ -714,10 +721,10 @@ function bindUIEvents() {
         coreBtn.classList.remove('listening');
         coreBtn.classList.remove('processing');
       }
-    }, 8000);
+    }, 15000);
   }
 
-  function handleVoiceInput(transcript) {
+  function handleVoiceInput(transcript, isFinal = false) {
     clearSilenceTimeout();
     if (proceedTimeout) clearTimeout(proceedTimeout);
     
@@ -730,10 +737,9 @@ function bindUIEvents() {
       liveEl.classList.add('visible');
     }
     
-    // Process command quickly after 1.5s of silence (minimal gap for speech finalizer)
-    proceedTimeout = setTimeout(() => {
+    if (isFinal) {
       if (accumulatedTranscript.trim()) {
-        diag.logToTerminal(`[AI CORE] Speech finalized. Proceeding with command: "${accumulatedTranscript}"`, "info");
+        diag.logToTerminal(`[AI CORE] Speech finalized. Proceeding with command immediately: "${accumulatedTranscript}"`, "info");
         voice.stopListeningForCommand();
         // Mark conversation as active so the mic stays open for follow-up after the AI responds
         keepConversationAlive(10000);
@@ -742,15 +748,29 @@ function bindUIEvents() {
         // Hide live transcript
         if (liveEl) liveEl.classList.remove('visible');
       }
-    }, 1500);
+    } else {
+      // Process command quickly after 1.5s of silence (minimal gap for speech finalizer fallback)
+      proceedTimeout = setTimeout(() => {
+        if (accumulatedTranscript.trim()) {
+          diag.logToTerminal(`[AI CORE] Speech timeout. Proceeding with command: "${accumulatedTranscript}"`, "info");
+          voice.stopListeningForCommand();
+          // Mark conversation as active so the mic stays open for follow-up after the AI responds
+          keepConversationAlive(10000);
+          processCommand(accumulatedTranscript, 'voice');
+          accumulatedTranscript = "";
+          // Hide live transcript
+          if (liveEl) liveEl.classList.remove('visible');
+        }
+      }, 1500);
+    }
   }
 
   voice.onSpeechDetected = (transcript) => {
-    handleVoiceInput(transcript);
+    handleVoiceInput(transcript, false);
   };
 
   voice.onCommandRecognized = (transcript) => {
-    handleVoiceInput(transcript);
+    handleVoiceInput(transcript, true);
   };
 
   voice.onWakeWordDetected = () => {
@@ -2034,6 +2054,26 @@ function bindUIEvents() {
     });
   }
 
+  // ── Speech Recognition Language ─────────────────────────────────────────
+  const speechLangSelect = document.getElementById('speechLangSelect');
+  if (speechLangSelect) {
+    const savedSpeechLang = localStorage.getItem('lukas_speech_lang') || 'en-IN';
+    speechLangSelect.value = savedSpeechLang;
+    
+    // Set speech controller's language initially
+    if (typeof voice !== 'undefined' && voice.setLanguage) {
+      voice.setLanguage(savedSpeechLang);
+    }
+    
+    speechLangSelect.addEventListener('change', () => {
+      const selectedLang = speechLangSelect.value;
+      if (typeof voice !== 'undefined' && voice.setLanguage) {
+        voice.setLanguage(selectedLang);
+      }
+      diag.logToTerminal(`[SETTINGS] Speech recognition language changed to ${selectedLang}.`, 'info');
+    });
+  }
+
   // ── OpenAI Config Sync ────────────────────────────────────────────────
   const openaiInput = document.getElementById('openaiApiKeyInput');
   const openaiSaveBtn = document.getElementById('saveOpenaiApiKeyBtn');
@@ -2915,6 +2955,52 @@ function appendChatBubble(text, sender, linkUrl) {
   if (rows.length > 30) rows[0].remove();
 }
 
+function appendStreamingChatBubble(sender) {
+  // Create row wrapper with avatar
+  const row = document.createElement('div');
+  row.className = `chat-bubble-row${sender === 'user' ? ' user-row' : ''}`;
+
+  // Avatar badge
+  if (sender !== 'system') {
+    const avatar = document.createElement('div');
+    avatar.className = `chat-avatar ${sender === 'assistant' ? 'lukas-avatar' : 'user-avatar'}`;
+    avatar.innerHTML = sender === 'assistant'
+      ? '<i class="fa-solid fa-microchip"></i>'
+      : '<i class="fa-solid fa-user"></i>';
+    row.appendChild(avatar);
+  }
+
+  // Bubble itself
+  const bubble = document.createElement('div');
+  bubble.className = `chat-bubble ${sender}`;
+  bubble.textContent = "..."; // Initial loading state
+
+  row.appendChild(bubble);
+  chatHistory.appendChild(row);
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+
+  // Cap chat history length at 30 rows
+  const rows = chatHistory.querySelectorAll('.chat-bubble-row, .chat-bubble.system');
+  if (rows.length > 30) rows[0].remove();
+
+  return {
+    element: bubble,
+    update: (newText) => {
+      bubble.textContent = newText;
+      chatHistory.scrollTop = chatHistory.scrollHeight;
+    },
+    appendLink: (linkUrl) => {
+      if (!linkUrl) return;
+      const link = document.createElement('a');
+      link.href = linkUrl;
+      link.target = "_blank";
+      link.className = "chat-link";
+      link.innerHTML = ' <i class="fa-solid fa-arrow-up-right-from-square"></i> Source';
+      bubble.appendChild(link);
+    }
+  };
+}
+
 // Helper to coordinate weather response display, vocal synthesis and Nest/Alexa style dialog fallbacks
 function handleWeatherResponse(data) {
   if (data.error) {
@@ -3344,6 +3430,9 @@ async function processCommand(rawCommand, source) {
       return;
     }
 
+    // Run structured 6-step Voice Intelligence reasoning cycle
+    lukasReasoning.runReasoningCycle(rawCommand, diag.logToTerminal.bind(diag));
+
     const openaiApiKey = localStorage.getItem('openai_api_key');
     const geminiApiKey = localStorage.getItem('gemini_api_key');
     const activeProvider = openaiApiKey ? 'openai' : (geminiApiKey ? 'gemini' : 'puter');
@@ -3396,7 +3485,7 @@ async function processCommand(rawCommand, source) {
       case INTENT.PLANNING:
       case INTENT.ANALYSIS:
       default:
-        await handleConversationalIntent(rawCommand, routing.intent, activeKey, activeProvider);
+        await handleConversationalIntent(rawCommand, routing.intent, activeKey, activeProvider, source);
         break;
     }
 
@@ -3622,50 +3711,127 @@ async function handleSystemIntent(cmd) {
   }, 350);
 }
 
-async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvider) {
+async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvider, source = 'user') {
   diag.logToTerminal(`[AI CORE] Querying Conversational AI for: "${rawCommand}"...`, "info");
   
   const homeContext = `Active devices: ${home.dynamicDevices.filter(d => d.on).map(d => d.name).join(', ') || 'None'}. Climate target: ${home.state.climate.targetTemp}°C.`;
 
-  const response = await generateConversationalResponse({
-    userMessage: rawCommand,
-    memory: lukasMemory,
-    homeContext,
-    intent,
-    apiKey,
-    apiProvider
-  });
+  // If no API key is set, run Wikipedia search fallback
+  if (!apiKey && !window.puter?.ai) {
+    runWikipediaSearchFallback(rawCommand);
+    return;
+  }
 
-  if (response) {
-    const validation = lukasReasoning.validate(rawCommand, response);
-    if (!validation.valid) {
-      diag.logToTerminal(`[REASONING WARNING] Output validation failed (Score: ${validation.score}). Issues: ${validation.issues.join(', ')}. Regenerating with correction...`, 'warn');
-      
-      const correctionPrompt = `The previous response failed quality checks with issues: ${validation.issues.join(', ')}. Please write a higher quality, correct, and professional response.`;
-      
-      const correctedResponse = await generateConversationalResponse({
-        userMessage: `${rawCommand}\n\n[Correction Note: ${correctionPrompt}]`,
+  const isVoiceMode = (source === 'voice');
+  
+  // Create streaming bubble if we have a key
+  if (apiKey) {
+    const streamingBubble = appendStreamingChatBubble('assistant');
+    let spokenSentences = new Set();
+    let sentenceBuffer = "";
+
+    const streamCallback = (delta, fullText) => {
+      streamingBubble.update(fullText);
+      sentenceBuffer += delta;
+
+      let match;
+      const sentenceRegex = /[^.!?\n]+[.!?\n](\s+|$)/g;
+      let lastIndex = 0;
+
+      while ((match = sentenceRegex.exec(sentenceBuffer)) !== null) {
+        const sentence = match[0].trim();
+        if (sentence && !spokenSentences.has(sentence)) {
+          spokenSentences.add(sentence);
+          if (isVoiceMode) {
+            voice.speakSentence(sentence);
+          }
+        }
+        lastIndex = sentenceRegex.lastIndex;
+      }
+
+      if (lastIndex > 0) {
+        sentenceBuffer = sentenceBuffer.slice(lastIndex);
+      }
+    };
+
+    try {
+      const response = await generateConversationalResponse({
+        userMessage: rawCommand,
         memory: lukasMemory,
         homeContext,
         intent,
         apiKey,
-        apiProvider
+        apiProvider,
+        streamCallback,
+        isVoice: isVoiceMode
       });
-      
-      const finalResponse = correctedResponse || response;
-      lukasMemory.addMessage('assistant', finalResponse, intent);
-      handleAssistantResponse(finalResponse);
-    } else {
-      lukasMemory.addMessage('assistant', response, intent);
-      handleAssistantResponse(response);
-    }
-    
-    const isQuestion = response.trim().endsWith('?') || response.includes('?');
-    if (isQuestion || intent === 'planning' || intent === 'task_execution') {
-      keepConversationAlive(10000);
+
+      if (response) {
+        // Speak any remaining buffer
+        const remaining = sentenceBuffer.trim();
+        if (remaining && !spokenSentences.has(remaining)) {
+          spokenSentences.add(remaining);
+          if (isVoiceMode) {
+            voice.speakSentence(remaining);
+          }
+        }
+
+        // Remove processing state from Core Button
+        const coreBtn = document.getElementById('lukasCoreBtn');
+        if (coreBtn) {
+          coreBtn.classList.remove('processing');
+          coreBtn.classList.remove('listening');
+        }
+
+        // Log and add to memory
+        diag.logToTerminal(`[LUKAS REPLY] "${response.slice(0, 120)}${response.length > 120 ? '...' : ''}"`, 'info');
+        lukasMemory.addMessage('assistant', response, intent);
+
+        // Validation Checks (Layer 5 / Response Quality Rules)
+        const validation = lukasReasoning.validate(rawCommand, response);
+        if (!validation.valid) {
+          diag.logToTerminal(`[REASONING WARNING] Output validation failed (Score: ${validation.score}). Issues: ${validation.issues.join(', ')}.`, 'warn');
+        } else {
+          diag.logToTerminal(`[REASONING] Response validated successfully (Score: ${validation.score}).`, 'info');
+        }
+
+        // Keep mic alive for follow-up commands if voice mode
+        const isQuestion = response.trim().endsWith('?') || response.includes('?');
+        if (isQuestion || intent === 'planning' || intent === 'task_execution' || isVoiceMode) {
+          keepConversationAlive(15000);
+        }
+      }
+    } catch (err) {
+      console.error("Error in streaming response:", err);
+      streamingBubble.update("Sorry, I encountered an internal error during response generation.");
+      const coreBtn = document.getElementById('lukasCoreBtn');
+      if (coreBtn) {
+        coreBtn.classList.remove('processing');
+      }
     }
   } else {
-    runWikipediaSearchFallback(rawCommand);
+    // Non-streaming fallback for Puter AI
+    const response = await generateConversationalResponse({
+      userMessage: rawCommand,
+      memory: lukasMemory,
+      homeContext,
+      intent,
+      apiKey,
+      apiProvider,
+      isVoice: isVoiceMode
+    });
+
+    if (response) {
+      lukasMemory.addMessage('assistant', response, intent);
+      handleAssistantResponse(response);
+      
+      const isQuestion = response.trim().endsWith('?') || response.includes('?');
+      if (isQuestion || intent === 'planning' || intent === 'task_execution' || isVoiceMode) {
+        keepConversationAlive(15000);
+      }
+    } else {
+      runWikipediaSearchFallback(rawCommand);
+    }
   }
 }
 

@@ -8,7 +8,7 @@
  * Build LUKAS's master system prompt with full context injection.
  * This is what makes LUKAS feel like it knows you.
  */
-function buildSystemPrompt(memory, homeContext = '', intent = 'conversation') {
+function buildSystemPrompt(memory, homeContext = '', intent = 'conversation', isVoice = false) {
   const now = new Date();
   const timeStr = now.toLocaleString('en-IN', {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
@@ -75,6 +75,16 @@ Always address ${userName} directly.`;
     prompt += `\n\nFor research: synthesize information clearly, acknowledge uncertainty, cite key points.`;
   } else if (intent === 'planning') {
     prompt += `\n\nFor planning: provide concrete, actionable steps with clear priorities and timelines.`;
+  }
+
+  if (isVoice) {
+    prompt += `\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+[VOICE MODE RULES]
+1. You are speaking with the user via Text-to-Speech voice output.
+2. Keep your response extremely brief, concise, and natural (maximum 1-2 short sentences).
+3. Speak directly and conversationally. Avoid bullet points, lists, code blocks, or markdown formatting.
+4. If the user asks for details, explanation, or a breakdown, you may then expand your response.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
   }
 
   return prompt;
@@ -191,17 +201,70 @@ async function callLukasAI({
       const genConfig = { temperature, maxOutputTokens: maxTokens };
       if (jsonMode) genConfig.responseMimeType = 'application/json';
 
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({ contents: geminiContents, generationConfig: genConfig }),
-      });
+      if (streamCallback) {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse&key=${apiKey}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({ contents: geminiContents, generationConfig: genConfig }),
+        });
 
-      if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
-      const data = await response.json();
-      return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+        if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '';
+        let streamBuffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          streamBuffer += decoder.decode(value, { stream: true });
+          const lines = streamBuffer.split('\n');
+          streamBuffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data: ')) continue;
+            const dataStr = trimmed.slice(6).trim();
+            try {
+              const parsed = JSON.parse(dataStr);
+              const delta = parsed.candidates?.[0]?.content?.parts?.[0]?.text || '';
+              if (delta) {
+                fullText += delta;
+                streamCallback(delta, fullText);
+              }
+            } catch (e) {}
+          }
+        }
+
+        if (streamBuffer.trim().startsWith('data: ')) {
+          try {
+            const parsed = JSON.parse(streamBuffer.trim().slice(6).trim());
+            const delta = parsed.candidates?.[0]?.content?.parts?.[0]?.text || '';
+            if (delta) {
+              fullText += delta;
+              streamCallback(delta, fullText);
+            }
+          } catch (e) {}
+        }
+
+        return fullText;
+      } else {
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
+          body: JSON.stringify({ contents: geminiContents, generationConfig: genConfig }),
+        });
+
+        if (!response.ok) throw new Error(`Gemini API error: ${response.status}`);
+        const data = await response.json();
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+      }
 
     } else if (window.puter?.ai) {
       // Puter AI fallback — no history support
@@ -293,8 +356,9 @@ async function generateConversationalResponse({
   apiKey,
   apiProvider,
   streamCallback = null,
+  isVoice = false,
 }) {
-  const systemPrompt = buildSystemPrompt(memory, homeContext, intent);
+  const systemPrompt = buildSystemPrompt(memory, homeContext, intent, isVoice);
 
   const result = await callLukasAI({
     systemPrompt,

@@ -458,7 +458,7 @@ const PROBE_PORTS = [80,443,554,1400,1883,1982,4000,6668,7000,8008,8080,8123,912
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default defineConfig({
-  server: { port: 3000, host: true },
+  server: { port: 3000, host: true, strictPort: true },
   plugins: [{
     name: 'lukas-backend',
     configureServer(server) {

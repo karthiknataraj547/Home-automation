@@ -6,6 +6,7 @@ class LukasVoiceController {
     this.synth = window.speechSynthesis;
     this.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     this.recognition = null;
+    this.queuedUtterances = [];
     
     this.isMuted = localStorage.getItem('lukas_muted') === 'true';
     const storedVol  = parseFloat(localStorage.getItem('lukas_vocal_volume'));
@@ -78,7 +79,8 @@ class LukasVoiceController {
       this.recognition = new this.SpeechRecognition();
       this.recognition.continuous = true;
       this.recognition.interimResults = true; // Enabled interim results for fast interruption!
-      this.recognition.lang = 'en-US';
+      this.speechLang = localStorage.getItem('lukas_speech_lang') || 'en-IN';
+      this.recognition.lang = this.speechLang;
 
       this.recognition.onstart = () => {
         this.isRecognitionActive = true;
@@ -239,7 +241,7 @@ class LukasVoiceController {
           let textToDisplay = displayTranscript;
           if (this.isListeningForWakeWord) {
             const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-            const wakeWords = ['lukas', 'lucas', 'lookas', 'locus', 'luca', 'luka', 'lucus', 'look us', 'jarvis', 'wake up', 'alexa'];
+            const wakeWords = ['hey lukas', 'wake up lukas', 'look us', 'wake up', 'lukas', 'lucas', 'lookas', 'locus', 'luca', 'luka', 'lucus', 'jarvis', 'alexa'];
             
             let matchedWakeWord = null;
             let wakeWordIndex = -1;
@@ -275,7 +277,7 @@ class LukasVoiceController {
         // Continuous wake word checking on every speech update (both interim and final)
         if (this.isListeningForWakeWord) {
           const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-          const wakeWords = ['lukas', 'lucas', 'lookas', 'locus', 'luca', 'luka', 'lucus', 'look us', 'jarvis', 'wake up', 'alexa'];
+          const wakeWords = ['hey lukas', 'wake up lukas', 'look us', 'wake up', 'lukas', 'lucas', 'lookas', 'locus', 'luca', 'luka', 'lucus', 'jarvis', 'alexa'];
           
           let matchedWakeWord = null;
           let wakeWordIndex = -1;
@@ -314,7 +316,12 @@ class LukasVoiceController {
                 this.wakeWordTimeout = null;
               }
             }
-            return;
+            
+            // Only return early if this is an interim result (not final).
+            // If it is final, we want to let it fall through to the isFinal block so the inline command gets processed!
+            if (!isFinal) {
+              return;
+            }
           } else if (lowerText === 'stop' || lowerText === 'stop listening' || lowerText === 'go to sleep' || lowerText === 'stand down' || lowerText === 'deactivate voice' || lowerText === 'mute microphone' || lowerText.startsWith('stop ')) {
             console.log("Stop command detected during passive listening.");
             this.stopWakeWordListener();
@@ -330,7 +337,7 @@ class LukasVoiceController {
           if (this.isListeningForWakeWord) {
             // Wake word listener is active, but we got a finalized inline command containing the wake word
             const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-            const wakeWords = ['lukas', 'lucas', 'lookas', 'locus', 'luca', 'luka', 'lucus', 'look us', 'jarvis', 'wake up', 'alexa'];
+            const wakeWords = ['hey lukas', 'wake up lukas', 'look us', 'wake up', 'lukas', 'lucas', 'lookas', 'locus', 'luca', 'luka', 'lucus', 'jarvis', 'alexa'];
             
             let matchedWakeWord = null;
             let wakeWordIndex = -1;
@@ -358,12 +365,22 @@ class LukasVoiceController {
               if (originalWakeIndex !== -1) {
                 command = displayTranscript.substring(originalWakeIndex + matchedWakeWord.length).trim();
               }
-              if (command.startsWith(',') || command.startsWith('.') || command.startsWith('?')) {
-                command = command.substring(1).trim();
-              }
+              // Clean leading punctuation and spaces robustly
+              command = command.replace(/^[^a-zA-Z0-9]+/, '').trim();
               
-              if (this.onCommandRecognized) {
-                this.onCommandRecognized(command);
+              if (command.length === 0) {
+                // Just the wake word was finalized. Trigger wake word detected immediately!
+                if (this.wakeWordTimeout) {
+                  clearTimeout(this.wakeWordTimeout);
+                  this.wakeWordTimeout = null;
+                }
+                if (this.onWakeWordDetected) {
+                  this.onWakeWordDetected();
+                }
+              } else {
+                if (this.onCommandRecognized) {
+                  this.onCommandRecognized(command);
+                }
               }
               return;
             }
@@ -380,6 +397,7 @@ class LukasVoiceController {
   }
 
   cancelSpeech() {
+    this.queuedUtterances = [];
     if (this.activeUtterance) {
       this.activeUtterance.onstart = null;
       this.activeUtterance.onend = null;
@@ -499,23 +517,28 @@ class LukasVoiceController {
   // Vocalize responses
   speak(text) {
     this.lastSpokenText = text;
+    this.cancelSpeech();
+    this.speakSentence(text);
+  }
+
+  // Stream-compatible sentence speak handler
+  speakSentence(text) {
+    if (!text || !text.trim()) return;
+    
     if (!this.synth || this.isMuted) {
-      if (this.onSpeechStart) this.onSpeechStart();
+      if (this.onSpeechStart && this.queuedUtterances.length === 0) this.onSpeechStart();
       setTimeout(() => {
-        if (this.onSpeechEnd) this.onSpeechEnd();
-      }, 1000); // Simulate speech end if muted
+        if (this.queuedUtterances.length === 0 && this.onSpeechEnd) this.onSpeechEnd();
+      }, 800);
       return;
     }
 
-    // Cancel active speak tasks
-    this.cancelSpeech();
-    
-    // Clean text from custom markdown or symbols
-    const cleanedText = text.replace(/[*_`]/g, '').replace(/\[.*\]/g, '');
-    this.speakingText = cleanedText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+    const cleanedText = text.replace(/[*_`]/g, '').replace(/\[.*\]/g, '').trim();
+    if (!cleanedText) return;
 
     const utterance = new SpeechSynthesisUtterance(cleanedText);
-    this.activeUtterance = utterance; // Prevent garbage collection bug in Chrome
+    this.queuedUtterances.push(utterance);
+
     if (this.preferredVoice) {
       utterance.voice = this.preferredVoice;
     }
@@ -526,8 +549,10 @@ class LukasVoiceController {
     utterance.rate = this.vocalRate;
 
     utterance.onstart = () => {
-      if (this.onSpeechStart) this.onSpeechStart();
-      // Ensure listening stays active while speaking to capture user interrupts
+      this.speakingText = cleanedText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+      if (this.onSpeechStart && this.queuedUtterances[0] === utterance) {
+        this.onSpeechStart();
+      }
       if (this.isLongConversation) {
         try {
           this.recognition.start();
@@ -535,15 +560,21 @@ class LukasVoiceController {
       }
     };
 
-    utterance.onend = () => {
-      this.speakingText = '';
-      if (this.onSpeechEnd) this.onSpeechEnd();
+    const handleFinished = () => {
+      const idx = this.queuedUtterances.indexOf(utterance);
+      if (idx !== -1) {
+        this.queuedUtterances.splice(idx, 1);
+      }
+      if (this.queuedUtterances.length === 0) {
+        this.speakingText = '';
+        if (this.onSpeechEnd) this.onSpeechEnd();
+      }
     };
 
+    utterance.onend = handleFinished;
     utterance.onerror = (err) => {
-      console.error("Speech Synthesis Error:", err);
-      this.speakingText = '';
-      if (this.onSpeechEnd) this.onSpeechEnd();
+      console.error("Speech Synthesis Utterance Error:", err);
+      handleFinished();
     };
 
     this.synth.speak(utterance);
@@ -577,6 +608,20 @@ class LukasVoiceController {
   setRate(rate) {
     this.vocalRate = Math.max(0.5, Math.min(2.0, rate));
     localStorage.setItem('lukas_vocal_rate', this.vocalRate);
+  }
+
+  setLanguage(lang) {
+    this.speechLang = lang;
+    localStorage.setItem('lukas_speech_lang', lang);
+    if (this.recognition) {
+      this.recognition.lang = lang;
+      if (this.isRecognitionActive) {
+        console.log(`[voice.js] Speech recognition language changed to ${lang}. Restarting recognition engine...`);
+        try {
+          this.recognition.stop();
+        } catch(e) {}
+      }
+    }
   }
 
   startListeningForCommand() {
