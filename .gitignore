@@ -29,3 +29,4 @@ eseecloud_creds.json
 tuya_specs_cache.json
 go2rtc.yaml
 *.exe
+openai_creds.json

@@ -1616,6 +1616,13 @@ input:checked + .slider-knob:before {
     align-items: center;
     width: 100%;
   }
+  .center-bottom-grid {
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+  }
+  .cctv-grid {
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)) !important;
+  }
 }
 
 /* Chat bubble links */

@@ -151,8 +151,8 @@ function addReminder(text, fireAt) {
 function parseReminderTime(cmd) {
   const now = new Date();
   
-  // "in X minutes/hours/seconds"
-  const inMatch = cmd.match(/(?:in|after)\s+(\d+)\s*(second|sec|minute|min|hour|hr)s?/i);
+  // "in X minutes/hours/seconds" (optional "in" or "after")
+  const inMatch = cmd.match(/(?:in|after)?\s*(\d+)\s*(second|sec|minute|min|hour|hr)s?/i);
   if (inMatch) {
     const val = parseInt(inMatch[1]);
     const unit = inMatch[2].toLowerCase();
@@ -727,6 +727,24 @@ function bindUIEvents() {
     if (isWakingUp) {
       isWakingUp = false;
       diag.logToTerminal("[AI CORE] Voice greeting finished. Listening for command...", "info");
+      
+      if (coreBtn) {
+        coreBtn.classList.remove('waking');
+        coreBtn.classList.add('listening');
+        coreBtn.classList.remove('processing');
+      }
+      
+      voice.startListeningForCommand();
+      startSilenceTimeout();
+      return;
+    }
+
+    // Check if the last response was a question or if there's an active follow-up
+    const lastReplyText = voice.lastSpokenText || "";
+    const isQuestion = lastReplyText.trim().endsWith('?') || lastReplyText.includes('?');
+
+    if (isQuestion || activeFollowUp) {
+      diag.logToTerminal("[AI CORE] Assistant asked a question. Keeping microphone active for follow-up...", "info");
       
       if (coreBtn) {
         coreBtn.classList.remove('waking');
@@ -1942,6 +1960,31 @@ function bindUIEvents() {
     });
   }
 
+  // ── OpenAI Config Sync ────────────────────────────────────────────────
+  const openaiInput = document.getElementById('openaiApiKeyInput');
+  const openaiSaveBtn = document.getElementById('saveOpenaiApiKeyBtn');
+
+  async function loadOpenAIConfigFromServer() {
+    try {
+      const resp = await fetch('/api/openai-config');
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data && data.openai_api_key) {
+          localStorage.setItem('openai_api_key', data.openai_api_key);
+          if (openaiInput) {
+            openaiInput.value = data.openai_api_key;
+          }
+          diag.logToTerminal('[SETTINGS] OpenAI API Key synced from local config.', 'info');
+        }
+      }
+    } catch (err) {
+      console.warn('Could not load OpenAI config from backend:', err);
+    }
+  }
+
+  // Load from backend on init
+  loadOpenAIConfigFromServer();
+
   // ── Gemini API Key ───────────────────────────────────────────────────
   const geminiInput = document.getElementById('geminiApiKeyInput');
   const geminiSaveBtn = document.getElementById('saveGeminiApiKeyBtn');
@@ -1960,6 +2003,39 @@ function bindUIEvents() {
       }, 1500);
     });
   }
+
+  // ── OpenAI API Key ───────────────────────────────────────────────────
+  if (openaiInput) {
+    openaiInput.value = localStorage.getItem('openai_api_key') || '';
+  }
+  if (openaiSaveBtn && openaiInput) {
+    openaiSaveBtn.addEventListener('click', async () => {
+      const keyVal = openaiInput.value.trim();
+      localStorage.setItem('openai_api_key', keyVal);
+      diag.logToTerminal(`[SETTINGS] OpenAI API Key configuration updated in browser storage.`, 'info');
+      
+      try {
+        const resp = await fetch('/api/openai-config', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ openai_api_key: keyVal })
+        });
+        const resData = await resp.json();
+        if (resData.success) {
+          diag.logToTerminal(`[SETTINGS] OpenAI API Key successfully saved to server config.`, 'info');
+        }
+      } catch (err) {
+        diag.logToTerminal(`[SETTINGS] ❌ Failed to save OpenAI key to server: ${err.message}`, 'error');
+      }
+
+      const origText = openaiSaveBtn.innerHTML;
+      openaiSaveBtn.innerHTML = '<i class="fa-solid fa-check"></i> SAVED';
+      setTimeout(() => {
+        openaiSaveBtn.innerHTML = origText;
+      }, 1500);
+    });
+  }
+
 
   // ── Registry Reset and Gateway Reboot ─────────────────────────────────
   const clearRegistryBtn = document.getElementById('clearRegistryBtn');
@@ -2205,7 +2281,10 @@ async function searchInternet(query) {
       const systemPrompt = "You are LUKAS, a premium futuristic home automation and personal AI assistant. Keep responses under 2-3 sentences. Be concise, smart, and helpful. Do not use markdown tags like asterisks.";
       const prompt = `System Instructions: ${systemPrompt}\n\nUser Question: ${query}`;
       
-      const response = await window.puter.ai.chat(prompt);
+      const response = await Promise.race([
+        window.puter.ai.chat(prompt),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Puter AI request timed out")), 2000))
+      ]);
       
       // Puter returns response either as a string or a complex message object depending on SDK details
       let contentText = "";
@@ -2699,6 +2778,79 @@ function handleWeatherResponse(data) {
   }
 }
 
+// AI-assisted OpenAI API natural language intent parser
+async function parseCommandWithOpenAI(rawCommand, apiKey) {
+  try {
+    const systemPrompt = `You are a Smart Home intent parsing engine. Analyze the user's natural language directive and map it to a structured JSON object. 
+
+IMPORTANT: Reply ONLY with valid JSON. Do not include markdown code block syntax (like \`\`\`json), explanations, greetings, or extra characters.
+
+JSON Schema:
+{
+  "category": "light" | "climate" | "security" | "routine" | "media" | "diagnostics" | "greetings" | "time" | "date" | "weather" | "crypto" | "cctv" | "reminder" | "unknown",
+  "isGlobal": boolean,
+  "targetDeviceName": string | null,
+  "targetZone": "Living Room" | "Bedroom" | "Kitchen" | "Outdoor" | null,
+  "action": "on" | "off" | "toggle" | "color" | "brightness" | "temp" | "mode" | "play" | "pause" | "stop" | "next" | "prev" | "status" | "hello" | null,
+  "value": string | number | null
+}
+
+Mappings Guide:
+- "set All light colour to yellow" -> {"category":"light","isGlobal":true,"targetDeviceName":null,"targetZone":null,"action":"color","value":"yellow"}
+- "turn on bedroom light" -> {"category":"light","isGlobal":false,"targetDeviceName":"bedroom light","targetZone":"Bedroom","action":"on","value":null}
+- "convert all lights to red" -> {"category":"light","isGlobal":true,"targetDeviceName":null,"targetZone":null,"action":"color","value":"red"}
+- "make it cooler" -> {"category":"climate","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"mode","value":"cool"}
+- "what is the temperature?" -> {"category":"climate","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"status","value":null}
+- "what's the weather in Seattle?" -> {"category":"weather","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":"Seattle"}
+- "how is the system running" -> {"category":"diagnostics","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"status","value":null}
+- "play next track" -> {"category":"media","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"next","value":null}
+- "show camera feed" -> {"category":"cctv","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"on","value":null}
+- "stop music" -> {"category":"media","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":"stop","value":null}
+- "remind me in 5 minutes to go home" -> {"category":"reminder","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":"in 5 minutes to go home"}
+- "set a reminder" -> {"category":"reminder","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":null}`;
+
+    const url = "https://api.openai.com/v1/chat/completions";
+    const response = await Promise.race([
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: `User Directive: "${rawCommand}"` }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.1
+        })
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("OpenAI API request timed out")), 2000))
+    ]);
+
+    if (!response.ok) {
+      throw new Error(`OpenAI API returned status ${response.status}`);
+    }
+
+    const data = await response.json();
+    let text = data.choices[0].message.content.trim();
+    
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      text = jsonMatch[0];
+    }
+
+    diag.logToTerminal(`[OPENAI PARSER] Structured result: ${text}`, "info");
+    return JSON.parse(text);
+  } catch (e) {
+    console.warn("OpenAI intent parser failed:", e);
+    diag.logToTerminal(`[OPENAI PARSER] Failed: ${e.message}`, "warn");
+    return null;
+  }
+}
+
 // AI-assisted Gemini API natural language intent parser
 async function parseCommandWithGemini(rawCommand, apiKey) {
   try {
@@ -2731,22 +2883,25 @@ Mappings Guide:
 - "set a reminder" -> {"category":"reminder","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":null}`;
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: `${systemPrompt}\n\nUser Directive: "${rawCommand}"`
-          }]
-        }],
-        generationConfig: {
-          responseMimeType: "application/json"
-        }
-      })
-    });
+    const response = await Promise.race([
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `${systemPrompt}\n\nUser Directive: "${rawCommand}"`
+            }]
+          }],
+          generationConfig: {
+            responseMimeType: "application/json"
+          }
+        })
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Gemini API request timed out")), 2000))
+    ]);
 
     if (!response.ok) {
       throw new Error(`Gemini API returned status ${response.status}`);
@@ -2755,8 +2910,9 @@ Mappings Guide:
     const data = await response.json();
     let text = data.candidates[0].content.parts[0].text.trim();
     
-    if (text.startsWith('```')) {
-      text = text.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      text = jsonMatch[0];
     }
 
     diag.logToTerminal(`[GEMINI PARSER] Structured result: ${text}`, "info");
@@ -2768,40 +2924,483 @@ Mappings Guide:
   }
 }
 
-// Ask Gemini for general conversational response
-async function askGeminiAssistant(query, apiKey) {
+// Execute actions parsed from conversational assistant
+function executeConversationalAction(act) {
+  try {
+    if (act.type === 'climate_temp') {
+      let val = 0;
+      if (typeof act.value === 'string') {
+        const cleanedVal = act.value.trim().toLowerCase();
+        if (cleanedVal === 'warmer' || cleanedVal === 'hotter' || cleanedVal === 'up') {
+          val = home.state.climate.targetTemp + 2;
+        } else if (cleanedVal === 'cooler' || cleanedVal === 'colder' || cleanedVal === 'down') {
+          val = home.state.climate.targetTemp - 2;
+        } else {
+          const match = cleanedVal.match(/^([+-])\s*(\d+)/);
+          if (match) {
+            const sign = match[1] === '+' ? 1 : -1;
+            const diff = parseInt(match[2]);
+            val = home.state.climate.targetTemp + (sign * diff);
+          } else {
+            val = parseInt(cleanedVal);
+          }
+        }
+      } else {
+        val = act.value ? parseInt(act.value) : 0;
+      }
+      if (!isNaN(val) && val !== 0) {
+        home.setTargetTemperature(val);
+        diag.logToTerminal(`[CONVERSATIONAL AI] Set Eco-Thermostat target to ${val}°C`, 'info');
+      }
+    } else if (act.type === 'climate_mode') {
+      const mode = act.value.toLowerCase();
+      if (['cool', 'heat', 'eco'].includes(mode)) {
+        home.setClimateMode(mode);
+        diag.logToTerminal(`[CONVERSATIONAL AI] Changed Eco-Thermostat mode to ${mode.toUpperCase()}`, 'info');
+      }
+    } else if (act.type === 'device_power') {
+      const stateVal = !!act.value;
+      const target = act.target;
+      if (['Living Room', 'Bedroom', 'Kitchen'].includes(target)) {
+        let zoneId = DEVICES.LIVING_ROOM;
+        if (target === 'Bedroom') zoneId = DEVICES.BEDROOM;
+        else if (target === 'Kitchen') zoneId = DEVICES.KITCHEN;
+        home.setDeviceState(zoneId, { on: stateVal });
+      } else {
+        const dev = home.dynamicDevices.find(d => d.id === target || d.name.toLowerCase().includes(target.toLowerCase()));
+        if (dev) {
+          home.setDeviceState(dev.id, { on: stateVal });
+        }
+      }
+    } else if (act.type === 'device_color') {
+      const hex = act.value;
+      const target = act.target;
+      if (['Living Room', 'Bedroom', 'Kitchen'].includes(target)) {
+        let zoneId = DEVICES.LIVING_ROOM;
+        if (target === 'Bedroom') zoneId = DEVICES.BEDROOM;
+        else if (target === 'Kitchen') zoneId = DEVICES.KITCHEN;
+        home.setDeviceState(zoneId, { on: true, color: hex });
+      } else {
+        const dev = home.dynamicDevices.find(d => d.id === target || d.name.toLowerCase().includes(target.toLowerCase()));
+        if (dev) {
+          home.setDeviceState(dev.id, { on: true, color: hex });
+        }
+      }
+    } else if (act.type === 'device_brightness') {
+      const val = parseInt(act.value);
+      if (!isNaN(val)) {
+        const target = act.target;
+        if (['Living Room', 'Bedroom', 'Kitchen'].includes(target)) {
+          let zoneId = DEVICES.LIVING_ROOM;
+          if (target === 'Bedroom') zoneId = DEVICES.BEDROOM;
+          else if (target === 'Kitchen') zoneId = DEVICES.KITCHEN;
+          home.setDeviceState(zoneId, { on: true, brightness: val });
+          diag.logToTerminal(`[CONVERSATIONAL AI] Set ${target} light brightness to ${val}%`, 'info');
+        } else {
+          const dev = home.dynamicDevices.find(d => d.id === target || d.name.toLowerCase().includes(target.toLowerCase()));
+          if (dev) {
+            home.setDeviceState(dev.id, { on: true, brightness: val });
+            diag.logToTerminal(`[CONVERSATIONAL AI] Set ${dev.name} light brightness to ${val}%`, 'info');
+          }
+        }
+      }
+    } else if (act.type === 'media_control') {
+      const val = act.value.toLowerCase();
+      if (val === 'pause' || val === 'stop') {
+        isPlaying = false;
+        updateMediaPlayButton(false);
+        audioPlayer.pause();
+        diag.logToTerminal(`[CONVERSATIONAL AI] Paused media playback`, 'info');
+      } else if (val === 'play') {
+        isPlaying = true;
+        updateMediaPlayButton(true);
+        playTrack();
+        diag.logToTerminal(`[CONVERSATIONAL AI] Started media playback`, 'info');
+      } else if (val === 'next') {
+        currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
+        isPlaying = true;
+        updateMediaWidget();
+        playTrack();
+        diag.logToTerminal(`[CONVERSATIONAL AI] Skipped to next track`, 'info');
+      } else if (val === 'prev') {
+        currentTrackIndex = (currentTrackIndex - 1 + playlist.length) % playlist.length;
+        isPlaying = true;
+        updateMediaWidget();
+        playTrack();
+        diag.logToTerminal(`[CONVERSATIONAL AI] Reverted to previous track`, 'info');
+      }
+    } else if (act.type === 'media_route') {
+      const platformKey = act.value.toLowerCase();
+      const btn = Array.from(document.querySelectorAll('.platform-btn')).find(b => b.dataset.platform === platformKey);
+      if (btn) {
+        btn.click();
+        diag.logToTerminal(`[CONVERSATIONAL AI] Routed media playback to platform: ${platformKey}`, 'info');
+      } else {
+        activePlatform = platformKey === 'spotify' ? 'Spotify' :
+                         platformKey === 'apple' ? 'Apple Play' :
+                         platformKey === 'amazon' ? 'Amazon Music' : 'YouTube Music';
+        const sourceText = document.getElementById('mediaSourceText');
+        if (sourceText) sourceText.textContent = activePlatform.toUpperCase();
+        diag.logToTerminal(`[CONVERSATIONAL AI] Manually routed media playback to ${activePlatform}`, 'info');
+      }
+    } else if (act.type === 'cctv_feed') {
+      const camVal = parseInt(act.value);
+      if (!isNaN(camVal) && camVal >= 1 && camVal <= 4) {
+        const feed = document.querySelector(`.cctv-camera-feed[data-camera="${camVal}"]`);
+        if (feed) {
+          if (!feed.classList.contains('maximized')) {
+            feed.click();
+          }
+          diag.logToTerminal(`[CONVERSATIONAL AI] Focused on CCTV camera channel ${camVal}`, 'info');
+        } else if (camVal === 1) {
+          document.querySelectorAll('.cctv-camera-feed').forEach(f => {
+            if (f.classList.contains('maximized')) {
+              f.click();
+            }
+          });
+          diag.logToTerminal(`[CONVERSATIONAL AI] Focused on main CCTV camera channel 1`, 'info');
+        }
+      }
+    } else if (act.type === 'reminder_set') {
+      let text = '';
+      let timeStr = '';
+      if (typeof act.value === 'object' && act.value !== null) {
+        text = act.value.text || '';
+        timeStr = act.value.time || '';
+      } else if (typeof act.value === 'string') {
+        text = act.value;
+      }
+      
+      let fireAt = null;
+      if (timeStr) {
+        fireAt = parseReminderTime(timeStr);
+      }
+      if (!fireAt && text) {
+        fireAt = parseReminderTime(text);
+      }
+      if (!fireAt) {
+        fireAt = new Date(Date.now() + 5 * 60000);
+      }
+      
+      let label = '';
+      if (text) {
+        label = extractReminderText(text);
+        if (!label || label === 'Reminder') {
+          label = text;
+        }
+      }
+      if (!label) {
+        label = 'Assistant Alert';
+      }
+      
+      addReminder(label, fireAt);
+      diag.logToTerminal(`[CONVERSATIONAL AI] Set alarm reminder: "${label}" scheduled for ${fireAt.toLocaleTimeString()}`, 'info');
+    } else if (act.type === 'reminder_clear') {
+      reminderTimers.forEach((t) => clearTimeout(t));
+      reminderTimers.clear();
+      lukasReminders.length = 0;
+      saveReminders();
+      diag.logToTerminal(`[CONVERSATIONAL AI] Flushed and cleared all active reminders`, 'info');
+    } else if (act.type === 'system_diagnostics') {
+      diag.spikeCPU();
+      diag.logToTerminal("[CONVERSATIONAL AI] Triggered remote system diagnostics scan...", "info");
+      setTimeout(() => {
+        diag.logToTerminal(`> CPU: ${diag.metrics.cpu.toFixed(1)}% | RAM: ${diag.metrics.ram.toFixed(1)}% | Core Temp: ${diag.metrics.temp.toFixed(1)}C`, 'info');
+        diag.logToTerminal(`> Storage: 24.8TB Free | Network bandwidth: 1.2Gbps secure`, 'info');
+      }, 350);
+    } else if (act.type === 'system_reboot') {
+      diag.logToTerminal("[CONVERSATIONAL AI] System reboot directive acknowledged. Restarting dashboard kernel...", "warn");
+      setTimeout(() => {
+        window.location.reload();
+      }, 1500);
+    } else if (act.type === 'theme_toggle') {
+      const isLight = document.body.classList.contains('light-theme');
+      const targetTheme = typeof act.value === 'string' ? act.value.toLowerCase() : 'toggle';
+      let shouldBeLight = !isLight;
+      if (targetTheme === 'light') shouldBeLight = true;
+      else if (targetTheme === 'dark') shouldBeLight = false;
+
+      if (shouldBeLight !== isLight) {
+        const themeBtn = document.getElementById('themeToggleBtn');
+        if (themeBtn) {
+          themeBtn.click();
+        } else {
+          document.body.classList.toggle('light-theme', shouldBeLight);
+          localStorage.setItem('lukas_theme', shouldBeLight ? 'light' : 'dark');
+        }
+        diag.logToTerminal(`[CONVERSATIONAL AI] Changed visual theme to: ${shouldBeLight ? 'LIGHT' : 'DARK'}`, 'info');
+      }
+    } else if (act.type === 'weather_refresh') {
+      if (typeof requestLocalWeatherUpdate === 'function') {
+        requestLocalWeatherUpdate();
+        diag.logToTerminal(`[CONVERSATIONAL AI] Initiated weather sync protocol`, 'info');
+      }
+    }
+  } catch (err) {
+    console.error("Failed to execute conversational action:", err);
+  }
+}
+
+// Ask OpenAI for context-aware conversational response and dynamic device control
+async function askOpenAIAssistant(query, apiKey) {
   try {
     const isAlexa = document.body.classList.contains('alexa-mode');
-    const systemInstruction = `You are ${isAlexa ? 'Alexa' : 'LUKAS'}, a premium smart home voice assistant. You can control lights, climate, locks, CCTV, and music. Right now the user is asking a general conversational question. Provide a direct, highly concise, and natural response (maximum 2-3 sentences, no lists, no markdown formatting) suitable for immediate voice speech synthesis.`;
+    const assistantName = isAlexa ? 'Alexa' : 'LUKAS';
 
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        contents: [{
-          parts: [{
-            text: `${systemInstruction}\n\nUser Question: "${query}"`
-          }]
-        }]
-      })
-    });
+    // Gather current home metrics
+    const indoorTemp = home.state.climate.indoorTemp;
+    const targetTemp = home.state.climate.targetTemp;
+    const climateMode = home.state.climate.mode;
+    
+    const weatherDetails = document.getElementById('weatherDetailsText') 
+      ? document.getElementById('weatherDetailsText').textContent 
+      : 'Unknown';
+      
+    const activeLights = home.dynamicDevices
+      .filter(d => d.category === 'light' && d.on)
+      .map(d => d.name)
+      .join(', ') || 'None';
+
+    const systemStatus = `
+- Assistant Name: ${assistantName}
+- Current Local Time: ${new Date().toLocaleTimeString()}
+- Indoor Temperature: ${indoorTemp}°C
+- HVAC Target Temperature: ${targetTemp}°C
+- HVAC Mode: ${climateMode}
+- Outdoor Weather: ${weatherDetails}
+- Active Lights: ${activeLights}
+- Available Rooms/Zones: Living Room, Bedroom, Kitchen, Outdoor
+`;
+
+    const systemInstruction = `You are ${assistantName}, a premium human-like smart home voice assistant. You are capable of direct smart home control and conversational interactions. 
+Analyze the user's input, context, and take action if requested. 
+
+IMPORTANT: Reply ONLY with a valid JSON object matching this schema. Do not output markdown code blocks (no \`\`\`json), explanations, or extra text.
+
+JSON Schema:
+{
+  "response": "Conversational reply to the user (concise, natural, 1-2 sentences. Avoid listing device names unless asked. Be polite and helper-focused)",
+  "actions": [
+    {
+      "type": "climate_temp" | "climate_mode" | "device_power" | "device_color" | "device_brightness" | "media_control" | "media_route" | "cctv_feed" | "reminder_set" | "reminder_clear" | "system_diagnostics" | "system_reboot" | "theme_toggle" | "weather_refresh",
+      "target": "thermostat" | "device_id" | "zone_name" | "media" | "cctv" | "reminder" | "system" | "theme" | "weather",
+      "value": string | number | boolean | object
+    }
+  ]
+}
+
+Available Actions Guide:
+1. Adjust Thermostat Temp: {"type": "climate_temp", "target": "thermostat", "value": 24}
+2. Adjust Climate Mode: {"type": "climate_mode", "target": "thermostat", "value": "cool" | "heat" | "eco"}
+3. Turn Light/Device On/Off: {"type": "device_power", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": true | false}
+4. Adjust Light Color: {"type": "device_color", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": "#hexcolor"}
+5. Adjust Light Brightness: {"type": "device_brightness", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": 75}
+6. Media Control (play/pause/next/prev): {"type": "media_control", "target": "media", "value": "play" | "pause" | "stop" | "next" | "prev"}
+7. Route Media Playback (spotify/apple/amazon/youtube): {"type": "media_route", "target": "media", "value": "spotify" | "apple" | "amazon" | "youtube"}
+8. CCTV Feed Select (maximize channel 1-4): {"type": "cctv_feed", "target": "cctv", "value": 1 | 2 | 3 | 4}
+9. Set Reminder/Alarm: {"type": "reminder_set", "target": "reminder", "value": "buy milk in 10 minutes" | {"text": "do homework", "time": "in 1 hour"}}
+10. Clear All Reminders: {"type": "reminder_clear", "target": "reminder", "value": null}
+11. Run System Diagnostics: {"type": "system_diagnostics", "target": "system", "value": null}
+12. Reboot Dashboard System: {"type": "system_reboot", "target": "system", "value": null}
+13. Toggle Light/Dark Theme: {"type": "theme_toggle", "target": "theme", "value": "light" | "dark" | "toggle"}
+14. Sync/Refresh Weather: {"type": "weather_refresh", "target": "weather", "value": null}
+
+Current System Context:
+${systemStatus}
+
+Think step-by-step. If the user asks for something related to the home climate, lights, or locks, return the appropriate command in the actions array. If they ask a general question (e.g. "what is the speed of sound"), reply in the "response" property with an empty "actions" array.`;
+
+    const url = "https://api.openai.com/v1/chat/completions";
+    const response = await Promise.race([
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+          model: "gpt-4o-mini",
+          messages: [
+            { role: "system", content: systemInstruction },
+            { role: "user", content: `User Question: "${query}"` }
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0.7
+        })
+      }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("OpenAI API request timed out")), 2000))
+    ]);
 
     if (!response.ok) {
-      throw new Error(`Gemini API returned status ${response.status}`);
+      throw new Error(`OpenAI API returned status ${response.status}`);
     }
 
     const data = await response.json();
-    const text = data.candidates[0].content.parts[0].text.trim();
-    return text;
+    let resultJsonText = data.choices[0].message.content.trim();
+
+    let cleaned = resultJsonText.trim();
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      cleaned = jsonMatch[0];
+    }
+
+    const payload = JSON.parse(cleaned);
+
+    // Execute actions if returned
+    if (payload.actions && Array.isArray(payload.actions)) {
+      payload.actions.forEach(act => {
+        executeConversationalAction(act);
+      });
+    }
+
+    return payload.response;
   } catch (e) {
-    console.warn("Gemini chat failed:", e);
-    diag.logToTerminal(`[AI CORE] Gemini chat failed: ${e.message}`, "warn");
+    console.warn("OpenAI conversational AI failed:", e);
+    diag.logToTerminal(`[AI CORE] OpenAI Conversational AI failed: ${e.message}`, "warn");
     return null;
   }
 }
+
+// Ask Gemini or Puter client-side AI for context-aware conversational response and dynamic device control
+async function askGeminiAssistant(query, apiKey) {
+  try {
+    const isAlexa = document.body.classList.contains('alexa-mode');
+    const assistantName = isAlexa ? 'Alexa' : 'LUKAS';
+
+    // Gather current home metrics
+    const indoorTemp = home.state.climate.indoorTemp;
+    const targetTemp = home.state.climate.targetTemp;
+    const climateMode = home.state.climate.mode;
+    
+    const weatherDetails = document.getElementById('weatherDetailsText') 
+      ? document.getElementById('weatherDetailsText').textContent 
+      : 'Unknown';
+      
+    const activeLights = home.dynamicDevices
+      .filter(d => d.category === 'light' && d.on)
+      .map(d => d.name)
+      .join(', ') || 'None';
+
+    const systemStatus = `
+- Assistant Name: ${assistantName}
+- Current Local Time: ${new Date().toLocaleTimeString()}
+- Indoor Temperature: ${indoorTemp}°C
+- HVAC Target Temperature: ${targetTemp}°C
+- HVAC Mode: ${climateMode}
+- Outdoor Weather: ${weatherDetails}
+- Active Lights: ${activeLights}
+- Available Rooms/Zones: Living Room, Bedroom, Kitchen, Outdoor
+`;
+
+    const systemInstruction = `You are ${assistantName}, a premium human-like smart home voice assistant. You are capable of direct smart home control and conversational interactions. 
+Analyze the user's input, context, and take action if requested. 
+
+IMPORTANT: Reply ONLY with a valid JSON object matching this schema. Do not output markdown code blocks (no \`\`\`json), explanations, or extra text.
+
+JSON Schema:
+{
+  "response": "Conversational reply to the user (concise, natural, 1-2 sentences. Avoid listing device names unless asked. Be polite and helper-focused)",
+  "actions": [
+    {
+      "type": "climate_temp" | "climate_mode" | "device_power" | "device_color" | "device_brightness" | "media_control" | "media_route" | "cctv_feed" | "reminder_set" | "reminder_clear" | "system_diagnostics" | "system_reboot" | "theme_toggle" | "weather_refresh",
+      "target": "thermostat" | "device_id" | "zone_name" | "media" | "cctv" | "reminder" | "system" | "theme" | "weather",
+      "value": string | number | boolean | object
+    }
+  ]
+}
+
+Available Actions Guide:
+1. Adjust Thermostat Temp: {"type": "climate_temp", "target": "thermostat", "value": 24}
+2. Adjust Climate Mode: {"type": "climate_mode", "target": "thermostat", "value": "cool" | "heat" | "eco"}
+3. Turn Light/Device On/Off: {"type": "device_power", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": true | false}
+4. Adjust Light Color: {"type": "device_color", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": "#hexcolor"}
+5. Adjust Light Brightness: {"type": "device_brightness", "target": "Living Room" | "Bedroom" | "Kitchen" | "device_id", "value": 75}
+6. Media Control (play/pause/next/prev): {"type": "media_control", "target": "media", "value": "play" | "pause" | "stop" | "next" | "prev"}
+7. Route Media Playback (spotify/apple/amazon/youtube): {"type": "media_route", "target": "media", "value": "spotify" | "apple" | "amazon" | "youtube"}
+8. CCTV Feed Select (maximize channel 1-4): {"type": "cctv_feed", "target": "cctv", "value": 1 | 2 | 3 | 4}
+9. Set Reminder/Alarm: {"type": "reminder_set", "target": "reminder", "value": "buy milk in 10 minutes" | {"text": "do homework", "time": "in 1 hour"}}
+10. Clear All Reminders: {"type": "reminder_clear", "target": "reminder", "value": null}
+11. Run System Diagnostics: {"type": "system_diagnostics", "target": "system", "value": null}
+12. Reboot Dashboard System: {"type": "system_reboot", "target": "system", "value": null}
+13. Toggle Light/Dark Theme: {"type": "theme_toggle", "target": "theme", "value": "light" | "dark" | "toggle"}
+14. Sync/Refresh Weather: {"type": "weather_refresh", "target": "weather", "value": null}
+
+Current System Context:
+${systemStatus}
+
+Think step-by-step. If the user asks for something related to the home climate, lights, or locks, return the appropriate command in the actions array. If they ask a general question (e.g. "what is the speed of sound"), reply in the "response" property with an empty "actions" array.`;
+
+    let resultJsonText = "";
+
+    if (apiKey) {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+      const response = await Promise.race([
+        fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [{ text: `${systemInstruction}\n\nUser Question: "${query}"` }]
+            }],
+            generationConfig: { responseMimeType: "application/json" }
+          })
+        }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Gemini API request timed out")), 2000))
+      ]);
+
+      if (response.ok) {
+        const data = await response.json();
+        resultJsonText = data.candidates[0].content.parts[0].text.trim();
+      }
+    }
+
+    if (!resultJsonText && window.puter && window.puter.ai) {
+      const prompt = `System Instructions: ${systemInstruction}\n\nUser Question: "${query}"`;
+      const response = await Promise.race([
+        window.puter.ai.chat(prompt),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Puter AI request timed out")), 2000))
+      ]);
+      if (response) {
+        if (typeof response === 'string') resultJsonText = response;
+        else if (response.message && response.message.content) {
+          const content = response.message.content;
+          if (typeof content === 'string') resultJsonText = content;
+          else if (Array.isArray(content)) {
+            resultJsonText = content.map(b => (typeof b === 'string' ? b : (b.text || ''))).join('');
+          }
+        } else if (response.text) {
+          resultJsonText = response.text;
+        }
+      }
+    }
+
+    if (!resultJsonText) {
+      throw new Error("No AI responders available.");
+    }
+
+    let cleaned = resultJsonText.trim();
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      cleaned = jsonMatch[0];
+    }
+
+    const payload = JSON.parse(cleaned);
+
+    // Execute actions if returned
+    if (payload.actions && Array.isArray(payload.actions)) {
+      payload.actions.forEach(act => {
+        executeConversationalAction(act);
+      });
+    }
+
+    return payload.response;
+  } catch (e) {
+    console.warn("Conversational AI failed:", e);
+    diag.logToTerminal(`[AI CORE] Conversational AI failed: ${e.message}`, "warn");
+    return null;
+  }
+}
+
 
 // AI-assisted zero-key client-side natural language parser using Puter.js
 async function parseCommandWithAI(rawCommand) {
@@ -2840,7 +3439,10 @@ Mappings Guide:
 - "set a reminder" -> {"category":"reminder","isGlobal":false,"targetDeviceName":null,"targetZone":null,"action":null,"value":null}`;
 
     const prompt = `System Instructions: ${systemPrompt}\n\nUser Directive: "${rawCommand}"`;
-    const response = await window.puter.ai.chat(prompt);
+    const response = await Promise.race([
+      window.puter.ai.chat(prompt),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("Puter AI request timed out")), 2000))
+    ]);
     
     let contentText = "";
     if (response) {
@@ -2858,8 +3460,9 @@ Mappings Guide:
     }
     
     let cleaned = contentText.trim();
-    if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
+    const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      cleaned = jsonMatch[0];
     }
     
     diag.logToTerminal(`[AI PARSER] Structured parser result: ${cleaned}`, "info");
@@ -2873,7 +3476,8 @@ Mappings Guide:
 
 // 5. Intelligent rule-based command interpreter
 async function processCommand(rawCommand, source) {
-  // Clear any active voice capturing timeouts immediately
+  try {
+    // Clear any active voice capturing timeouts immediately
   if (typeof noCommandTimeout !== 'undefined' && noCommandTimeout) {
     clearTimeout(noCommandTimeout);
     noCommandTimeout = null;
@@ -2895,7 +3499,33 @@ async function processCommand(rawCommand, source) {
 
   // Print intent analysis details to high-tech terminal console log
   diag.logToTerminal(`Incoming directive: "${rawCommand}" (${source.toUpperCase()})`, 'info');
+
+  // Compound/Conjunction command detection to bypass rule-based matching
+  const isCompound = /\b(and|then|also)\b/i.test(cmd) || (cmd.includes('play') && cmd.includes('light')) || (cmd.includes('media') && cmd.includes('light')) || (cmd.includes('music') && cmd.includes('light'));
+  const openaiApiKey = localStorage.getItem('openai_api_key');
+  const geminiApiKey = localStorage.getItem('gemini_api_key');
+  const hasAi = openaiApiKey || geminiApiKey || (window.puter && window.puter.ai);
   
+  if (isCompound && hasAi) {
+    diag.logToTerminal("[AI CORE] Compound/Conjunction command detected. Routing to Conversational AI...", "info");
+    const assistantPromise = openaiApiKey 
+      ? askOpenAIAssistant(rawCommand, openaiApiKey) 
+      : askGeminiAssistant(rawCommand, geminiApiKey);
+
+    assistantPromise.then(response => {
+      if (response) {
+        diag.logToTerminal(`[LUKAS REPLY] "${response}"`, 'info');
+        appendChatBubble(response, 'assistant');
+        voice.stopWakeWordListener();
+        voice.speak(response);
+      } else {
+        diag.logToTerminal("[AI CORE] Conversational AI failed. Performing local search fallback...", "warn");
+        runWikipediaSearchFallback(rawCommand);
+      }
+    });
+    return;
+  }
+
   // AI-assisted Parsing Engine execution
   let handledByAI = false;
   let aiResponseText = "";
@@ -2909,8 +3539,10 @@ async function processCommand(rawCommand, source) {
   };
 
   let parsed = null;
-  const geminiApiKey = localStorage.getItem('gemini_api_key');
-  if (geminiApiKey) {
+  if (openaiApiKey) {
+    diag.logToTerminal("[AI PARSER] Querying OpenAI AI intent parser...", "info");
+    parsed = await parseCommandWithOpenAI(rawCommand, openaiApiKey);
+  } else if (geminiApiKey) {
     diag.logToTerminal("[AI PARSER] Querying Gemini AI intent parser...", "info");
     parsed = await parseCommandWithGemini(rawCommand, geminiApiKey);
   } else {
@@ -3049,7 +3681,7 @@ async function processCommand(rawCommand, source) {
     
     // CLIMATE
     else if (parsed.category === 'climate') {
-      isControlAction = true;
+      aiIsControlAction = true;
       if (parsed.action === 'temp' && parsed.value) {
         const val = parseInt(parsed.value);
         if (!isNaN(val)) {
@@ -3256,8 +3888,8 @@ async function processCommand(rawCommand, source) {
         diag.logToTerminal(`[FOLLOW-UP] User selected broad Wikipedia search for "${followUp.originalQuery}".`, "info");
         const result = await searchInternet(followUp.originalQuery);
         if (result) {
-          const sentences = result.summary.split(/[.!?]+/);
-          const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(".") + ".";
+          const sentences = result.summary.split(/(?<=[.!?])\s+/);
+          const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(" ");
           appendChatBubble(`${result.title}: ${result.summary}`, 'assistant', result.url);
           voice.speak(speechSummary);
         } else {
@@ -3503,8 +4135,8 @@ async function processCommand(rawCommand, source) {
       diag.logToTerminal(`[AI SEARCH] Found matching entry: "${result.title}"`, "info");
       
       // Split into sentences for spoken readout (limit to first two sentences)
-      const sentences = result.summary.split(/[.!?]+/);
-      const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(".") + ".";
+      const sentences = result.summary.split(/(?<=[.!?])\s+/);
+      const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(" ");
       
       diag.logToTerminal(`[LUKAS REPLY] "${speechSummary}"`, 'info');
       appendChatBubble(`${result.title}: ${result.summary}`, 'assistant', result.url);
@@ -3920,36 +4552,39 @@ async function processCommand(rawCommand, source) {
     // FALLBACK
     else {
       handledBySearch = true;
-      const controlVerbs = ['turn', 'switch', 'activate', 'deactivate', 'enable', 'disable', 'lock', 'unlock', 'open', 'close', 'set', 'adjust', 'dim', 'increase', 'decrease', 'play', 'pause', 'stop', 'trigger', 'run', 'start', 'show'];
-      const controlNouns = ['light', 'lamp', 'bulb', 'led', 'plug', 'outlet', 'switch', 'thermostat', 'temp', 'temperature', 'climate', 'door', 'gate', 'lock', 'routine', 'morning', 'cinema', 'eco', 'lockdown', 'music', 'song', 'cctv', 'camera', 'feed', 'video'];
-      const isControlIntent = controlVerbs.some(v => cmd.includes(v)) || controlNouns.some(n => cmd.includes(n)) || cmd.includes('on') || cmd.includes('off');
+      const openaiApiKey = localStorage.getItem('openai_api_key');
+      const geminiApiKey = localStorage.getItem('gemini_api_key');
+      const hasAi = openaiApiKey || geminiApiKey || (window.puter && window.puter.ai);
 
-      if (isControlIntent) {
-        responseText = "I detected a control command, but I couldn't find a matching registered device, zone, or routine in your system configurations. Please register it first in the settings panel.";
-        diag.logToTerminal(`[AI COMMAND WARNING] Unmatched control directive: "${rawCommand}"`, 'warn');
-        handleAssistantResponse(responseText, true);
+      if (hasAi) {
+        diag.logToTerminal(`[AI CORE] Querying Conversational AI response for: "${rawCommand}"...`, "info");
+        const chatPromise = openaiApiKey 
+          ? askOpenAIAssistant(rawCommand, openaiApiKey) 
+          : askGeminiAssistant(rawCommand, geminiApiKey);
+          
+        chatPromise.then(response => {
+          if (response) {
+            diag.logToTerminal(`[LUKAS REPLY] "${response}"`, 'info');
+            appendChatBubble(response, 'assistant');
+            voice.stopWakeWordListener();
+            voice.speak(response);
+          } else {
+            runWikipediaSearchFallback(rawCommand);
+          }
+        });
       } else {
-        if (geminiApiKey) {
-          diag.logToTerminal(`[AI CORE] Querying Gemini for conversational response: "${rawCommand}"...`, "info");
-          askGeminiAssistant(rawCommand, geminiApiKey).then(response => {
-            if (response) {
-              diag.logToTerminal(`[LUKAS REPLY] "${response}"`, 'info');
-              appendChatBubble(response, 'assistant');
-              voice.stopWakeWordListener();
-              voice.speak(response);
-            } else {
-              runWikipediaSearchFallback(rawCommand);
-            }
-          });
-        } else {
-          runWikipediaSearchFallback(rawCommand);
-        }
+        runWikipediaSearchFallback(rawCommand);
       }
     }
 
     if (!handledBySearch) {
       handleAssistantResponse(responseText, isControlAction);
     }
+  } catch (err) {
+    console.error("Error in processCommand:", err);
+    diag.logToTerminal(`[AI CORE] Error during command execution: ${err.message}`, "error");
+    handleAssistantResponse("Sorry, I encountered an internal system error while executing that request.");
+  }
 }
 
 // Helper for Wikipedia search fallback
@@ -3958,8 +4593,8 @@ function runWikipediaSearchFallback(rawCommand) {
   searchInternet(rawCommand).then(result => {
     if (result) {
       diag.logToTerminal(`[AI SEARCH] Found fallback entry: "${result.title}"`, "info");
-      const sentences = result.summary.split(/[.!?]+/);
-      const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(".") + ".";
+      const sentences = result.summary.split(/(?<=[.!?])\s+/);
+      const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(" ");
       
       diag.logToTerminal(`[LUKAS REPLY] "${speechSummary}"`, 'info');
       appendChatBubble(`${result.title}: ${result.summary}`, 'assistant', result.url);

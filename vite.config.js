@@ -565,6 +565,22 @@ export default defineConfig({
             json(res, fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : { clientId: '', clientSecret: '', region: 'openapi.tuyain.com' });
           } catch(e) { json(res, { error: e.message }, 500); }
 
+        // ── GET /api/openai-config ── read openai credentials ──────────────
+        } else if (url === '/api/openai-config' && req.method === 'GET') {
+          try {
+            const p = path.resolve(process.cwd(), 'openai_creds.json');
+            json(res, fs.existsSync(p) ? JSON.parse(fs.readFileSync(p, 'utf8')) : { openai_api_key: '' });
+          } catch(e) { json(res, { error: e.message }, 500); }
+
+        // ── POST /api/openai-config ── save openai credentials ─────────────
+        } else if (url === '/api/openai-config' && req.method === 'POST') {
+          const body = await readBody(req);
+          try {
+            const data = JSON.parse(body);
+            fs.writeFileSync(path.resolve(process.cwd(), 'openai_creds.json'), JSON.stringify(data));
+            json(res, { success: true });
+          } catch(e) { json(res, { error: e.message }, 500); }
+
         // ── POST /api/tuya-control ── send Tuya command ───────────────────
         } else if (url === '/api/tuya-control' && req.method === 'POST') {
           const body = await readBody(req);
