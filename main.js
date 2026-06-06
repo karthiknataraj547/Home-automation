@@ -556,7 +556,7 @@ function initializeDashboard() {
         // Update voice customizations from restored preferences
         const voiceAccentSelect = document.getElementById('voiceAccentSelect');
         if (voiceAccentSelect) {
-          const loadedAccent = lukasMemory.getPreference('voiceAccent', 'en-US');
+          const loadedAccent = lukasMemory.getPreference('voiceAccent', 'indian_english');
           voiceAccentSelect.value = loadedAccent;
           localStorage.setItem('lukas_voice_accent', loadedAccent);
           voice.setAccent(loadedAccent);
@@ -2739,7 +2739,7 @@ function bindUIEvents() {
   // ── LUKAS Infinity Voice Customizations ─────────────────────────────────
   const voiceAccentSelect = document.getElementById('voiceAccentSelect');
   if (voiceAccentSelect) {
-    const savedAccent = localStorage.getItem('lukas_voice_accent') || lukasMemory.getPreference('voiceAccent', 'en-US');
+    const savedAccent = localStorage.getItem('lukas_voice_accent') || lukasMemory.getPreference('voiceAccent', 'indian_english');
     voiceAccentSelect.value = savedAccent;
     voice.setAccent(savedAccent);
     lukasMemory.setPreference('voiceAccent', savedAccent);

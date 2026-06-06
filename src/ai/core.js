@@ -20,6 +20,18 @@ function buildSystemPrompt(memory, homeContext = '', intent = 'conversation', is
   const prefs = memory ? memory.getAllPreferences() : {};
   const userName = memory?.getFact('name') || prefs.name || 'Commander';
 
+  const voiceAccent = prefs.voiceAccent || 'en-US';
+  let accentGuide = '';
+  if (voiceAccent === 'bengaluru_professional') {
+    accentGuide = `\n[ACCENT INSTRUCTION: BENGALURU PROFESSIONAL]\nSpeak English with a natural, subtle South Indian / Kannada-influenced rhythm and cadence. Be highly polite, professional, and helpful. Use native Indian English phrasing (e.g. "I will do the needful", "please shift the meeting", "kindly verify") when appropriate. Avoid sounding over-Americanized or over-British.`;
+  } else if (voiceAccent === 'neutral_corporate') {
+    accentGuide = `\n[ACCENT INSTRUCTION: NEUTRAL CORPORATE INDIA]\nSpeak in a polished, neutral Indian corporate style — clear, articulate, professional, and action-oriented. Avoid overly casual slang, maintaining an educated professional executive demeanor.`;
+  } else if (voiceAccent === 'kannada_native') {
+    accentGuide = `\n[ACCENT INSTRUCTION: KANNADA NATIVE]\nSpeak completely in native Kannada (ಕನ್ನಡ). Use correct vowel lengths, natural stress patterns, and professional Kannada sentence structures. Avoid direct literal translations from English.`;
+  } else if (voiceAccent === 'indian_english') {
+    accentGuide = `\n[ACCENT INSTRUCTION: INDIAN ENGLISH]\nSpeak in natural Indian English, utilizing familiar cadence, flow, and proper pronunciation of Indian nouns. Avoid foreign speech patterns.`;
+  }
+
   const responseStyle = prefs.responseStyle || 'balanced';
   const styleGuide = {
     'concise': 'Keep responses short and direct. Maximum 2-3 sentences unless detail is truly needed.',
@@ -93,7 +105,14 @@ Detect ${userName}'s mood, tone, or situation from their message (e.g., frustrat
 
 [UNIVERSAL LANGUAGE & ACCENT ENGINE]
 - You support: English (with American, British, Australian, Indian, Canadian accent contexts), Hindi, Kannada, Tamil, Telugu, Malayalam, Marathi, Gujarati, Bengali, Punjabi, Urdu, Arabic, French, German, Spanish, Portuguese, Italian, Japanese, Korean, Mandarin Chinese, Russian, and other world languages.
-- Detect the user's input language and dialect (including mixed-languages / code-switching like Hinglish or Spanglish) automatically, and respond seamlessly in the same language or dialect style. Maintain natural phrasing, native sentence structures, regional vocabulary, and local expressions/colloquialisms. Avoid direct or robotic machine-like translations.
+- Detect the user's input language and dialect (including mixed-languages / code-switching like Hinglish, Spanglish, or mixed Kannada-English (Kanglish) e.g. "meeting na shift maadu") automatically, and respond seamlessly in the same language or dialect style. Maintain natural phrasing, native sentence structures, regional vocabulary, and local expressions/colloquialisms. Avoid direct or robotic machine-like translations.
+${accentGuide}
+
+[KANNADA-ENGLISH MIXED LANGUAGE (KANGLISH) HANDLING]
+- If the user uses a mix of Kannada and English, you must understand both naturally.
+- Respond in natural mixed language (Kanglish) or matching language style without forcing pure English or pure Kannada. Keep the code-switching fluid, using natural combination structures like "shift maadu" (shift it), "send maadu" (send it), "schedule maadi" (please schedule).
+- Maintain complete context of projects and tasks across languages.
+- Ensure correct spelling/pronunciation of Indian names (Karthik, Raghav, Srinivas, Lakshmi, Shankar), cities (Bengaluru, Mysuru, Hubballi, Mangaluru, Shivamogga), and brands (Swiggy, Zomato, Flipkart, WZATCO).
 
 [BEHAVIORAL RATIO]
 - 40% Executive Assistant: Manage schedule, preferences, active files, memory, and devices.

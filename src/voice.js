@@ -99,7 +99,14 @@ class LukasVoiceController {
 
     // If target language is general English, map to preferred accent profile
     if (langPrefix === 'en') {
-      targetLang = (this.preferredAccent || 'en-US').toLowerCase();
+      const accent = this.preferredAccent || 'en-US';
+      if (accent === 'kannada_native') {
+        targetLang = 'kn-in';
+      } else if (['indian_english', 'bengaluru_professional', 'neutral_corporate'].includes(accent)) {
+        targetLang = 'en-in';
+      } else {
+        targetLang = accent.toLowerCase();
+      }
     }
 
     // Filter exact match (e.g. 'en-us')
@@ -783,6 +790,36 @@ class LukasVoiceController {
     }
   }
 
+  _applyIndianPronunciations(text) {
+    if (!text) return text;
+    
+    // Custom pronunciation dictionary mapping Indian names, cities, and brands
+    const dict = {
+      'karthik': 'Kaarthik',
+      'raghav': 'Raaghav',
+      'srinivas': 'Shreenivaas',
+      'lakshmi': 'Lakshmee',
+      'shankar': 'Shankara',
+      'bengaluru': 'Bengalooroo',
+      'mysuru': 'Mysooroo',
+      'hubballi': 'Hoobballi',
+      'mangalis': 'Mangalooroo',
+      'mangaluru': 'Mangalooroo',
+      'shivamogga': 'Shivamoagha',
+      'swiggy': 'Swiggy',
+      'zomato': 'Zomaato',
+      'flipkart': 'Flipkart',
+      'wzatco': 'Wee-Zatco'
+    };
+
+    let processed = text;
+    for (const [key, replacement] of Object.entries(dict)) {
+      const regex = new RegExp(`\\b${key}\\b`, 'gi');
+      processed = processed.replace(regex, replacement);
+    }
+    return processed;
+  }
+
   speakSegmentText(cleanedText) {
     if (!cleanedText || !cleanedText.trim()) {
       this._processNextSpeechSegment();
@@ -794,7 +831,9 @@ class LukasVoiceController {
       return;
     }
 
-    const utterance = new SpeechSynthesisUtterance(cleanedText);
+    // Apply phonetic substitution dictionary to spoken text, keeping cleanedText intact for tracking
+    const spokenText = this._applyIndianPronunciations(cleanedText);
+    const utterance = new SpeechSynthesisUtterance(spokenText);
     this.activeUtterance = utterance;
 
     // Dynamic language detection
@@ -816,6 +855,13 @@ class LukasVoiceController {
       baseRate = 1.25;
     } else {
       baseRate = this.vocalRate || 1.0;
+    }
+
+    // Apply custom Indian Accent cadence shifts
+    if (this.preferredAccent === 'bengaluru_professional') {
+      baseRate *= 0.92; // Deliberate, slower rhythm with mild Kannada-esque pauses
+    } else if (this.preferredAccent === 'kannada_native') {
+      baseRate *= 0.95; // Steady, native stress patterns
     }
 
     let pitch = 0.95;
@@ -986,6 +1032,16 @@ class LukasVoiceController {
   setAccent(accent) {
     this.preferredAccent = accent;
     localStorage.setItem('lukas_voice_accent', accent);
+    
+    // Automatically switch speech recognition language to match accent modes
+    if (accent === 'kannada_native') {
+      this.setLanguage('kn-IN');
+    } else if (['indian_english', 'bengaluru_professional', 'neutral_corporate'].includes(accent)) {
+      this.setLanguage('en-IN');
+    } else if (accent.startsWith('en-')) {
+      this.setLanguage(accent);
+    }
+
     if (this.synth) {
       this.preferredVoice = this.getVoiceForLanguage(this.speechLang || 'en-IN');
       console.log(`[voice.js] Speech Synthesis voice updated for accent: ${this.preferredVoice?.name || 'Default'}`);
