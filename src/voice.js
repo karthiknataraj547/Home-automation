@@ -44,6 +44,13 @@ class LukasVoiceController {
     this.preferredVoice = null;
     this.dummyStream = null; // Keeps browser microphone hardware warm on mobile
     
+    this.wakeWords = [
+      'hey lukas', 'train lukas', 'tren lukas', 'turn lukas', 'then lukas', 
+      'ten lukas', 'tell lukas', 'hi lukas', 'dear lukas', 'hello lukas', 
+      'ok lukas', 'okay lukas', 'wake up lukas', 'look us', 'wake up', 
+      'lukas', 'lucas', 'lookas', 'locus', 'luca', 'luka', 'lucus', 'jarvis', 'alexa'
+    ];
+    
     this.initSpeechSynthesis();
     this.initSpeechRecognition();
   }
@@ -241,7 +248,7 @@ class LukasVoiceController {
           let textToDisplay = displayTranscript;
           if (this.isListeningForWakeWord) {
             const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-            const wakeWords = ['hey lukas', 'wake up lukas', 'look us', 'wake up', 'lukas', 'lucas', 'lookas', 'locus', 'luca', 'luka', 'lucus', 'jarvis', 'alexa'];
+            const wakeWords = this.wakeWords;
             
             let matchedWakeWord = null;
             let wakeWordIndex = -1;
@@ -277,7 +284,7 @@ class LukasVoiceController {
         // Continuous wake word checking on every speech update (both interim and final)
         if (this.isListeningForWakeWord) {
           const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-          const wakeWords = ['hey lukas', 'wake up lukas', 'look us', 'wake up', 'lukas', 'lucas', 'lookas', 'locus', 'luca', 'luka', 'lucus', 'jarvis', 'alexa'];
+          const wakeWords = this.wakeWords;
           
           let matchedWakeWord = null;
           let wakeWordIndex = -1;
@@ -337,7 +344,7 @@ class LukasVoiceController {
           if (this.isListeningForWakeWord) {
             // Wake word listener is active, but we got a finalized inline command containing the wake word
             const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
-            const wakeWords = ['hey lukas', 'wake up lukas', 'look us', 'wake up', 'lukas', 'lucas', 'lookas', 'locus', 'luca', 'luka', 'lucus', 'jarvis', 'alexa'];
+            const wakeWords = this.wakeWords;
             
             let matchedWakeWord = null;
             let wakeWordIndex = -1;
