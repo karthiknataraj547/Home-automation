@@ -5,7 +5,7 @@ import LukasAutomationHub, { DEVICES, ROUTINES } from './src/automation.js';
 import LukasCCTVManager from './src/cctv.js';
 import LukasDiagnosticsHub from './src/diagnostics.js';
 import { fingerprintDevice, fingerprintBLE } from './src/deviceKnowledgeBase.js';
-import { loginUser, registerUser, isAuthenticated, logoutUser } from './src/auth.js';
+import { loginUser, registerUser, isAuthenticated, logoutUser, getSessionUser } from './src/auth.js';
 
 // ═══════ LUKAS Intelligence Layer ═══════
 import LukasMemory from './src/ai/memory.js';
@@ -1885,47 +1885,6 @@ function bindUIEvents() {
         diag.logToTerminal('[BIOMETRICS] Wiped all vocal profiles from local database.', 'warn');
         alert("All voice profiles deleted.");
       }
-    });
-  }
-
-  function renderVoiceProfilesList() {
-    const listEl = document.getElementById('registeredVoiceProfilesList');
-    if (!listEl) return;
-    
-    if (typeof lukasMemory !== 'undefined' && lukasMemory.currentUsername === 'Guest') {
-      listEl.innerHTML = '<div style="color:var(--rose-neon); font-style:italic;"><i class="fa-solid fa-lock"></i> Verification required to view profiles.</div>';
-      return;
-    }
-    
-    const profiles = voice.biometrics.getProfiles();
-    const names = Object.keys(profiles);
-    
-    if (names.length === 0) {
-      listEl.innerHTML = '<div style="color:#475569; font-style:italic;">No profiles registered yet.</div>';
-      return;
-    }
-    
-    listEl.innerHTML = names.map(name => `
-      <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.05); padding:0.3rem 0.5rem; border-radius:4px; margin-bottom:0.2rem;">
-        <span style="font-weight:bold; color:var(--cyan-neon);"><i class="fa-solid fa-user-check" style="margin-right:6px;"></i>${name}</span>
-        <button class="delete-voice-profile-btn btn-routine lockdown" data-name="${name}" style="padding:0.2rem 0.4rem; font-size:0.55rem; cursor:pointer; width:auto; height:auto; border-radius:3px;">
-          <i class="fa-solid fa-trash"></i>
-        </button>
-      </div>
-    `).join('');
-    
-    // Bind delete buttons
-    listEl.querySelectorAll('.delete-voice-profile-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        const nameToDelete = btn.getAttribute('data-name');
-        if (confirm(`Are you sure you want to delete the voice profile for "${nameToDelete}"?`)) {
-          const profiles = voice.biometrics.getProfiles();
-          delete profiles[nameToDelete];
-          localStorage.setItem("lukas_voice_profiles", JSON.stringify(profiles));
-          diag.logToTerminal(`[BIOMETRICS] Deleted voice profile for "${nameToDelete}".`, 'info');
-          renderVoiceProfilesList();
-        }
-      });
     });
   }
 
@@ -7902,6 +7861,48 @@ function initAuth() {
       }
     });
   }
+}
+
+// Render voice profiles list (Global scope helper)
+function renderVoiceProfilesList() {
+  const listEl = document.getElementById('registeredVoiceProfilesList');
+  if (!listEl) return;
+  
+  if (typeof lukasMemory !== 'undefined' && lukasMemory.currentUsername === 'Guest') {
+    listEl.innerHTML = '<div style="color:var(--rose-neon); font-style:italic;"><i class="fa-solid fa-lock"></i> Verification required to view profiles.</div>';
+    return;
+  }
+  
+  const profiles = voice.biometrics.getProfiles();
+  const names = Object.keys(profiles);
+  
+  if (names.length === 0) {
+    listEl.innerHTML = '<div style="color:#475569; font-style:italic;">No profiles registered yet.</div>';
+    return;
+  }
+  
+  listEl.innerHTML = names.map(name => `
+    <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.05); padding:0.3rem 0.5rem; border-radius:4px; margin-bottom:0.2rem;">
+      <span style="font-weight:bold; color:var(--cyan-neon);"><i class="fa-solid fa-user-check" style="margin-right:6px;"></i>${name}</span>
+      <button class="delete-voice-profile-btn btn-routine lockdown" data-name="${name}" style="padding:0.2rem 0.4rem; font-size:0.55rem; cursor:pointer; width:auto; height:auto; border-radius:3px;">
+        <i class="fa-solid fa-trash"></i>
+      </button>
+    </div>
+  `).join('');
+  
+  // Bind delete buttons
+  listEl.querySelectorAll('.delete-voice-profile-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      const nameToDelete = btn.getAttribute('data-name');
+      if (confirm(`Are you sure you want to delete the voice profile for "${nameToDelete}"?`)) {
+        const profiles = voice.biometrics.getProfiles();
+        delete profiles[nameToDelete];
+        localStorage.setItem("lukas_voice_profiles", JSON.stringify(profiles));
+        diag.logToTerminal(`[BIOMETRICS] Deleted voice profile for "${nameToDelete}".`, 'info');
+        renderVoiceProfilesList();
+      }
+    });
+  });
 }
 
 // Profile Manager Modal initialization
