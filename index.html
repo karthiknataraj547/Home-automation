@@ -53,6 +53,7 @@
         <button id="openNodeManagerBtn" class="btn-node-manager" style="margin-left: 1rem; background: rgba(168, 85, 247, 0.1); border: 1px solid rgba(168, 85, 247, 0.3); color: #d8b4fe; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;" onmouseover="this.style.background='var(--purple-neon)'; this.style.color='var(--color-bg)';" onmouseout="this.style.background='rgba(168, 85, 247, 0.1)'; this.style.color='#d8b4fe';"><i class="fa-solid fa-gears"></i> SYSTEM SETTINGS</button>
         <button id="openMemoryPanelBtn" class="btn-node-manager" style="margin-left: 0.5rem; background: rgba(0, 240, 255, 0.1); border: 1px solid rgba(0, 240, 255, 0.3); color: #99f6ff; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;" onmouseover="this.style.background='var(--cyan-neon)'; this.style.color='var(--color-bg)';" onmouseout="this.style.background='rgba(0, 240, 255, 0.1)'; this.style.color='#99f6ff';"><i class="fa-solid fa-brain"></i> MEMORY</button>
         <button id="openProfileBtn" class="btn-node-manager" style="margin-left: 0.5rem; background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.3); color: #a7f3d0; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;" onmouseover="this.style.background='var(--emerald-neon)'; this.style.color='var(--color-bg)';" onmouseout="this.style.background='rgba(16, 185, 129, 0.1)'; this.style.color='#a7f3d0';"><i class="fa-solid fa-user"></i> PROFILE</button>
+        <button id="openSidebarMemoryBtn" class="btn-node-manager" style="margin-left: 0.5rem; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.3); color: #fde68a; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;" onmouseover="this.style.background='var(--amber-neon)'; this.style.color='var(--color-bg)';" onmouseout="this.style.background='rgba(245, 158, 11, 0.1)'; this.style.color='#fde68a';"><i class="fa-solid fa-folder-open"></i> SIDEBAR MEMORY</button>
         <button id="themeToggleBtn" class="btn-node-manager" style="margin-left: 0.5rem; background: rgba(0, 240, 255, 0.1); border: 1px solid rgba(0, 240, 255, 0.3); color: #99f6ff; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;"><i class="fa-solid fa-moon"></i> THEME</button>
         <button id="logoutBtn" class="btn-node-manager" style="margin-left: 0.5rem; background: rgba(244, 63, 94, 0.1); border: 1px solid rgba(244, 63, 94, 0.3); color: #fecdd3; padding: 0.25rem 0.6rem; border-radius: 4px; font-family: var(--font-mono); font-size: 0.65rem; cursor: pointer; transition: all 0.2s ease;"><i class="fa-solid fa-sign-out"></i> LOGOUT</button>
       </div>
@@ -1294,6 +1295,43 @@
         <div class="auth-toggle-area">
           <span id="authTogglePrompt">No clearance profile registered?</span>
           <button id="authToggleModeBtn" class="auth-toggle-link">CREATE TERMINAL PROFILE</button>
+        </div>
+      </div>
+    </div>
+    <!-- Conversation Sidebar Memory -->
+    <div id="conversationSidebar" class="conversation-sidebar">
+      <div class="sidebar-header">
+        <span><i class="fa-solid fa-brain"></i> SIDEBAR MEMORY</span>
+        <button id="closeSidebarBtn" class="btn-close-sidebar"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="sidebar-content">
+        <!-- User Profile Section -->
+        <div class="sidebar-section">
+          <h3><i class="fa-solid fa-user-gear"></i> ACTIVE PROFILE</h3>
+          <div id="sidebarUserProfile" class="sidebar-item-list">
+            <!-- Will show Name, Location, Accent, Language, Style -->
+          </div>
+        </div>
+        <!-- Active Tasks Section -->
+        <div class="sidebar-section">
+          <h3><i class="fa-solid fa-list-check"></i> ACTIVE TASKS</h3>
+          <div id="sidebarActiveTasks" class="sidebar-item-list">
+            <!-- Dynamic list of tasks -->
+          </div>
+        </div>
+        <!-- Active Projects Section -->
+        <div class="sidebar-section">
+          <h3><i class="fa-solid fa-diagram-project"></i> ACTIVE CONTEXT</h3>
+          <div id="sidebarSavedProjects" class="sidebar-item-list">
+            <!-- Dynamic list of projects/context -->
+          </div>
+        </div>
+        <!-- Recent Chats Section -->
+        <div class="sidebar-section">
+          <h3><i class="fa-solid fa-clock-rotate-left"></i> RECENT CHATS</h3>
+          <div id="sidebarRecentChats" class="sidebar-item-list">
+            <!-- List of previous sessions/dates -->
+          </div>
         </div>
       </div>
     </div>

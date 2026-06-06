@@ -5,7 +5,7 @@
 
 class LukasMemory {
   constructor() {
-    this.MAX_SHORT_TERM = 30;       // Max messages kept in session
+    this.MAX_SHORT_TERM = 200;       // Max messages kept in session
     this.MAX_HISTORY_PROMPT = 12;   // Messages injected into AI prompts
     this.MAX_INTERACTION_LOG = 200; // Interaction history for learning
 
@@ -27,6 +27,9 @@ class LukasMemory {
 
     // Auto-migrate any existing reminder data
     this._migrate();
+    
+    // Load Short-term Session State (messages, goals, projects)
+    this.loadSessionState();
 
     console.log('[LUKAS Memory] Initialized.', {
       user: this.currentUsername,
@@ -38,6 +41,44 @@ class LukasMemory {
 
   // ─── Persistence ─────────────────────────────────────────────────────────
 
+  saveSessionState() {
+    const prefix = `lukas_user_${this.currentUsername.toLowerCase()}_session_`;
+    try {
+      const state = {
+        activeGoals: this.shortTerm.activeGoals,
+        contextTags: Array.from(this.shortTerm.contextTags),
+        pendingTasks: this.shortTerm.pendingTasks,
+        lastIntent: this.shortTerm.lastIntent,
+        currentProject: this.shortTerm.currentProject,
+        currentGoal: this.shortTerm.currentGoal,
+        messages: this.shortTerm.messages
+      };
+      localStorage.setItem(prefix + 'state', JSON.stringify(state));
+    } catch (e) {
+      console.warn('[LUKAS Memory] Failed to save session state:', e);
+    }
+  }
+
+  loadSessionState() {
+    const prefix = `lukas_user_${this.currentUsername.toLowerCase()}_session_`;
+    try {
+      const state = JSON.parse(localStorage.getItem(prefix + 'state'));
+      if (state) {
+        this.shortTerm.activeGoals = state.activeGoals || [];
+        this.shortTerm.contextTags = new Set(state.contextTags || []);
+        this.shortTerm.pendingTasks = state.pendingTasks || [];
+        this.shortTerm.lastIntent = state.lastIntent || null;
+        this.shortTerm.currentProject = state.currentProject || null;
+        this.shortTerm.currentGoal = state.currentGoal || null;
+        this.shortTerm.messages = state.messages || [];
+      } else {
+        this.clearSession();
+      }
+    } catch (e) {
+      console.warn('[LUKAS Memory] Failed to load session state:', e);
+    }
+  }
+
   switchUser(username) {
     if (!username) username = 'Guest';
     if (this.currentUsername.toLowerCase() === username.toLowerCase()) return;
@@ -46,6 +87,7 @@ class LukasMemory {
     this.currentUsername = username;
     this.clearSession();
     this.longTerm = this._loadLongTerm();
+    this.loadSessionState();
     this._migrate();
   }
 
@@ -118,6 +160,8 @@ class LukasMemory {
 
     // Track context tags
     if (category) this.shortTerm.contextTags.add(category);
+
+    this.saveSessionState();
   }
 
   /**
@@ -441,6 +485,7 @@ class LukasMemory {
       extracted = true;
     }
 
+    this.saveSessionState();
     return extracted;
   }
 

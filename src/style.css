@@ -42,9 +42,8 @@ body {
   background-position: center;
   color: #e2e8f0;
   font-family: var(--font-sans);
-  overflow-x: hidden;
-  overflow-y: auto;
-  min-height: 100vh;
+  overflow: hidden;
+  height: 100vh;
   display: flex;
   flex-direction: column;
   position: relative;
@@ -269,6 +268,9 @@ header {
   gap: 1.25rem;
   padding: 1.25rem;
   flex: 1;
+  height: calc(100vh - 65px - 28px);
+  min-height: 0;
+  overflow: hidden;
 }
 
 /* Column Rules */
@@ -276,6 +278,8 @@ header {
   display: flex;
   flex-direction: column;
   gap: 1.25rem;
+  height: 100%;
+  min-height: 0;
 }
 
 .panel-column.scrollable {
@@ -552,12 +556,15 @@ header {
   flex: 1;
   display: flex;
   flex-direction: column;
+  min-height: 0;
   overflow: hidden;
 }
 
 .chat-messages {
   flex: 1;
   overflow-y: auto;
+  scroll-behavior: smooth;
+  min-height: 0;
   padding-right: 5px;
   display: flex;
   flex-direction: column;
@@ -3464,6 +3471,157 @@ body.light-theme #wizardPreviewName {
   border-color: var(--amber-neon);
   color: #fff;
 }
+
+/* ═══════════════════ CONVERSATION SIDEBAR MEMORY ═══════════════════ */
+.conversation-sidebar {
+  position: fixed;
+  top: 0;
+  left: -320px;
+  width: 320px;
+  height: 100vh;
+  background: rgba(3, 7, 18, 0.95);
+  backdrop-filter: blur(20px);
+  border-right: 1px solid rgba(0, 240, 255, 0.15);
+  box-shadow: 5px 0 30px rgba(0, 0, 0, 0.8), 0 0 20px rgba(0, 240, 255, 0.05);
+  z-index: 1050;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  flex-direction: column;
+  padding: 1.5rem;
+  overflow: hidden;
+}
+
+.conversation-sidebar.open {
+  transform: translateX(320px);
+}
+
+.sidebar-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-title);
+  font-size: 1rem;
+  color: var(--cyan-neon);
+  text-shadow: 0 0 8px var(--cyan-neon-glow);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.btn-close-sidebar {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  font-size: 1.1rem;
+  transition: color 0.2s;
+}
+
+.btn-close-sidebar:hover {
+  color: var(--rose-neon);
+}
+
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding-right: 4px;
+}
+
+.sidebar-section h3 {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 1px;
+  color: #94a3b8;
+  margin-bottom: 0.5rem;
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.sidebar-section h3 i {
+  color: var(--cyan-neon);
+}
+
+.sidebar-item-list {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 0.6rem;
+  font-size: 0.78rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.sidebar-info-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 0.2rem 0;
+  border-bottom: 1px dashed rgba(255,255,255,0.02);
+}
+
+.sidebar-info-row strong {
+  color: #64748b;
+}
+
+.sidebar-info-row span {
+  color: #e2e8f0;
+}
+
+.sidebar-task-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0;
+}
+
+.sidebar-task-item span {
+  color: #e2e8f0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-project-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.2rem 0;
+}
+
+.sidebar-project-item strong {
+  color: var(--cyan-neon);
+}
+
+.sidebar-project-item span {
+  color: #e2e8f0;
+}
+
+.sidebar-chat-session {
+  padding: 0.45rem;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.01);
+  border: 1px solid transparent;
+  transition: all 0.2s ease;
+}
+
+.sidebar-chat-session:hover {
+  background: rgba(0, 240, 255, 0.04);
+  border-color: rgba(0, 240, 255, 0.1);
+}
+
+.sidebar-empty {
+  color: #64748b;
+  font-style: italic;
+  font-size: 0.72rem;
+  text-align: center;
+  padding: 0.5rem;
+}
+
 
 
 

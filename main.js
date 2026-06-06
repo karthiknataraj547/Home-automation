@@ -115,7 +115,7 @@ const cctv = new LukasCCTVManager();
 const diag = new LukasDiagnosticsHub();
 
 // ═══════ LUKAS Intelligence System ═══════
-const lukasMemory = new LukasMemory();
+let lukasMemory = new LukasMemory();
 const lukasOrchestrator = new LukasOrchestrator(lukasMemory);
 const lukasResearch = new LukasResearchAgent();
 const lukasReasoning = new LukasReasoningEngine();
@@ -138,6 +138,7 @@ let currentWeatherCity = "";
 let activeFollowUp = null;
 let conversationActive = false;   // TRUE while we keep mic hot after a voice exchange
 let conversationTimer = null;     // Timer to revert to passive after conversation window
+let visibleMessageCount = 15;
 
 let isVoiceTrainingActive = false;
 let voiceTrainingStep = '';
@@ -719,6 +720,13 @@ function applyUserPreferencesToVoiceAndUI(username) {
   };
   if (activeProfileAccent) activeProfileAccent.textContent = accentLabels[rawAccent] || rawAccent;
   if (activeProfileSessions) activeProfileSessions.textContent = lukasMemory.longTerm.sessionCount || 0;
+
+  // Restore user-specific chat history
+  visibleMessageCount = 15;
+  renderChatHistory();
+
+  // Populate user-specific sidebar memory
+  updateSidebarMemory();
 }
 
 // Initialize dashboard core components (invoked upon verified clearance)
@@ -841,6 +849,49 @@ function initializeDashboard() {
   bootSequenceAnimation();
 }
 
+function startWatchdogSystem() {
+  console.log("[WATCHDOG] Initializing service health monitor...");
+  setInterval(() => {
+    try {
+      // 1. Check Voice & Wake Engine
+      const isVoiceSpeaking = window.speechSynthesis.speaking;
+      
+      // If we are in standby (sleep mode) or not actively in conversation, the Wake Engine should be listening
+      if (lastCommandSource === 'standby' || !conversationActive) {
+        if (!voice.isListeningForWakeWord && !voice.isCommandListeningActive && !isVoiceSpeaking) {
+          console.warn("[WATCHDOG] Wake Engine is inactive during Standby. Restarting wake listener...");
+          voice.startWakeWordListener();
+        }
+      }
+      
+      // If the recognition active flags are set but recognition is not active
+      if ((voice.isListeningForWakeWord || voice.isCommandListeningActive) && !voice.isRecognitionActive && !voice.isStopping && !isVoiceSpeaking) {
+        console.warn("[WATCHDOG] Speech recognition state mismatch. Restarting recognition...");
+        voice.startRecognitionInternal();
+      }
+
+      // 2. Check Memory Engine
+      if (!lukasMemory || typeof lukasMemory.addFact !== 'function') {
+        console.error("[WATCHDOG] Memory Engine crashed! Restoring Memory Matrix...");
+        lukasMemory = new LukasMemory();
+      }
+
+      // 3. Sync Network Badge
+      const netSyncVal = document.getElementById('netSyncStatus');
+      if (netSyncVal && !navigator.onLine) {
+        netSyncVal.textContent = 'OFFLINE';
+        netSyncVal.className = 'status-value alert';
+      } else if (netSyncVal) {
+        netSyncVal.textContent = 'SECURE';
+        netSyncVal.className = 'status-value normal';
+      }
+      
+    } catch (e) {
+      console.error("[WATCHDOG] Error in health check loop:", e);
+    }
+  }, 5000);
+}
+
 // Initialize modules on DOM load
 document.addEventListener('DOMContentLoaded', () => {
   // Initialize Jarvis particle canvas background
@@ -857,6 +908,9 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Apply initial Guest space preferences
   applyUserPreferencesToVoiceAndUI('Guest');
+
+  // Start Silent Service Watchdog health checking
+  startWatchdogSystem();
 });
 
 // Cinematic Boot Sequence
@@ -1490,8 +1544,10 @@ function bindUIEvents() {
   };
 
   voice.onWakeWordDetected = () => {
+    // 1. Reset microphone immediately to clear any OS/hardware audio glitches
+    voice.resetMicrophoneForCommand();
+
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
-    // Re-enable passive listening whenever wake word is detected (even from STANDBY)
     isPassiveListenEnabled = true;
     isWakingUp = true;
     
@@ -1501,7 +1557,7 @@ function bindUIEvents() {
       playFuturisticBeep();
     }
     
-    diag.logToTerminal("[AI CORE] Wake word 'LUKAS' recognized. Waking up core...", "info");
+    diag.logToTerminal("[AI CORE] Wake word recognized. Waking up core...", "info");
     
     const coreBtn = document.getElementById('lukasCoreBtn');
     if (coreBtn) {
@@ -1513,7 +1569,22 @@ function bindUIEvents() {
     voiceStatusText.textContent = isAlexa ? 'ALEXA AWAKE' : 'LUKAS AWAKE';
     voiceStatusText.style.color = 'var(--cyan-neon)';
 
-    const greeting = isAlexa ? "Yes?" : "Yes, Commander?";
+    // 2. Context Restoration: Retrieve active project or active goal context
+    let greeting = isAlexa ? "Yes?" : "Yes, Commander?";
+    
+    const activeProject = lukasMemory.shortTerm.currentProject;
+    const activeGoal = lukasMemory.shortTerm.currentGoal;
+    
+    if (activeProject) {
+      greeting = `Welcome back. We were working on the ${activeProject} project. How would you like to continue?`;
+    } else if (activeGoal) {
+      greeting = `Welcome back. We were working on your goal to ${activeGoal}. How would you like to continue?`;
+    } else {
+      const storedName = lukasMemory.getFact('name');
+      if (storedName) {
+        greeting = isAlexa ? `Yes, ${storedName}?` : `Welcome back, ${storedName}. How can I assist you?`;
+      }
+    }
     
     // Display greeting bubble
     appendChatBubble(greeting, 'assistant');
@@ -3116,6 +3187,36 @@ function bindUIEvents() {
       diag.logToTerminal('[PLANNER] Plan roadmap dismissed.', 'info');
     });
   }
+
+  // Sidebar Memory events
+  const conversationSidebar = document.getElementById('conversationSidebar');
+  const openSidebarMemoryBtn = document.getElementById('openSidebarMemoryBtn');
+  const closeSidebarBtn = document.getElementById('closeSidebarBtn');
+
+  if (openSidebarMemoryBtn && conversationSidebar) {
+    openSidebarMemoryBtn.addEventListener('click', () => {
+      conversationSidebar.classList.toggle('open');
+      updateSidebarMemory();
+      diag.logToTerminal('[SIDEBAR MEMORY] Toggled sidebar memory drawer.', 'info');
+    });
+  }
+
+  if (closeSidebarBtn && conversationSidebar) {
+    closeSidebarBtn.addEventListener('click', () => {
+      conversationSidebar.classList.remove('open');
+      diag.logToTerminal('[SIDEBAR MEMORY] Closed sidebar memory drawer.', 'info');
+    });
+  }
+
+  // Click outside sidebar to close it
+  document.addEventListener('click', (e) => {
+    if (conversationSidebar && conversationSidebar.classList.contains('open')) {
+      if (!conversationSidebar.contains(e.target) && e.target !== openSidebarMemoryBtn && !openSidebarMemoryBtn.contains(e.target)) {
+        conversationSidebar.classList.remove('open');
+        diag.logToTerminal('[SIDEBAR MEMORY] Auto-closed sidebar memory drawer.', 'info');
+      }
+    }
+  });
 }
 
 // ─── UPGRADE: Memory Panel Update Logic ───
@@ -3167,6 +3268,128 @@ function updateMemoryPanel() {
         <div class="memory-fact-row"><span>${f.key}</span><span>${f.value}</span></div>
       `).join('');
     }
+  }
+}
+
+function updateSidebarMemory() {
+  const profileDiv = document.getElementById('sidebarUserProfile');
+  if (profileDiv) {
+    const name = lukasMemory.getFact('name') || 'Guest';
+    const city = lukasMemory.getFact('city') || 'Not set';
+    const accent = lukasMemory.getPreference('voiceAccent', 'indian_english');
+    const style = lukasMemory.getPreference('personalityMode', 'casual');
+    const accentLabels = {
+      indian_english: 'Indian English',
+      bengaluru_professional: 'Bengaluru Professional',
+      neutral_corporate: 'Neutral Corporate India',
+      kannada_native: 'Kannada Native',
+      'en-US': 'American Accent',
+      'en-GB': 'British Accent',
+      'en-AU': 'Australian Accent',
+      'en-CA': 'Canadian Accent'
+    };
+    profileDiv.innerHTML = `
+      <div class="sidebar-info-row"><strong>Name:</strong> <span>${name}</span></div>
+      <div class="sidebar-info-row"><strong>Location:</strong> <span>${city}</span></div>
+      <div class="sidebar-info-row"><strong>Accent:</strong> <span>${accentLabels[accent] || accent}</span></div>
+      <div class="sidebar-info-row"><strong>Style:</strong> <span>${style}</span></div>
+    `;
+  }
+
+  const tasksDiv = document.getElementById('sidebarActiveTasks');
+  if (tasksDiv) {
+    const activeGoals = lukasMemory.getActiveGoals();
+    const activeReminders = (typeof lukasReminders !== 'undefined' ? lukasReminders : []).filter(r => !r.fired);
+    let html = '';
+    if (activeGoals.length === 0 && activeReminders.length === 0) {
+      html = '<div class="sidebar-empty">No active tasks or reminders.</div>';
+    } else {
+      activeGoals.forEach(g => {
+        html += `<div class="sidebar-task-item"><i class="fa-solid fa-square-check" style="color:var(--cyan-neon);"></i> <span>${g.goal}</span></div>`;
+      });
+      activeReminders.forEach(r => {
+        html += `<div class="sidebar-task-item"><i class="fa-solid fa-bell" style="color:var(--amber-neon);"></i> <span>${r.text}</span></div>`;
+      });
+    }
+    tasksDiv.innerHTML = html;
+  }
+
+  const projectsDiv = document.getElementById('sidebarSavedProjects');
+  if (projectsDiv) {
+    const activeProj = lukasMemory.shortTerm.currentProject;
+    const activeGoal = lukasMemory.shortTerm.currentGoal;
+    let html = '';
+    if (activeProj) {
+      html += `
+        <div class="sidebar-project-item">
+          <strong>Project:</strong> <span>${activeProj}</span>
+          ${activeGoal ? `<div style="font-size:0.75rem;color:#94a3b8;margin-top:2px;">Goal: ${activeGoal}</div>` : ''}
+        </div>
+      `;
+    } else {
+      html = '<div class="sidebar-empty">No active project context.</div>';
+    }
+    projectsDiv.innerHTML = html;
+  }
+
+  const chatsDiv = document.getElementById('sidebarRecentChats');
+  if (chatsDiv) {
+    const messages = lukasMemory.shortTerm.messages || [];
+    
+    // Chunk messages by 30 minute idle gaps
+    const sessions = [];
+    let currentSession = null;
+    const GAP_MS = 30 * 60 * 1000;
+
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (!currentSession || (currentSession.startTime - msg.timestamp > GAP_MS)) {
+        if (currentSession) {
+          sessions.push(currentSession);
+        }
+        currentSession = {
+          startTime: msg.timestamp,
+          messages: [msg],
+          preview: msg.content.substring(0, 40) + (msg.content.length > 40 ? '...' : '')
+        };
+      } else {
+        currentSession.messages.unshift(msg);
+        if (msg.role === 'user') {
+          currentSession.preview = msg.content.substring(0, 40) + (msg.content.length > 40 ? '...' : '');
+        }
+      }
+    }
+    if (currentSession) {
+      sessions.push(currentSession);
+    }
+
+    let html = '';
+    if (sessions.length === 0) {
+      html = '<div class="sidebar-empty">No chat history.</div>';
+    } else {
+      sessions.slice(0, 5).forEach((session, idx) => {
+        const dateStr = new Date(session.startTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        html += `
+          <div class="sidebar-chat-session" data-idx="${idx}" style="cursor:pointer;padding:0.45rem;border-radius:4px;margin-bottom:4px;">
+            <div style="font-size:0.65rem;color:var(--purple-neon);">${dateStr}</div>
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:0.75rem;">${session.preview}</div>
+          </div>
+        `;
+      });
+    }
+    chatsDiv.innerHTML = html;
+    
+    chatsDiv.querySelectorAll('.sidebar-chat-session').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = parseInt(el.dataset.idx);
+        const session = sessions[idx];
+        if (session) {
+          console.log("[SIDEBAR] Restoring conversation from:", new Date(session.startTime).toLocaleTimeString());
+          visibleMessageCount = session.messages.length;
+          renderChatHistory();
+        }
+      });
+    });
   }
 }
 
@@ -3958,13 +4181,90 @@ function wireProbeButton() {
 }
 
 
+function renderChatHistory() {
+  if (!chatHistory) return;
+  chatHistory.innerHTML = '';
+
+  const messages = lukasMemory.shortTerm.messages || [];
+  const totalMessages = messages.length;
+  
+  if (totalMessages > visibleMessageCount) {
+    const loadOlderRow = document.createElement('div');
+    loadOlderRow.className = 'load-older-row chat-bubble-row';
+    loadOlderRow.style.justifyContent = 'center';
+    loadOlderRow.style.margin = '0.5rem 0';
+    loadOlderRow.style.width = '100%';
+
+    const loadOlderBtn = document.createElement('button');
+    loadOlderBtn.className = 'btn-routine';
+    loadOlderBtn.style.padding = '0.25rem 0.75rem';
+    loadOlderBtn.style.fontSize = '0.7rem';
+    loadOlderBtn.style.borderColor = 'var(--cyan-neon)';
+    loadOlderBtn.style.color = 'var(--cyan-neon)';
+    loadOlderBtn.style.cursor = 'pointer';
+    loadOlderBtn.style.background = 'rgba(0, 240, 255, 0.05)';
+    loadOlderBtn.style.borderRadius = '4px';
+    loadOlderBtn.innerHTML = '<i class="fa-solid fa-clock-rotate-left"></i> Load Older Messages';
+    
+    loadOlderBtn.addEventListener('click', () => {
+      const oldScrollHeight = chatHistory.scrollHeight;
+      visibleMessageCount = Math.min(totalMessages, visibleMessageCount + 15);
+      renderChatHistory();
+      
+      setTimeout(() => {
+        chatHistory.scrollTop = chatHistory.scrollHeight - oldScrollHeight;
+      }, 0);
+    });
+
+    loadOlderRow.appendChild(loadOlderBtn);
+    chatHistory.appendChild(loadOlderRow);
+  }
+
+  const startIndex = Math.max(0, totalMessages - visibleMessageCount);
+  const visibleMessages = messages.slice(startIndex);
+
+  visibleMessages.forEach(msg => {
+    const row = document.createElement('div');
+    row.className = `chat-bubble-row${msg.role === 'user' ? ' user-row' : ''}`;
+
+    if (msg.role !== 'system') {
+      const avatar = document.createElement('div');
+      avatar.className = `chat-avatar ${msg.role === 'assistant' ? 'lukas-avatar' : 'user-avatar'}`;
+      avatar.innerHTML = msg.role === 'assistant'
+        ? '<i class="fa-solid fa-microchip"></i>'
+        : '<i class="fa-solid fa-user"></i>';
+      row.appendChild(avatar);
+    }
+
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble ${msg.role}`;
+
+    if (msg.role === 'assistant') {
+      if (msg.content.includes('Awaiting Clarification') || msg.content.includes('ask_clarification')) {
+        bubble.classList.add('clarification-card');
+      }
+      const parsed = parseExecutiveAnalysis(msg.content);
+      if (parsed.hasAnalysis) {
+        bubble.innerHTML = parsed.analysisHtml + `<div class="response-body-text">${parsed.responseText}</div>`;
+      } else {
+        bubble.textContent = msg.content;
+      }
+    } else {
+      bubble.textContent = msg.content;
+    }
+
+    row.appendChild(bubble);
+    chatHistory.appendChild(row);
+  });
+  
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+}
+
 // 4. Chat Dialogue append
 function appendChatBubble(text, sender, linkUrl, accuracyScore = null) {
-  // Create row wrapper with avatar
   const row = document.createElement('div');
   row.className = `chat-bubble-row${sender === 'user' ? ' user-row' : ''}`;
 
-  // Avatar badge
   if (sender !== 'system') {
     const avatar = document.createElement('div');
     avatar.className = `chat-avatar ${sender === 'assistant' ? 'lukas-avatar' : 'user-avatar'}`;
@@ -3974,7 +4274,6 @@ function appendChatBubble(text, sender, linkUrl, accuracyScore = null) {
     row.appendChild(avatar);
   }
 
-  // Bubble itself
   const bubble = document.createElement('div');
   bubble.className = `chat-bubble ${sender}`;
   
@@ -4015,17 +4314,17 @@ function appendChatBubble(text, sender, linkUrl, accuracyScore = null) {
   chatHistory.appendChild(row);
   chatHistory.scrollTop = chatHistory.scrollHeight;
 
-  // Cap chat history length at 30 rows
   const rows = chatHistory.querySelectorAll('.chat-bubble-row, .chat-bubble.system');
-  if (rows.length > 30) rows[0].remove();
+  if (rows.length > visibleMessageCount) {
+    const firstMsgRow = chatHistory.querySelector('.chat-bubble-row, .chat-bubble.system:not(.load-older-row)');
+    if (firstMsgRow) firstMsgRow.remove();
+  }
 }
 
 function appendStreamingChatBubble(sender) {
-  // Create row wrapper with avatar
   const row = document.createElement('div');
   row.className = `chat-bubble-row${sender === 'user' ? ' user-row' : ''}`;
 
-  // Avatar badge
   if (sender !== 'system') {
     const avatar = document.createElement('div');
     avatar.className = `chat-avatar ${sender === 'assistant' ? 'lukas-avatar' : 'user-avatar'}`;
@@ -4035,18 +4334,19 @@ function appendStreamingChatBubble(sender) {
     row.appendChild(avatar);
   }
 
-  // Bubble itself
   const bubble = document.createElement('div');
   bubble.className = `chat-bubble ${sender}`;
-  bubble.textContent = "..."; // Initial loading state
+  bubble.textContent = "...";
 
   row.appendChild(bubble);
   chatHistory.appendChild(row);
   chatHistory.scrollTop = chatHistory.scrollHeight;
 
-  // Cap chat history length at 30 rows
   const rows = chatHistory.querySelectorAll('.chat-bubble-row, .chat-bubble.system');
-  if (rows.length > 30) rows[0].remove();
+  if (rows.length > visibleMessageCount) {
+    const firstMsgRow = chatHistory.querySelector('.chat-bubble-row, .chat-bubble.system:not(.load-older-row)');
+    if (firstMsgRow) firstMsgRow.remove();
+  }
 
   return {
     element: bubble,
@@ -4132,7 +4432,10 @@ function appendChecklistBubble(steps) {
   chatHistory.scrollTop = chatHistory.scrollHeight;
 
   const rows = chatHistory.querySelectorAll('.chat-bubble-row, .chat-bubble.system');
-  if (rows.length > 30) rows[0].remove();
+  if (rows.length > visibleMessageCount) {
+    const firstMsgRow = chatHistory.querySelector('.chat-bubble-row, .chat-bubble.system:not(.load-older-row)');
+    if (firstMsgRow) firstMsgRow.remove();
+  }
 
   return {
     updateStep(idx, status) {

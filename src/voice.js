@@ -32,6 +32,7 @@ class LukasVoiceController {
     this.isLongConversation = false;
     this.speakingText = '';
     this.wakeWordTimeout = null;
+    this.isWakeLocked = false;
     
     // safe start/stop state machine variables
     this.isRecognitionActive = false;
@@ -425,7 +426,7 @@ class LukasVoiceController {
         }
 
         // Continuous wake word checking on every speech update (both interim and final)
-        if (this.isListeningForWakeWord) {
+        if (this.isListeningForWakeWord && !this.isWakeLocked) {
           const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
           const wakeWords = this.wakeWords;
           
@@ -491,7 +492,7 @@ class LukasVoiceController {
 
         if (isFinal) {
           console.log(`Speech recognized (final): "${displayTranscript}"`);
-          if (this.isListeningForWakeWord) {
+          if (this.isListeningForWakeWord && !this.isWakeLocked) {
             // Wake word listener is active, but we got a finalized inline command containing the wake word
             const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
             const wakeWords = this.wakeWords;
@@ -1100,6 +1101,36 @@ class LukasVoiceController {
         this.lastSpokenVoiceprint = voiceprint;
       }
     }
+  }
+
+  resetMicrophoneForCommand() {
+    console.log("[voice.js] Wake Recovery: Resetting microphone and starting Conversation Engine...");
+    
+    // Lock wake system for 2 seconds to prevent double triggers
+    this.isWakeLocked = true;
+    setTimeout(() => { this.isWakeLocked = false; }, 2000);
+
+    // Stop current recognition
+    this.stopRecognitionInternal();
+    
+    // Transition flags to command mode
+    this.isListeningForWakeWord = false;
+    this.isCommandListeningActive = true;
+    this.isLongConversation = false;
+    this.accumulatedSpeechText = "";
+    this.lastSessionTranscript = "";
+
+    // Clear and abort the SpeechRecognition object to clean system audio state
+    if (this.recognition) {
+      try {
+        this.recognition.abort();
+      } catch (e) {}
+    }
+    
+    // Restart recognition immediately for command input
+    setTimeout(() => {
+      this.startRecognitionInternal();
+    }, 100);
   }
 }
 
