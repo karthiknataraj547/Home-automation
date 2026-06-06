@@ -147,45 +147,7 @@ class LukasResearchAgent {
   async _searchDuckDuckGo(query) {
     try {
       const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-      let html = null;
-      
-      // Try Proxy 1: corsproxy.io (faster, direct)
-      try {
-        const proxyUrl1 = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-        const res = await fetch(proxyUrl1, { headers: { 'Accept': 'text/html' } });
-        if (res.ok) {
-          html = await res.text();
-        }
-      } catch (e) {
-        console.warn("[Research] Proxy 1 (corsproxy.io) failed:", e.message);
-      }
-      
-      // Try Proxy 2: api.codetabs.com (CORS-friendly direct text/html proxy)
-      if (!html) {
-        try {
-          const proxyUrl2 = `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`;
-          const res = await fetch(proxyUrl2);
-          if (res.ok) {
-            html = await res.text();
-          }
-        } catch (e) {
-          console.warn("[Research] Proxy 2 (api.codetabs.com) failed:", e.message);
-        }
-      }
-      
-      // Try Proxy 3: allorigins.win (Fallback)
-      if (!html) {
-        try {
-          const proxyUrl3 = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
-          const res = await fetch(proxyUrl3);
-          if (res.ok) {
-            const json = await res.json();
-            html = json.contents;
-          }
-        } catch (e) {
-          console.warn("[Research] Proxy 3 (allorigins.win) failed:", e.message);
-        }
-      }
+      const html = await this.fetchWithProxy(url);
       
       if (!html) return null;
       
@@ -273,6 +235,42 @@ Rules:
 
   async searchDistance(from, to) {
     return this.research(`distance from ${from} to ${to} km`);
+  }
+
+  // ─── CORS Proxy Fetch Wrapper ─────────────────────────────────────────────
+  async fetchWithProxy(url) {
+    const proxies = [
+      target => `https://corsproxy.io/?${encodeURIComponent(target)}`,
+      target => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(target)}`,
+      target => `https://corsproxy.org/?url=${encodeURIComponent(target)}`,
+      target => `https://api.allorigins.win/get?url=${encodeURIComponent(target)}`
+    ];
+
+    for (let i = 0; i < proxies.length; i++) {
+      try {
+        const proxyUrl = proxies[i](url);
+        
+        // Timeout each proxy try to 5 seconds to keep overall latency low
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        
+        const response = await fetch(proxyUrl, { signal: controller.signal });
+        clearTimeout(timeout);
+        
+        if (response.ok) {
+          if (proxies[i].toString().includes('allorigins')) {
+            const json = await response.json();
+            if (json.contents) return json.contents;
+          } else {
+            const text = await response.text();
+            if (text && text.trim().length > 100) return text;
+          }
+        }
+      } catch (err) {
+        console.warn(`[Research] Proxy ${i + 1} failed:`, err.message);
+      }
+    }
+    return null;
   }
 
   // ─── HTTP Fetch Helper ───────────────────────────────────────────────────
