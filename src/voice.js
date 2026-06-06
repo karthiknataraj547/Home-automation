@@ -411,6 +411,13 @@ class LukasVoiceController {
 
   // Safe wrapper to prevent duplicate starts
   startRecognitionInternal() {
+    if (!this.recognition) {
+      console.warn("[voice.js] Speech recognition is not supported or blocked in this context.");
+      if (this.onRecognitionStateChange) {
+        this.onRecognitionStateChange('off', 'unsupported_origin_or_browser');
+      }
+      return;
+    }
     if (this.isRecognitionActive) return;
     if (this.synth && this.synth.speaking) {
       console.log("[voice.js] Delaying speech recognition start because synthesis is active.");

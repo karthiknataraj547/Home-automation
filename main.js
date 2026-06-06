@@ -365,6 +365,26 @@ function initializeDashboard() {
   diag.initGauges();
   diag.initChartTooltip();
   initReminders();
+
+  // Validate Speech Recognition availability and HTTPS protocol (Secure Context requirements)
+  const isSecure = window.location.protocol === 'https:' || 
+                   window.location.hostname === 'localhost' || 
+                   window.location.hostname === '127.0.0.1';
+  const speechSupportMsg = document.getElementById('speechSupportMsg');
+  if (speechSupportMsg) {
+    if (!voice.recognition) {
+      speechSupportMsg.textContent = isSecure ? '❌ Speech API Unsupported' : '⚠️ HTTP Insecure (Speech Blocked)';
+      speechSupportMsg.style.color = 'var(--rose-neon)';
+      
+      const helpText = isSecure 
+        ? "[SYSTEM WARNING] Web Speech API is unsupported in this browser or blocked. Ensure microphone permissions are enabled."
+        : "[SECURITY ALERT] Voice commands disabled. Browsers block speech recognition on insecure HTTP deployments. Configure HTTPS (SSL) or run on localhost.";
+      setTimeout(() => diag.logToTerminal(helpText, "error"), 3000);
+    } else {
+      speechSupportMsg.textContent = `WebSpeech Active (${voice.speechLang || 'en-IN'})`;
+      speechSupportMsg.style.color = 'var(--emerald-neon)';
+    }
+  }
   
   // Render energy chart on interval
   diag.drawEnergyChart();
@@ -2071,6 +2091,10 @@ function bindUIEvents() {
         voice.setLanguage(selectedLang);
       }
       diag.logToTerminal(`[SETTINGS] Speech recognition language changed to ${selectedLang}.`, 'info');
+      const speechSupportMsg = document.getElementById('speechSupportMsg');
+      if (speechSupportMsg && voice.recognition) {
+        speechSupportMsg.textContent = `WebSpeech Active (${selectedLang})`;
+      }
     });
   }
 
