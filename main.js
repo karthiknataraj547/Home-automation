@@ -467,7 +467,23 @@ function bootSequenceAnimation() {
   });
   // Initial assistant greeting after boot completes
   setTimeout(() => {
-    handleAssistantResponse("Lukas Core initialized. Systems are secure and operational on port 3000. How can I assist you, Commander?");
+    const termEl = document.getElementById('terminalLogContainer');
+    if (termEl) {
+      const line = document.createElement('div');
+      line.className = 'terminal-line warn';
+      line.innerHTML = `<span class="terminal-prompt">&gt;</span> [SYSTEM] Tap anywhere to engage secure voice interface.`;
+      termEl.appendChild(line);
+      termEl.scrollTop = termEl.scrollHeight;
+    }
+
+    const startVoiceSystem = () => {
+      voice.warmUpMic();
+      handleAssistantResponse("Lukas Core initialized. Systems are secure and operational on port 3000. How can I assist you, Commander?");
+      document.removeEventListener('click', startVoiceSystem);
+      document.removeEventListener('touchstart', startVoiceSystem);
+    };
+    document.addEventListener('click', startVoiceSystem);
+    document.addEventListener('touchstart', startVoiceSystem);
   }, 2900);
 }
 

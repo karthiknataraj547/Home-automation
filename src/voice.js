@@ -23,6 +23,7 @@ class LukasVoiceController {
     this.isStopping = false;
     this.pendingStart = false;
     this.consecutiveErrors = 0;
+    this.lastError = null;
     this.lastStartTime = 0;
     this.retryStartTimeout = null;
     this.isTransitioning = false;  // Prevents rapid mode-switch loops on mobile
@@ -100,7 +101,19 @@ class LukasVoiceController {
         
         // Prevent infinite restart-fail loops on mobile/Safari
         if (this.consecutiveErrors >= 4) {
-          console.warn("[voice.js] Halting recognition restarts due to consecutive errors limit (consecutiveErrors=" + this.consecutiveErrors + ").");
+          const isFatal = this.lastError === 'not-allowed' || this.lastError === 'service-not-allowed';
+          if (!isFatal && (this.isListeningForWakeWord || this.isCommandListeningActive || this.isLongConversation)) {
+            console.warn(`[voice.js] Encountered ${this.consecutiveErrors} consecutive errors (${this.lastError || 'unknown'}). Backing off for 6 seconds before retrying...`);
+            this.consecutiveErrors = 0; // reset counter
+            setTimeout(() => {
+              if (this.isListeningForWakeWord || this.isCommandListeningActive || this.isLongConversation) {
+                this.startRecognitionInternal();
+              }
+            }, 6000);
+            return;
+          }
+
+          console.warn("[voice.js] Halting recognition restarts due to fatal error or permission denial (lastError=" + this.lastError + ").");
           this.isListeningForWakeWord = false;
           this.isCommandListeningActive = false;
           this.isLongConversation = false;
@@ -147,6 +160,7 @@ class LukasVoiceController {
 
       this.recognition.onerror = (event) => {
         console.error("Speech recognition error:", event.error);
+        this.lastError = event.error;
         
         // Ignore noise/no-speech errors to avoid breaking loops
         if (event.error === 'no-speech' && (this.isListeningForWakeWord || this.isLongConversation || this.isCommandListeningActive)) {
@@ -439,21 +453,23 @@ class LukasVoiceController {
   startWakeWordListener() {
     if (!this.recognition) return;
     this.warmUpMic(); // Keep hardware mic warm
-    // Prevent double-start
-    if (this.isListeningForWakeWord && this.isRecognitionActive) {
-      console.log("[voice.js] Wake word listener already active, skipping.");
-      return;
-    }
-    this.isTransitioning = true;
+    
     this.isListeningForWakeWord = true;
     this.isCommandListeningActive = false;
+    
+    if (this.isRecognitionActive) {
+      this.isTransitioning = false;
+      if (this.onRecognitionStateChange) {
+        this.onRecognitionStateChange('wakeword');
+      }
+      return;
+    }
+    
+    this.isTransitioning = true;
     this.cancelSpeech();
     
-    if (this.isStopping || this.isRecognitionActive) {
+    if (this.isStopping) {
       this.pendingStart = true;
-      if (this.isRecognitionActive) {
-        this.stopRecognitionInternal();
-      }
     } else {
       this.startRecognitionInternal();
     }
@@ -462,7 +478,7 @@ class LukasVoiceController {
   // Stop background listener
   stopWakeWordListener() {
     this.isListeningForWakeWord = false;
-    this.stopRecognitionInternal();
+    // Do NOT stop recognition here to keep mic active for speech interrupts
   }
 
   // Toggle vocal feedback output
@@ -569,13 +585,21 @@ class LukasVoiceController {
     this.isCommandListeningActive = true;
     this.accumulatedSpeechText = "";
     this.lastSessionTranscript = "";
-    this.isTransitioning = true;
-    this.cancelSpeech();
+    
     this.warmUpMic(); // Keep hardware mic warm
     
-    if (this.isStopping || this.isRecognitionActive) {
-      // Stop current recognition and pending-start will restart in command mode
-      this.stopRecognitionInternal();
+    if (this.isRecognitionActive) {
+      this.isTransitioning = false;
+      if (this.onRecognitionStateChange) {
+        this.onRecognitionStateChange('command');
+      }
+      return;
+    }
+    
+    this.isTransitioning = true;
+    this.cancelSpeech();
+    
+    if (this.isStopping) {
       this.pendingStart = true;
     } else {
       this.startRecognitionInternal();
