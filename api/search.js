@@ -1,13 +1,11 @@
 // api/search.js — LUKAS Search Backend (Vercel Serverless Function)
 // Proxies search queries to multiple real-time search APIs:
-//   1. DuckDuckGo Instant Answers (free, no key)
-//   2. Brave Search API (free tier: 2000 calls/month)
-//   3. Google Serper API (free tier: 2500 calls/month)
-//   4. Wikipedia REST API (always free)
+//   1. SerpAPI — Google Search (https://serpapi.com) — set SERPER_API_KEY
+//   2. DuckDuckGo Instant Answers (free, no key needed)
+//   3. Wikipedia REST API (always free)
 //
-// Set environment variables in Vercel dashboard:
-//   BRAVE_API_KEY   — https://api.search.brave.com/
-//   SERPER_API_KEY  — https://serper.dev/
+// Set in Vercel Environment Variables:
+//   SERPER_API_KEY = your SerpAPI key from https://serpapi.com/
 
 export default async function handler(req, res) {
   // CORS headers
@@ -28,134 +26,87 @@ export default async function handler(req, res) {
   const q = query.trim();
   const results = [];
 
-  // ── 1. Brave Search API ──────────────────────────────────────────────────
-  if (process.env.BRAVE_API_KEY) {
+  // ── 1. SerpAPI — Google Search (highest quality, real-time) ─────────────
+  const serpApiKey = process.env.SERPER_API_KEY;
+  if (serpApiKey) {
     try {
-      const braveRes = await fetch(
-        `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(q)}&count=5&country=in&search_lang=en`,
-        {
-          headers: {
-            'Accept': 'application/json',
-            'Accept-Encoding': 'gzip',
-            'X-Subscription-Token': process.env.BRAVE_API_KEY,
-          },
-          signal: AbortSignal.timeout(5000),
-        }
-      );
-      if (braveRes.ok) {
-        const data = await braveRes.json();
-
-        // FAQ / Answer box
-        if (data.faq?.results?.length > 0) {
-          const faq = data.faq.results[0];
-          results.push({
-            source: 'Brave Search (FAQ)',
-            title: faq.question || q,
-            text: faq.answer || '',
-            url: faq.url || '',
-            confidence: 0.93,
-            type: 'faq',
-          });
-        }
-
-        // Infobox
-        if (data.infobox?.results?.length > 0) {
-          const box = data.infobox.results[0];
-          const text = box.long_desc || box.description || '';
-          if (text) {
-            results.push({
-              source: 'Brave Search (Infobox)',
-              title: box.title || q,
-              text,
-              url: box.website || '',
-              confidence: 0.92,
-              type: 'infobox',
-            });
-          }
-        }
-
-        // Organic
-        for (const item of (data.web?.results || []).slice(0, 3)) {
-          if (item.description) {
-            results.push({
-              source: `Brave Search (${item.meta_url?.hostname || 'Web'})`,
-              title: item.title || '',
-              text: item.description,
-              url: item.url || '',
-              confidence: 0.85,
-              type: 'organic',
-            });
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[Backend] Brave Search failed:', e.message);
-    }
-  }
-
-  // ── 2. Google Serper API ────────────────────────────────────────────────
-  if (process.env.SERPER_API_KEY && results.length < 3) {
-    try {
-      const serperRes = await fetch('https://google.serper.dev/search', {
-        method: 'POST',
-        headers: {
-          'X-API-KEY': process.env.SERPER_API_KEY,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ q, num: 5, gl: 'in', hl: 'en' }),
-        signal: AbortSignal.timeout(5000),
+      const serpUrl = `https://serpapi.com/search?engine=google&q=${encodeURIComponent(q)}&api_key=${serpApiKey}&gl=in&hl=en&num=5&no_cache=false`;
+      const serpRes = await fetch(serpUrl, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(8000),
       });
-      if (serperRes.ok) {
-        const data = await serperRes.json();
 
-        // Answer box
-        if (data.answerBox) {
-          const ab = data.answerBox;
-          const text = ab.answer || ab.snippet || (ab.snippetHighlighted || []).join(' ');
+      if (serpRes.ok) {
+        const data = await serpRes.json();
+
+        // Answer Box — highest confidence (e.g. "who is the PM of India?")
+        if (data.answer_box) {
+          const ab = data.answer_box;
+          const text = ab.answer || ab.snippet || (Array.isArray(ab.list) ? ab.list.join(', ') : '') || '';
           if (text) {
-            results.unshift({ // highest priority
-              source: 'Google Featured Snippet',
+            results.push({
+              source: 'Google Answer Box',
               title: ab.title || q,
-              text,
+              text: text.trim(),
               url: ab.link || '',
-              confidence: 0.96,
+              confidence: 0.97,
               type: 'answer_box',
             });
           }
         }
 
-        // Knowledge graph
-        if (data.knowledgeGraph?.description) {
-          results.push({
-            source: 'Google Knowledge Graph',
-            title: data.knowledgeGraph.title || q,
-            text: data.knowledgeGraph.description,
-            url: data.knowledgeGraph.website || '',
-            confidence: 0.94,
-            type: 'knowledge_graph',
-          });
+        // Knowledge Graph (e.g. famous people, places, companies)
+        if (data.knowledge_graph) {
+          const kg = data.knowledge_graph;
+          const text = kg.description || '';
+          const extraFacts = Object.entries(kg)
+            .filter(([k]) => !['title','type','description','header_images','source','knowledge_graph_search_link'].includes(k))
+            .slice(0, 4)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(', ');
+          const fullText = [text, extraFacts].filter(Boolean).join(' | ');
+          if (fullText) {
+            results.push({
+              source: 'Google Knowledge Graph',
+              title: kg.title || q,
+              text: fullText,
+              url: kg.website || '',
+              confidence: 0.95,
+              type: 'knowledge_graph',
+            });
+          }
         }
 
-        // Organic
-        for (const item of (data.organic || []).slice(0, 3)) {
-          if (item.snippet) {
+        // Organic search results (top 4)
+        for (const item of (data.organic_results || []).slice(0, 4)) {
+          const text = item.snippet || '';
+          if (text) {
+            let domain = '';
+            try { domain = new URL(item.link).hostname; } catch {}
             results.push({
-              source: `Google (${item.domain || ''})`,
+              source: `Google (${domain})`,
               title: item.title || '',
-              text: item.snippet,
+              text,
               url: item.link || '',
               confidence: 0.87,
               type: 'organic',
             });
           }
         }
+
+        console.log(`[SerpAPI] Found ${results.length} results for: "${q}"`);
+      } else {
+        const errText = await serpRes.text();
+        console.warn('[SerpAPI] Non-OK response:', serpRes.status, errText.slice(0, 200));
       }
     } catch (e) {
-      console.warn('[Backend] Serper failed:', e.message);
+      console.warn('[Backend] SerpAPI failed:', e.message);
     }
+  } else {
+    console.warn('[Backend] SERPER_API_KEY not set — SerpAPI skipped');
   }
 
-  // ── 3. DuckDuckGo Instant (always available, CORS-safe from backend) ────
+  // ── 2. DuckDuckGo Instant (free, always available as fallback) ───────────
   try {
     const ddgRes = await fetch(
       `https://api.duckduckgo.com/?q=${encodeURIComponent(q)}&format=json&no_html=1&skip_disambig=1`,
@@ -188,7 +139,7 @@ export default async function handler(req, res) {
     console.warn('[Backend] DDG Instant failed:', e.message);
   }
 
-  // ── 4. Wikipedia (always available from server-side) ────────────────────
+  // ── 3. Wikipedia (always available, high accuracy for factual topics) ────
   if (results.length < 2) {
     try {
       const wikiSearchRes = await fetch(
@@ -223,7 +174,7 @@ export default async function handler(req, res) {
     }
   }
 
-  // Sort by confidence desc
+  // Sort by confidence descending
   results.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
 
   return res.status(200).json({
@@ -231,6 +182,7 @@ export default async function handler(req, res) {
     found: results.length > 0,
     results: results.slice(0, 6),
     timestamp: new Date().toISOString(),
-    backend: 'lukas-search-v2',
+    backend: 'lukas-search-serpapi-v2',
+    serpapi_used: !!serpApiKey,
   });
 }

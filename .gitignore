@@ -30,3 +30,8 @@ tuya_specs_cache.json
 go2rtc.yaml
 *.exe
 openai_creds.json
+
+# Environment variables (API keys — never commit these!)
+.env
+.env.local
+.env.*.local

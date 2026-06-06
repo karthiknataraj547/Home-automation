@@ -10,7 +10,7 @@ class LukasResearchAgent {
     this.WIKIPEDIA_API    = 'https://en.wikipedia.org/api/rest_v1/page/summary/';
     this.WIKIPEDIA_SEARCH = 'https://en.wikipedia.org/w/api.php';
     this.DDG_INSTANT_API  = 'https://api.duckduckgo.com/';
-    this.SERPER_API       = 'https://google.serper.dev/search';
+    this.SERP_API_BASE    = 'https://serpapi.com/search';  // SerpAPI endpoint
     this.TIMEOUT          = 9000;
 
     // CORS proxies tried in order — first success wins
@@ -238,58 +238,60 @@ class LukasResearchAgent {
     }
   }
 
-  // ─── Source 3: Google Serper API (if key provided) ──────────────────────
+  // ─── Source 3: SerpAPI — Google Search (if key provided) ────────────────
+  // Endpoint: GET https://serpapi.com/search?engine=google&q=...&api_key=...
 
   async _searchSerper(query, serperKey) {
     try {
+      const url = `${this.SERP_API_BASE}?engine=google&q=${encodeURIComponent(query)}&api_key=${encodeURIComponent(serperKey)}&gl=in&hl=en&num=5`;
+      
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.TIMEOUT);
 
-      const response = await fetch(this.SERPER_API, {
-        method: 'POST',
+      const response = await fetch(url, {
+        method: 'GET',
         signal: controller.signal,
-        headers: {
-          'X-API-KEY': serperKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ q: query, num: 5, gl: 'in', hl: 'en' }),
+        headers: { 'Accept': 'application/json' },
       });
       clearTimeout(timer);
 
-      if (!response.ok) return null;
+      if (!response.ok) {
+        console.warn('[Research] SerpAPI non-OK:', response.status);
+        return null;
+      }
       const data = await response.json();
 
       const results = [];
 
-      // Answer box (highest confidence)
-      if (data.answerBox) {
-        const ab = data.answerBox;
-        const text = ab.answer || ab.snippet || ab.snippetHighlighted?.join(' ') || '';
+      // Answer box — highest confidence (e.g. "who is the PM?")
+      if (data.answer_box) {
+        const ab = data.answer_box;
+        const text = ab.answer || ab.snippet || (Array.isArray(ab.list) ? ab.list.join(', ') : '') || '';
         if (text) {
           results.push({
-            source: 'Google Featured Snippet',
+            source: 'Google Answer Box',
             url: ab.link || '',
             title: ab.title || query,
             excerpt: text.slice(0, 600),
-            text: text,
-            confidence: 0.96,
+            text: text.trim(),
+            confidence: 0.97,
             type: 'answer_box',
           });
         }
       }
 
-      // Knowledge panel
-      if (data.knowledgeGraph) {
-        const kg = data.knowledgeGraph;
+      // Knowledge graph (people, places, companies)
+      if (data.knowledge_graph) {
+        const kg = data.knowledge_graph;
         const text = kg.description || '';
         if (text) {
           results.push({
             source: 'Google Knowledge Graph',
-            url: kg.website || kg.descriptionLink || '',
+            url: kg.website || '',
             title: kg.title || query,
             excerpt: text.slice(0, 600),
             text: text,
-            confidence: 0.94,
+            confidence: 0.95,
             type: 'knowledge_graph',
           });
         }

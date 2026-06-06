@@ -789,29 +789,38 @@ export default defineConfig({
               }
             } catch(e) { console.warn('[Search] Wikipedia failed:', e.message); }
 
-            // 3. Google Serper (if key configured)
-            const serperKey = process.env.SERPER_API_KEY || '';
-            if (serperKey && results.length < 2) {
+            // 3. SerpAPI — Google Search (if key configured)
+            const serpApiKey = process.env.SERPER_API_KEY || '';
+            if (serpApiKey) {
               try {
-                const serperBody = JSON.stringify({ q, num: 5, gl: 'in', hl: 'en' });
-                const serperRaw = await new Promise((resolve, reject) => {
-                  const opts = { hostname: 'google.serper.dev', path: '/search', method: 'POST', headers: { 'X-API-KEY': serperKey, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(serperBody) }, timeout: 5000 };
-                  const req2 = https.request(opts, (r) => { let d = ''; r.on('data', c => d += c); r.on('end', () => resolve(d)); });
-                  req2.on('error', reject); req2.write(serperBody); req2.end();
+                const serpPath = `/search?engine=google&q=${encodeURIComponent(q)}&api_key=${serpApiKey}&gl=in&hl=en&num=5`;
+                const serpRaw = await new Promise((resolve, reject) => {
+                  const opts = { hostname: 'serpapi.com', path: serpPath, method: 'GET', headers: { 'Accept': 'application/json' }, timeout: 8000 };
+                  https.get(opts, (r) => { let d = ''; r.on('data', c => d += c); r.on('end', () => resolve(d)); }).on('error', reject);
                 });
-                const serper = JSON.parse(serperRaw);
-                if (serper.answerBox) {
-                  const text = serper.answerBox.answer || serper.answerBox.snippet || '';
-                  if (text) results.unshift({ source: 'Google Featured Snippet', title: serper.answerBox.title || q, text, url: serper.answerBox.link || '', confidence: 0.96, type: 'answer_box' });
+                const serp = JSON.parse(serpRaw);
+
+                // Answer box — highest confidence
+                if (serp.answer_box) {
+                  const text = serp.answer_box.answer || serp.answer_box.snippet || (Array.isArray(serp.answer_box.list) ? serp.answer_box.list.join(', ') : '') || '';
+                  if (text) results.unshift({ source: 'Google Answer Box', title: serp.answer_box.title || q, text: text.trim(), url: serp.answer_box.link || '', confidence: 0.97, type: 'answer_box' });
                 }
-                for (const item of (serper.organic || []).slice(0, 3)) {
-                  if (item.snippet) results.push({ source: `Google (${item.domain || ''})`, title: item.title || '', text: item.snippet, url: item.link || '', confidence: 0.87, type: 'organic' });
+
+                // Knowledge graph
+                if (serp.knowledge_graph?.description) {
+                  results.push({ source: 'Google Knowledge Graph', title: serp.knowledge_graph.title || q, text: serp.knowledge_graph.description, url: serp.knowledge_graph.website || '', confidence: 0.95, type: 'knowledge_graph' });
                 }
-              } catch(e) { console.warn('[Search] Serper failed:', e.message); }
+
+                // Organic results
+                for (const item of (serp.organic_results || []).slice(0, 3)) {
+                  if (item.snippet) results.push({ source: `Google (${item.displayed_link || ''})`, title: item.title || '', text: item.snippet, url: item.link || '', confidence: 0.87, type: 'organic' });
+                }
+              } catch(e) { console.warn('[Search] SerpAPI failed:', e.message); }
             }
 
             results.sort((a, b) => (b.confidence || 0) - (a.confidence || 0));
-            json(res, { query: q, found: results.length > 0, results: results.slice(0, 6), timestamp: new Date().toISOString(), backend: 'lukas-search-vite' });
+            json(res, { query: q, found: results.length > 0, results: results.slice(0, 6), timestamp: new Date().toISOString(), backend: 'lukas-search-serpapi-vite', serpapi_used: !!serpApiKey });
+
           } catch(e) { json(res, { error: e.message, found: false, results: [] }, 500); }
 
         } else { next(); }
