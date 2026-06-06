@@ -139,6 +139,12 @@ let activeFollowUp = null;
 let conversationActive = false;   // TRUE while we keep mic hot after a voice exchange
 let conversationTimer = null;     // Timer to revert to passive after conversation window
 
+let isVoiceTrainingActive = false;
+let voiceTrainingStep = '';
+let tempVoiceprint = null;
+let isVoicePrintTrainingActive = false;
+let voicePrintTrainingName = '';
+
 // Keep mic active for follow-up commands after a voice exchange (15 second window)
 function keepConversationAlive(durationMs = 15000) {
   conversationActive = true;
@@ -1591,6 +1597,7 @@ function bindUIEvents() {
       loadTuyaConfig();
       loadCameraConfig();
       renderDynamicDevices();
+      renderVoiceProfilesList();
       diag.logToTerminal('[NODE REGISTRY] Displaying advanced node manager panel.', 'info');
     });
   }
@@ -1608,6 +1615,82 @@ function bindUIEvents() {
         modal.style.display = 'none';
         diag.logToTerminal('[NODE REGISTRY] Closing node manager panel.', 'info');
       }
+    });
+  }
+
+  // Voice biometrics controls
+  const trainVoiceBtn = document.getElementById('trainVoiceBtn');
+  const clearVoiceProfilesBtn = document.getElementById('clearVoiceProfilesBtn');
+  const voiceRegNameInput = document.getElementById('voiceRegName');
+  const voiceTrainStatus = document.getElementById('voiceTrainStatus');
+
+  if (trainVoiceBtn && voiceRegNameInput && voiceTrainStatus) {
+    trainVoiceBtn.addEventListener('click', () => {
+      const name = voiceRegNameInput.value.trim();
+      if (!name) {
+        alert("Please enter a name first.");
+        return;
+      }
+
+      isVoicePrintTrainingActive = true;
+      voicePrintTrainingName = name;
+      
+      voiceTrainStatus.style.display = 'block';
+      voiceTrainStatus.innerHTML = `<span style="color:#ff9f3b; animation:blink 1.2s infinite;"><i class="fa-solid fa-microphone"></i> Recording vocal signature...</span><br>Please speak: "Lukas, authorize my profile" now.`;
+      
+      voice.warmUpMic();
+      setTimeout(() => {
+        voice.startListeningForCommand();
+      }, 300);
+      
+      diag.logToTerminal(`[BIOMETRICS] Started vocal print recording for user: "${name}"`, 'info');
+    });
+  }
+
+  if (clearVoiceProfilesBtn) {
+    clearVoiceProfilesBtn.addEventListener('click', () => {
+      if (confirm("Are you sure you want to delete all registered voice profiles?")) {
+        voice.biometrics.clearProfiles();
+        renderVoiceProfilesList();
+        diag.logToTerminal('[BIOMETRICS] Wiped all vocal profiles from local database.', 'warn');
+        alert("All voice profiles deleted.");
+      }
+    });
+  }
+
+  function renderVoiceProfilesList() {
+    const listEl = document.getElementById('registeredVoiceProfilesList');
+    if (!listEl) return;
+    
+    const profiles = voice.biometrics.getProfiles();
+    const names = Object.keys(profiles);
+    
+    if (names.length === 0) {
+      listEl.innerHTML = '<div style="color:#475569; font-style:italic;">No profiles registered yet.</div>';
+      return;
+    }
+    
+    listEl.innerHTML = names.map(name => `
+      <div style="display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.01); border:1px solid rgba(255,255,255,0.05); padding:0.3rem 0.5rem; border-radius:4px; margin-bottom:0.2rem;">
+        <span style="font-weight:bold; color:var(--cyan-neon);"><i class="fa-solid fa-user-check" style="margin-right:6px;"></i>${name}</span>
+        <button class="delete-voice-profile-btn btn-routine lockdown" data-name="${name}" style="padding:0.2rem 0.4rem; font-size:0.55rem; cursor:pointer; width:auto; height:auto; border-radius:3px;">
+          <i class="fa-solid fa-trash"></i>
+        </button>
+      </div>
+    `).join('');
+    
+    // Bind delete buttons
+    listEl.querySelectorAll('.delete-voice-profile-btn').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        const nameToDelete = btn.getAttribute('data-name');
+        if (confirm(`Are you sure you want to delete the voice profile for "${nameToDelete}"?`)) {
+          const profiles = voice.biometrics.getProfiles();
+          delete profiles[nameToDelete];
+          localStorage.setItem("lukas_voice_profiles", JSON.stringify(profiles));
+          diag.logToTerminal(`[BIOMETRICS] Deleted voice profile for "${nameToDelete}".`, 'info');
+          renderVoiceProfilesList();
+        }
+      });
     });
   }
 
@@ -4196,6 +4279,126 @@ async function processCommand(rawCommand, source) {
     const cmd = rawCommand.toLowerCase().trim();
     appendChatBubble(rawCommand, 'user');
     diag.spikeCPU();
+
+    // ── Voice print training via UI ──
+    if (typeof isVoicePrintTrainingActive !== 'undefined' && isVoicePrintTrainingActive) {
+      isProcessingCommand = false;
+      const statusEl = document.getElementById('voiceTrainStatus');
+      const nameEl = document.getElementById('voiceRegName');
+      
+      const print = voice.lastSpokenVoiceprint;
+      if (!print) {
+        if (statusEl) {
+          statusEl.style.color = 'var(--rose-neon)';
+          statusEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Training failed: no speech detected.`;
+        }
+        isVoicePrintTrainingActive = false;
+        voicePrintTrainingName = '';
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      
+      const ok = voice.biometrics.saveProfile(voicePrintTrainingName, print);
+      isVoicePrintTrainingActive = false;
+      
+      if (ok) {
+        if (statusEl) {
+          statusEl.style.color = 'var(--emerald-neon)';
+          statusEl.innerHTML = `<i class="fa-solid fa-circle-check"></i> Voice print successfully registered!`;
+        }
+        if (nameEl) nameEl.value = '';
+        renderVoiceProfilesList();
+        handleAssistantResponse(`Voice print successfully registered for ${voicePrintTrainingName}.`);
+      } else {
+        if (statusEl) {
+          statusEl.style.color = 'var(--rose-neon)';
+          statusEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation"></i> Database error.`;
+        }
+      }
+      
+      voicePrintTrainingName = '';
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+
+    // ── Voice print training via Speech ──
+    if (typeof isVoiceTrainingActive !== 'undefined' && isVoiceTrainingActive) {
+      isProcessingCommand = false;
+      
+      if (voiceTrainingStep === 'request_phrase') {
+        const print = voice.lastSpokenVoiceprint;
+        if (!print) {
+          handleAssistantResponse("vocal registration failed: no speech audio frames detected. Please try again.");
+          isVoiceTrainingActive = false;
+          tempVoiceprint = null;
+          setTimeout(() => voice.startWakeWordListener(), 1000);
+          return;
+        }
+        
+        tempVoiceprint = print;
+        voiceTrainingStep = 'request_name';
+        handleAssistantResponse("Vocal signature captured successfully. What is your name, Commander?");
+        keepConversationAlive(15000);
+        return;
+      }
+      
+      if (voiceTrainingStep === 'request_name') {
+        const trainedName = rawCommand.trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+        if (trainedName.length < 2) {
+          handleAssistantResponse("Vocal registration aborted. The provided name was too short.");
+          isVoiceTrainingActive = false;
+          tempVoiceprint = null;
+          setTimeout(() => voice.startWakeWordListener(), 1000);
+          return;
+        }
+        
+        const ok = voice.biometrics.saveProfile(trainedName, tempVoiceprint);
+        isVoiceTrainingActive = false;
+        tempVoiceprint = null;
+        
+        if (ok) {
+          handleAssistantResponse(`Voice print successfully registered for ${trainedName}. I will now recognize you.`);
+          if (document.getElementById('nodeManagerModal').style.display === 'flex') {
+            renderVoiceProfilesList();
+          }
+        } else {
+          handleAssistantResponse("Biometric database error. Failed to save vocal print.");
+        }
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+    }
+
+    // ── Voice Biometrics Identification Commands ──
+    if (cmd === 'who am i' || cmd === 'identify my voice' || cmd === 'who is speaking' || cmd === 'do you know my voice') {
+      isProcessingCommand = false;
+      const print = voice.lastSpokenVoiceprint;
+      if (!print) {
+        handleAssistantResponse("I couldn't analyze your voice. Make sure you are speaking through the microphone.");
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      
+      const identity = voice.biometrics.identify(print);
+      if (identity && identity.name !== 'Guest') {
+        handleAssistantResponse(`Based on your unique vocal signature, you are ${identity.name}. Welcome back, Commander.`);
+      } else {
+        handleAssistantResponse("I recognize your voice as a Guest. If you'd like me to remember you, please say 'register my voice' to train a new vocal profile.");
+      }
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+    
+    if (cmd === 'register my voice' || cmd === 'train my voice' || cmd === 'train voice print' || cmd === 'register voice') {
+      isProcessingCommand = false;
+      isVoiceTrainingActive = true;
+      voiceTrainingStep = 'request_phrase';
+      tempVoiceprint = null;
+      
+      handleAssistantResponse("Initiating voice biometric registration. Please say 'Lukas, authorize my profile' now to record your vocal print.");
+      keepConversationAlive(15000);
+      return;
+    }
 
     // ── Deactivation / Standby / Offline Trigger ──
     const stopWords = ['stop', 'go to sleep', 'deactivate voice', 'mute microphone', 'stand down'];

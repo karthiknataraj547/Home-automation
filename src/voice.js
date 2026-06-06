@@ -1,8 +1,11 @@
 // voice.js - LUKAS voice communication sub-module
 // Integrates HTML5 Web Speech API (SpeechRecognition & SpeechSynthesis)
+import LukasVoiceprintAnalyzer from './ai/voiceprint.js';
 
 class LukasVoiceController {
   constructor() {
+    this.biometrics = new LukasVoiceprintAnalyzer();
+    this.lastSpokenVoiceprint = null;
     this.synth = window.speechSynthesis;
     this.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     this.recognition = null;
@@ -603,6 +606,9 @@ class LukasVoiceController {
     try {
       this.dummyStream = await navigator.mediaDevices.getUserMedia({ audio: true });
       console.log("[voice.js] Microphone stream warmed up successfully.");
+      if (this.isCommandListeningActive && this.biometrics) {
+        this.biometrics.startAnalysis(this.dummyStream);
+      }
     } catch (e) {
       console.warn("[voice.js] Failed to warm up microphone:", e);
       if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError' || e.message?.includes('Permission denied') || e.message?.includes('Permission dismissed')) {
@@ -817,6 +823,9 @@ class LukasVoiceController {
     this.lastSessionTranscript = "";
     
     this.warmUpMic(); // Keep hardware mic warm
+    if (this.dummyStream) {
+      this.biometrics.startAnalysis(this.dummyStream);
+    }
     
     if (this.isRecognitionActive) {
       this.isTransitioning = false;
@@ -841,6 +850,13 @@ class LukasVoiceController {
     this.isListeningForWakeWord = false;
     this.isCommandListeningActive = false;
     this.stopRecognitionInternal();
+    
+    if (this.biometrics) {
+      const voiceprint = this.biometrics.stopAnalysis();
+      if (voiceprint) {
+        this.lastSpokenVoiceprint = voiceprint;
+      }
+    }
   }
 }
 
