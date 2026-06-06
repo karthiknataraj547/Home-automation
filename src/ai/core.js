@@ -62,6 +62,10 @@ CURRENT TIME: ${timeStr}
     prompt += `\n\n[USER PROFILE & CONTEXT]\n${contextBlock}`;
   }
 
+  if (memory && memory.currentUsername === 'Guest') {
+    prompt += `\n\n[PRIVACY INSTRUCTION: GUEST SESSION]\nYou are in a restricted, unverified Guest session. You must NEVER reveal or guess the real names, projects, preferences, tasks, or notes of any registered users. If asked about user accounts or system profiles, politely state that you cannot access them without authentication or voice verification.`;
+  }
+
   if (homeContext) {
     prompt += `\n\n[HOME ENVIRONMENT]\n${homeContext}`;
   }

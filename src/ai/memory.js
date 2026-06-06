@@ -20,6 +20,8 @@ class LukasMemory {
       currentGoal: null,
     };
 
+    this.currentUsername = 'Guest';
+
     // Long-term: persisted to localStorage
     this.longTerm = this._loadLongTerm();
 
@@ -27,6 +29,7 @@ class LukasMemory {
     this._migrate();
 
     console.log('[LUKAS Memory] Initialized.', {
+      user: this.currentUsername,
       preferences: Object.keys(this.longTerm.preferences).length,
       facts: Object.keys(this.longTerm.facts).length,
       projects: Object.keys(this.longTerm.projects).length,
@@ -35,31 +38,44 @@ class LukasMemory {
 
   // ─── Persistence ─────────────────────────────────────────────────────────
 
+  switchUser(username) {
+    if (!username) username = 'Guest';
+    if (this.currentUsername.toLowerCase() === username.toLowerCase()) return;
+    
+    console.log(`[LUKAS Memory] Switching user context from ${this.currentUsername} to ${username}`);
+    this.currentUsername = username;
+    this.clearSession();
+    this.longTerm = this._loadLongTerm();
+    this._migrate();
+  }
+
   _loadLongTerm() {
+    const prefix = `lukas_user_${this.currentUsername.toLowerCase()}_`;
     const safe = (key, fallback) => {
-      try { return JSON.parse(localStorage.getItem(key) || 'null') || fallback; }
+      try { return JSON.parse(localStorage.getItem(prefix + key) || 'null') || fallback; }
       catch { return fallback; }
     };
     return {
-      preferences: safe('lukas_mem_preferences', {}),
-      facts: safe('lukas_mem_facts', {}),
-      projects: safe('lukas_mem_projects', {}),
-      patterns: safe('lukas_mem_patterns', []),
-      interactionLog: safe('lukas_mem_interactions', []),
-      sessionCount: safe('lukas_mem_sessions', 0) + 1,
+      preferences: safe('preferences', {}),
+      facts: safe('facts', {}),
+      projects: safe('projects', {}),
+      patterns: safe('patterns', []),
+      interactionLog: safe('interactions', []),
+      sessionCount: safe('sessions', 0) + 1,
     };
   }
 
   _saveLongTerm() {
     try {
-      localStorage.setItem('lukas_mem_preferences', JSON.stringify(this.longTerm.preferences));
-      localStorage.setItem('lukas_mem_facts', JSON.stringify(this.longTerm.facts));
-      localStorage.setItem('lukas_mem_projects', JSON.stringify(this.longTerm.projects));
-      localStorage.setItem('lukas_mem_patterns', JSON.stringify(this.longTerm.patterns));
-      localStorage.setItem('lukas_mem_sessions', JSON.stringify(this.longTerm.sessionCount));
+      const prefix = `lukas_user_${this.currentUsername.toLowerCase()}_`;
+      localStorage.setItem(prefix + 'preferences', JSON.stringify(this.longTerm.preferences));
+      localStorage.setItem(prefix + 'facts', JSON.stringify(this.longTerm.facts));
+      localStorage.setItem(prefix + 'projects', JSON.stringify(this.longTerm.projects));
+      localStorage.setItem(prefix + 'patterns', JSON.stringify(this.longTerm.patterns));
+      localStorage.setItem(prefix + 'sessions', JSON.stringify(this.longTerm.sessionCount));
       
-      const enabled = localStorage.getItem('lukas_sync_enabled') === 'true';
-      const phrase = localStorage.getItem('lukas_sync_passphrase');
+      const enabled = this.getPreference('syncEnabled', 'false') === 'true';
+      const phrase = this.getPreference('syncPassphrase', '');
       if (enabled && phrase) {
         this.syncWithServer(phrase).catch(e => console.error('[LUKAS Memory] Auto-sync failed:', e));
       }
@@ -425,7 +441,8 @@ class LukasMemory {
 
     // Persist interaction log separately
     try {
-      localStorage.setItem('lukas_mem_interactions', JSON.stringify(this.longTerm.interactionLog));
+      const prefix = `lukas_user_${this.currentUsername.toLowerCase()}_`;
+      localStorage.setItem(prefix + 'interactions', JSON.stringify(this.longTerm.interactionLog));
     } catch {}
 
     this._saveLongTerm();
@@ -535,9 +552,9 @@ class LukasMemory {
       const encProjects = await encryptData(JSON.stringify(this.longTerm.projects), passphrase);
       
       const payloads = [
-        { type: 'preferences', payload: encPreferences },
-        { type: 'facts', payload: encFacts },
-        { type: 'projects', payload: encProjects }
+        { type: `${this.currentUsername}_preferences`, payload: encPreferences },
+        { type: `${this.currentUsername}_facts`, payload: encFacts },
+        { type: `${this.currentUsername}_projects`, payload: encProjects }
       ];
       
       for (const item of payloads) {
@@ -563,7 +580,11 @@ class LukasMemory {
     if (!passphrase) return { success: false, error: 'No passphrase provided' };
     try {
       const { decryptData } = await import('./crypto.js');
-      const types = ['preferences', 'facts', 'projects'];
+      const types = [
+        `${this.currentUsername}_preferences`,
+        `${this.currentUsername}_facts`,
+        `${this.currentUsername}_projects`
+      ];
       let loadedAny = false;
       
       for (const type of types) {
@@ -574,11 +595,11 @@ class LukasMemory {
             const decrypted = await decryptData(resData.payload, passphrase);
             const parsed = JSON.parse(decrypted);
             
-            if (type === 'preferences') {
+            if (type.endsWith('_preferences')) {
               this.longTerm.preferences = { ...this.longTerm.preferences, ...parsed };
-            } else if (type === 'facts') {
+            } else if (type.endsWith('_facts')) {
               this.longTerm.facts = { ...this.longTerm.facts, ...parsed };
-            } else if (type === 'projects') {
+            } else if (type.endsWith('_projects')) {
               this.longTerm.projects = { ...this.longTerm.projects, ...parsed };
             }
             loadedAny = true;
@@ -600,9 +621,10 @@ class LukasMemory {
   clearAllMemory() {
     this.clearSession();
     this.longTerm = { preferences: {}, facts: {}, projects: {}, patterns: [], interactionLog: [], sessionCount: 0 };
-    ['lukas_mem_preferences','lukas_mem_facts','lukas_mem_projects','lukas_mem_patterns','lukas_mem_sessions','lukas_mem_interactions']
-      .forEach(k => localStorage.removeItem(k));
-    console.log('[LUKAS Memory] All memory cleared.');
+    const prefix = `lukas_user_${this.currentUsername.toLowerCase()}_`;
+    ['preferences','facts','projects','patterns','sessions','interactions']
+      .forEach(k => localStorage.removeItem(prefix + k));
+    console.log(`[LUKAS Memory] All memory cleared for user: ${this.currentUsername}.`);
   }
 }
 

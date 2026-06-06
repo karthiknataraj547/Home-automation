@@ -145,6 +145,16 @@ let tempVoiceprint = null;
 let isVoicePrintTrainingActive = false;
 let voicePrintTrainingName = '';
 
+let isRegistrationConfirmationActive = false;
+let tempName = '';
+let tempLanguage = '';
+let tempAccent = '';
+let tempStyle = '';
+
+let isVoiceRetrainingActive = false;
+let voiceRetrainingName = '';
+let voiceRetrainingStep = '';
+
 // Keep mic active for follow-up commands after a voice exchange (respects user timeout selection)
 function keepConversationAlive(durationMs = null) {
   const timeoutStr = localStorage.getItem('lukas_continuous_convo_timeout');
@@ -217,11 +227,21 @@ function startSilenceTimeout() {
 }
 
 // ═══════════════════ REMINDER & TASK ENGINE ═══════════════════
-let lukasReminders = JSON.parse(localStorage.getItem('lukas_reminders') || '[]');
+let lukasReminders = [];
 let reminderTimers = new Map();
 
+function loadUserReminders() {
+  const prefix = `lukas_user_${(typeof lukasMemory !== 'undefined' ? lukasMemory.currentUsername : 'Guest').toLowerCase()}_`;
+  try {
+    lukasReminders = JSON.parse(localStorage.getItem(prefix + 'reminders') || '[]');
+  } catch (e) {
+    lukasReminders = [];
+  }
+}
+
 function saveReminders() {
-  localStorage.setItem('lukas_reminders', JSON.stringify(lukasReminders));
+  const prefix = `lukas_user_${(typeof lukasMemory !== 'undefined' ? lukasMemory.currentUsername : 'Guest').toLowerCase()}_`;
+  localStorage.setItem(prefix + 'reminders', JSON.stringify(lukasReminders));
   renderReminders();
 }
 
@@ -382,6 +402,11 @@ function extractReminderText(cmd) {
 
 // Initialize reminders on load
 function initReminders() {
+  if (typeof reminderTimers !== 'undefined') {
+    reminderTimers.forEach(timer => clearTimeout(timer));
+    reminderTimers.clear();
+  }
+  loadUserReminders();
   renderReminders();
   lukasReminders.forEach((r, i) => { if (!r.fired) scheduleReminder(i); });
   
@@ -525,6 +550,132 @@ const mediaArtistText = document.getElementById('mediaArtistText');
 const mediaArtNode = document.getElementById('mediaArtNode');
 const mediaPlayIcon = document.getElementById('mediaPlayIcon');
 
+// Apply user profile preferences to speech synthesis, UI, and memories
+function applyUserPreferencesToVoiceAndUI(username) {
+  if (!username) username = 'Guest';
+  
+  // Switch memory namespace
+  lukasMemory.switchUser(username);
+  
+  // Now load preferences from memory
+  const volume = parseFloat(lukasMemory.getPreference('voiceVolume', '1.0'));
+  const rate = parseFloat(lukasMemory.getPreference('voiceRateVal', '1.0'));
+  const accent = lukasMemory.getPreference('voiceAccent', 'indian_english');
+  const speedProfile = lukasMemory.getPreference('voiceRate', 'normal');
+  const tone = lukasMemory.getPreference('voiceEmotionalTone', 'adaptive');
+  const persona = lukasMemory.getPreference('assistantPersona', 'lukas');
+  const briefMode = lukasMemory.getPreference('briefMode', 'false') === 'true';
+  const isMuted = lukasMemory.getPreference('isMuted', 'false') === 'true';
+  const speechLang = lukasMemory.getPreference('speechLang', 'en-IN');
+  const continuousConvo = lukasMemory.getPreference('continuousConvoTimeout', '15000');
+  
+  const syncEnabled = lukasMemory.getPreference('syncEnabled', 'false') === 'true';
+  const syncPassphrase = lukasMemory.getPreference('syncPassphrase', '');
+  
+  const geminiKey = lukasMemory.getPreference('gemini_api_key', '');
+  const openaiKey = lukasMemory.getPreference('openai_api_key', '');
+
+  // Apply to voice controller
+  voice.isMuted = isMuted;
+  voice.vocalVolume = volume;
+  voice.vocalRate = rate;
+  voice.preferredAccent = accent;
+  voice.speakingRateProfile = speedProfile;
+  voice.emotionalToneMode = tone;
+  if (voice.setLanguage) voice.setLanguage(speechLang);
+  voice.setAccent(accent);
+  voice.setSpeakingRateProfile(speedProfile);
+  voice.setEmotionalToneMode(tone);
+  voice.setVolume(volume);
+  voice.setRate(rate);
+
+  // Apply to UI elements if they exist
+  const volRange = document.getElementById('sysVolumeRange');
+  const volLabel = document.getElementById('sysVolumeLabel');
+  if (volRange) {
+    volRange.value = Math.round(volume * 100);
+    if (volLabel) volLabel.textContent = `${volRange.value}%`;
+  }
+  
+  const rateRange = document.getElementById('sysSpeechRate');
+  const rateLabel = document.getElementById('sysSpeechRateLabel');
+  if (rateRange) {
+    rateRange.value = Math.round(rate * 10);
+    if (rateLabel) rateLabel.textContent = `${rate.toFixed(1)}x`;
+  }
+
+  const personaSelect = document.getElementById('assistantPersonaSelect');
+  if (personaSelect) {
+    personaSelect.value = persona;
+    document.body.classList.toggle('alexa-mode', persona === 'alexa');
+    if (typeof updateAssistantVoice === 'function') {
+      updateAssistantVoice(persona);
+    }
+  }
+
+  const briefModeChk = document.getElementById('briefModeCheckbox');
+  if (briefModeChk) briefModeChk.checked = briefMode;
+
+  const voiceAccentSelect = document.getElementById('voiceAccentSelect');
+  if (voiceAccentSelect) voiceAccentSelect.value = accent;
+
+  const voiceRateSelect = document.getElementById('voiceRateSelect');
+  if (voiceRateSelect) voiceRateSelect.value = speedProfile;
+
+  const voiceEmotionalToneSelect = document.getElementById('voiceEmotionalToneSelect');
+  if (voiceEmotionalToneSelect) voiceEmotionalToneSelect.value = tone;
+
+  const speechLangSelect = document.getElementById('speechLangSelect');
+  if (speechLangSelect) {
+    speechLangSelect.value = speechLang;
+    const speechSupportMsg = document.getElementById('speechSupportMsg');
+    if (speechSupportMsg && voice.recognition) {
+      speechSupportMsg.textContent = `WebSpeech Active (${speechLang})`;
+      speechSupportMsg.style.color = 'var(--emerald-neon)';
+    }
+  }
+
+  const continuousConvoSelect = document.getElementById('continuousConvoSelect');
+  if (continuousConvoSelect) {
+    continuousConvoSelect.value = continuousConvo;
+  }
+
+  const nexusSyncCheckbox = document.getElementById('nexusSyncCheckbox');
+  if (nexusSyncCheckbox) {
+    nexusSyncCheckbox.checked = syncEnabled;
+  }
+
+  const nexusSyncPassphrase = document.getElementById('nexusSyncPassphrase');
+  if (nexusSyncPassphrase) {
+    nexusSyncPassphrase.value = syncPassphrase;
+  }
+  
+  const geminiInput = document.getElementById('geminiApiKeyInput');
+  if (geminiInput) {
+    geminiInput.value = geminiKey;
+  }
+  
+  const openaiInput = document.getElementById('openaiApiKeyInput');
+  if (openaiInput) {
+    openaiInput.value = openaiKey;
+  }
+  
+  // Reload reminders
+  loadUserReminders();
+  renderReminders();
+  if (typeof reminderTimers !== 'undefined') {
+    reminderTimers.forEach(timer => clearTimeout(timer));
+    reminderTimers.clear();
+  }
+  lukasReminders.forEach((r, i) => { if (!r.fired) scheduleReminder(i); });
+
+  // Refresh Memory Panel
+  updateMemoryPanel();
+  
+  // Refresh Voice Profiles list
+  renderVoiceProfilesList();
+}
+
 // Initialize dashboard core components (invoked upon verified clearance)
 function initializeDashboard() {
   const appContainer = document.getElementById('appContainer');
@@ -533,50 +684,21 @@ function initializeDashboard() {
   initClock();
   diag.initGauges();
   diag.initChartTooltip();
-  initReminders();
+
+  // Load user-specific configurations and preferences
+  const user = getSessionUser()?.username || 'Guest';
+  applyUserPreferencesToVoiceAndUI(user);
 
   // Load secure server backup on startup if enabled
-  const syncEnabled = localStorage.getItem('lukas_sync_enabled') === 'true';
-  const syncPassphrase = localStorage.getItem('lukas_sync_passphrase') || '';
+  const syncEnabled = lukasMemory.getPreference('syncEnabled', 'false') === 'true';
+  const syncPassphrase = lukasMemory.getPreference('syncPassphrase', '');
   if (syncEnabled && syncPassphrase) {
     diag.logToTerminal("[NEXUS SYNC] Restoring secure database from server...", "info");
     lukasMemory.loadFromServer(syncPassphrase).then(res => {
       if (res.success && res.loaded) {
         diag.logToTerminal("[NEXUS SYNC] Zero-knowledge backup loaded. Memory matrix synchronized.", "info");
-        updateMemoryPanel();
-        
-        // Update the personality mode dropdown to match the loaded preferences
-        const personalityModeSelect = document.getElementById('personalityModeSelect');
-        if (personalityModeSelect) {
-          const loadedMode = lukasMemory.getPreference('personalityMode', 'casual');
-          personalityModeSelect.value = loadedMode;
-          localStorage.setItem('lukas_personality_mode', loadedMode);
-        }
-
-        // Update voice customizations from restored preferences
-        const voiceAccentSelect = document.getElementById('voiceAccentSelect');
-        if (voiceAccentSelect) {
-          const loadedAccent = lukasMemory.getPreference('voiceAccent', 'indian_english');
-          voiceAccentSelect.value = loadedAccent;
-          localStorage.setItem('lukas_voice_accent', loadedAccent);
-          voice.setAccent(loadedAccent);
-        }
-
-        const voiceRateSelect = document.getElementById('voiceRateSelect');
-        if (voiceRateSelect) {
-          const loadedRate = lukasMemory.getPreference('voiceRate', 'normal');
-          voiceRateSelect.value = loadedRate;
-          localStorage.setItem('lukas_voice_rate', loadedRate);
-          voice.setSpeakingRateProfile(loadedRate);
-        }
-
-        const voiceEmotionalToneSelect = document.getElementById('voiceEmotionalToneSelect');
-        if (voiceEmotionalToneSelect) {
-          const loadedTone = lukasMemory.getPreference('voiceEmotionalTone', 'adaptive');
-          voiceEmotionalToneSelect.value = loadedTone;
-          localStorage.setItem('lukas_voice_emotional_tone', loadedTone);
-          voice.setEmotionalToneMode(loadedTone);
-        }
+        // Re-apply preferences since they might have loaded from server
+        applyUserPreferencesToVoiceAndUI(user);
       }
     });
   }
@@ -684,6 +806,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize terminal security authentication
   initAuth();
+  
+  // Apply initial Guest space preferences
+  applyUserPreferencesToVoiceAndUI('Guest');
 });
 
 // Cinematic Boot Sequence
@@ -1719,6 +1844,11 @@ function bindUIEvents() {
     const listEl = document.getElementById('registeredVoiceProfilesList');
     if (!listEl) return;
     
+    if (typeof lukasMemory !== 'undefined' && lukasMemory.currentUsername === 'Guest') {
+      listEl.innerHTML = '<div style="color:var(--rose-neon); font-style:italic;"><i class="fa-solid fa-lock"></i> Verification required to view profiles.</div>';
+      return;
+    }
+    
     const profiles = voice.biometrics.getProfiles();
     const names = Object.keys(profiles);
     
@@ -2597,27 +2727,22 @@ function bindUIEvents() {
   const rateRange  = document.getElementById('sysSpeechRate');
   const rateLabel  = document.getElementById('sysSpeechRateLabel');
 
-  // Init from saved prefs
   if (volRange) {
-    const savedVol = Math.round((voice.vocalVolume || 1.0) * 100);
-    volRange.value = savedVol;
-    if (volLabel) volLabel.textContent = `${savedVol}%`;
     volRange.addEventListener('input', () => {
       const pct = parseInt(volRange.value);
       if (volLabel) volLabel.textContent = `${pct}%`;
       voice.setVolume(pct / 100);
+      lukasMemory.setPreference('voiceVolume', pct / 100);
       diag.logToTerminal(`[SETTINGS] Vocal volume set to ${pct}%.`, 'info');
     });
   }
 
   if (rateRange) {
-    const savedRate = voice.vocalRate || 1.0;
-    rateRange.value = Math.round(savedRate * 10);
-    if (rateLabel) rateLabel.textContent = `${savedRate.toFixed(1)}x`;
     rateRange.addEventListener('input', () => {
       const rate = parseInt(rateRange.value) / 10;
       if (rateLabel) rateLabel.textContent = `${rate.toFixed(1)}x`;
       voice.setRate(rate);
+      lukasMemory.setPreference('voiceRateVal', rate);
       diag.logToTerminal(`[SETTINGS] Voice reading speed set to ${rate.toFixed(1)}x.`, 'info');
     });
   }
@@ -2642,25 +2767,10 @@ function bindUIEvents() {
     }
   }
 
-  const savedPersona = localStorage.getItem('lukas_assistant_persona') || 'lukas';
-  const savedBrief   = localStorage.getItem('lukas_brief_mode') === 'true';
-
   if (personaSelect) {
-    personaSelect.value = savedPersona;
-    document.body.classList.toggle('alexa-mode', savedPersona === 'alexa');
-    
-    setTimeout(() => updateAssistantVoice(savedPersona), 600);
-    if (window.speechSynthesis && window.speechSynthesis.onvoiceschanged !== undefined) {
-      const origOnVoicesChanged = window.speechSynthesis.onvoiceschanged;
-      window.speechSynthesis.onvoiceschanged = () => {
-        if (origOnVoicesChanged) origOnVoicesChanged();
-        updateAssistantVoice(localStorage.getItem('lukas_assistant_persona') || 'lukas');
-      };
-    }
-
     personaSelect.addEventListener('change', () => {
       const selected = personaSelect.value;
-      localStorage.setItem('lukas_assistant_persona', selected);
+      lukasMemory.setPreference('assistantPersona', selected);
       document.body.classList.toggle('alexa-mode', selected === 'alexa');
       updateAssistantVoice(selected);
       diag.logToTerminal(`[SETTINGS] Assistant persona shifted to ${selected.toUpperCase()}.`, 'info');
@@ -2674,10 +2784,9 @@ function bindUIEvents() {
   }
 
   if (briefModeChk) {
-    briefModeChk.checked = savedBrief;
     briefModeChk.addEventListener('change', () => {
       const checked = briefModeChk.checked;
-      localStorage.setItem('lukas_brief_mode', checked);
+      lukasMemory.setPreference('briefMode', checked ? 'true' : 'false');
       diag.logToTerminal(`[SETTINGS] Alexa Brief Mode ${checked ? 'ENABLED' : 'DISABLED'}.`, 'info');
     });
   }
@@ -2685,19 +2794,12 @@ function bindUIEvents() {
   // ── Speech Recognition Language ─────────────────────────────────────────
   const speechLangSelect = document.getElementById('speechLangSelect');
   if (speechLangSelect) {
-    const savedSpeechLang = localStorage.getItem('lukas_speech_lang') || 'en-IN';
-    speechLangSelect.value = savedSpeechLang;
-    
-    // Set speech controller's language initially
-    if (typeof voice !== 'undefined' && voice.setLanguage) {
-      voice.setLanguage(savedSpeechLang);
-    }
-    
     speechLangSelect.addEventListener('change', () => {
       const selectedLang = speechLangSelect.value;
       if (typeof voice !== 'undefined' && voice.setLanguage) {
         voice.setLanguage(selectedLang);
       }
+      lukasMemory.setPreference('speechLang', selectedLang);
       diag.logToTerminal(`[SETTINGS] Speech recognition language changed to ${selectedLang}.`, 'info');
       const speechSupportMsg = document.getElementById('speechSupportMsg');
       if (speechSupportMsg && voice.recognition) {
@@ -2709,12 +2811,9 @@ function bindUIEvents() {
 
   const continuousConvoSelect = document.getElementById('continuousConvoSelect');
   if (continuousConvoSelect) {
-    const savedTimeout = localStorage.getItem('lukas_continuous_convo_timeout') || '15000';
-    continuousConvoSelect.value = savedTimeout;
-    
     continuousConvoSelect.addEventListener('change', () => {
       const selectedTimeout = continuousConvoSelect.value;
-      localStorage.setItem('lukas_continuous_convo_timeout', selectedTimeout);
+      lukasMemory.setPreference('continuousConvoTimeout', selectedTimeout);
       diag.logToTerminal(`[SETTINGS] Continuous conversation mode changed: ${selectedTimeout === '0' ? 'Disabled' : (selectedTimeout / 1000) + 's window'}.`, 'info');
     });
   }
@@ -2722,14 +2821,8 @@ function bindUIEvents() {
   // ── LUKAS Nexus Dynamic Personality Mode ───────────────────────────────
   const personalityModeSelect = document.getElementById('personalityModeSelect');
   if (personalityModeSelect) {
-    const savedMode = localStorage.getItem('lukas_personality_mode') || 'casual';
-    personalityModeSelect.value = savedMode;
-    // Sync into active preference block
-    lukasMemory.setPreference('personalityMode', savedMode);
-    
     personalityModeSelect.addEventListener('change', () => {
       const selectedMode = personalityModeSelect.value;
-      localStorage.setItem('lukas_personality_mode', selectedMode);
       lukasMemory.setPreference('personalityMode', selectedMode);
       diag.logToTerminal(`[SETTINGS] LUKAS personality mode changed to: ${selectedMode.toUpperCase()}.`, 'info');
       updateMemoryPanel();
@@ -2739,15 +2832,9 @@ function bindUIEvents() {
   // ── LUKAS Infinity Voice Customizations ─────────────────────────────────
   const voiceAccentSelect = document.getElementById('voiceAccentSelect');
   if (voiceAccentSelect) {
-    const savedAccent = localStorage.getItem('lukas_voice_accent') || lukasMemory.getPreference('voiceAccent', 'indian_english');
-    voiceAccentSelect.value = savedAccent;
-    voice.setAccent(savedAccent);
-    lukasMemory.setPreference('voiceAccent', savedAccent);
-    
     voiceAccentSelect.addEventListener('change', () => {
       const selectedAccent = voiceAccentSelect.value;
       voice.setAccent(selectedAccent);
-      localStorage.setItem('lukas_voice_accent', selectedAccent);
       lukasMemory.setPreference('voiceAccent', selectedAccent);
       diag.logToTerminal(`[SETTINGS] English accent profile changed to: ${selectedAccent.toUpperCase()}.`, 'info');
     });
@@ -2755,15 +2842,9 @@ function bindUIEvents() {
 
   const voiceRateSelect = document.getElementById('voiceRateSelect');
   if (voiceRateSelect) {
-    const savedRate = localStorage.getItem('lukas_voice_rate') || lukasMemory.getPreference('voiceRate', 'normal');
-    voiceRateSelect.value = savedRate;
-    voice.setSpeakingRateProfile(savedRate);
-    lukasMemory.setPreference('voiceRate', savedRate);
-    
     voiceRateSelect.addEventListener('change', () => {
       const selectedRate = voiceRateSelect.value;
       voice.setSpeakingRateProfile(selectedRate);
-      localStorage.setItem('lukas_voice_rate', selectedRate);
       lukasMemory.setPreference('voiceRate', selectedRate);
       diag.logToTerminal(`[SETTINGS] Speaking rate profile changed to: ${selectedRate.toUpperCase()}.`, 'info');
     });
@@ -2771,15 +2852,9 @@ function bindUIEvents() {
 
   const voiceEmotionalToneSelect = document.getElementById('voiceEmotionalToneSelect');
   if (voiceEmotionalToneSelect) {
-    const savedTone = localStorage.getItem('lukas_voice_emotional_tone') || lukasMemory.getPreference('voiceEmotionalTone', 'adaptive');
-    voiceEmotionalToneSelect.value = savedTone;
-    voice.setEmotionalToneMode(savedTone);
-    lukasMemory.setPreference('voiceEmotionalTone', savedTone);
-    
     voiceEmotionalToneSelect.addEventListener('change', () => {
       const selectedTone = voiceEmotionalToneSelect.value;
       voice.setEmotionalToneMode(selectedTone);
-      localStorage.setItem('lukas_voice_emotional_tone', selectedTone);
       lukasMemory.setPreference('voiceEmotionalTone', selectedTone);
       diag.logToTerminal(`[SETTINGS] Emotional tone mode changed to: ${selectedTone.toUpperCase()}.`, 'info');
     });
@@ -2792,19 +2867,16 @@ function bindUIEvents() {
   const purgeDatabaseBtn = document.getElementById('purgeDatabaseBtn');
 
   if (nexusSyncCheckbox) {
-    const syncEnabled = localStorage.getItem('lukas_sync_enabled') === 'true';
-    nexusSyncCheckbox.checked = syncEnabled;
     nexusSyncCheckbox.addEventListener('change', () => {
       const enabled = nexusSyncCheckbox.checked;
-      localStorage.setItem('lukas_sync_enabled', enabled ? 'true' : 'false');
+      lukasMemory.setPreference('syncEnabled', enabled ? 'true' : 'false');
       diag.logToTerminal(`[NEXUS SYNC] Secure Server Synchronization ${enabled ? 'ENABLED' : 'DISABLED'}.`, 'info');
     });
   }
 
   if (nexusSyncPassphrase) {
-    nexusSyncPassphrase.value = localStorage.getItem('lukas_sync_passphrase') || '';
     nexusSyncPassphrase.addEventListener('input', () => {
-      localStorage.setItem('lukas_sync_passphrase', nexusSyncPassphrase.value.trim());
+      lukasMemory.setPreference('syncPassphrase', nexusSyncPassphrase.value.trim());
     });
   }
 
@@ -2852,7 +2924,7 @@ function bindUIEvents() {
       diag.logToTerminal('[NEXUS SYNC] Purging memory database...', 'warn');
       lukasMemory.clearAllMemory();
       
-      const enabled = localStorage.getItem('lukas_sync_enabled') === 'true';
+      const enabled = lukasMemory.getPreference('syncEnabled', 'false') === 'true';
       if (enabled) {
         try {
           const resp = await fetch('/api/storage/purge', { method: 'POST' });
@@ -2899,13 +2971,10 @@ function bindUIEvents() {
   // ── Gemini API Key ───────────────────────────────────────────────────
   const geminiInput = document.getElementById('geminiApiKeyInput');
   const geminiSaveBtn = document.getElementById('saveGeminiApiKeyBtn');
-  if (geminiInput) {
-    geminiInput.value = localStorage.getItem('gemini_api_key') || '';
-  }
   if (geminiSaveBtn && geminiInput) {
     geminiSaveBtn.addEventListener('click', () => {
       const keyVal = geminiInput.value.trim();
-      localStorage.setItem('gemini_api_key', keyVal);
+      lukasMemory.setPreference('gemini_api_key', keyVal);
       diag.logToTerminal(`[SETTINGS] Gemini API Key configuration updated.`, 'info');
       const origText = geminiSaveBtn.innerHTML;
       geminiSaveBtn.innerHTML = '<i class="fa-solid fa-check"></i> SAVED';
@@ -2916,13 +2985,10 @@ function bindUIEvents() {
   }
 
   // ── OpenAI API Key ───────────────────────────────────────────────────
-  if (openaiInput) {
-    openaiInput.value = localStorage.getItem('openai_api_key') || '';
-  }
   if (openaiSaveBtn && openaiInput) {
     openaiSaveBtn.addEventListener('click', async () => {
       const keyVal = openaiInput.value.trim();
-      localStorage.setItem('openai_api_key', keyVal);
+      lukasMemory.setPreference('openai_api_key', keyVal);
       diag.logToTerminal(`[SETTINGS] OpenAI API Key configuration updated in browser storage.`, 'info');
       
       try {
@@ -4502,6 +4568,49 @@ async function processCommand(rawCommand, source) {
     appendChatBubble(rawCommand, 'user');
     diag.spikeCPU();
 
+    // ── PRE-FLIGHT BIOMETRICS IDENTIFICATION & PROFILE SWITCHING ──
+    if (source === 'voice') {
+      const print = voice.lastSpokenVoiceprint;
+      if (print) {
+        const profiles = voice.biometrics.getProfiles();
+        let bestMatch = "Guest";
+        let bestScore = 0;
+        for (const [name, savedPrint] of Object.entries(profiles)) {
+          const score = voice.biometrics.calculateSimilarity(print, savedPrint);
+          if (score > bestScore) {
+            bestScore = score;
+            bestMatch = name;
+          }
+        }
+        
+        if (bestScore >= 0.88) {
+          // Dynamic verified switch
+          if (lukasMemory.currentUsername !== bestMatch) {
+            diag.logToTerminal(`[BIOMETRICS] Dynamic speaker match: ${bestMatch} (Similarity: ${(bestScore * 100).toFixed(1)}%). Swapping workspace context.`, 'info');
+            applyUserPreferencesToVoiceAndUI(bestMatch);
+          }
+        } else {
+          // Unverified - fallback to Guest sandbox
+          if (lukasMemory.currentUsername !== 'Guest') {
+            diag.logToTerminal(`[BIOMETRICS] Speaker unrecognized or low confidence (${(bestScore * 100).toFixed(1)}%). Swapping to Guest sandbox.`, 'warn');
+            applyUserPreferencesToVoiceAndUI('Guest');
+          }
+        }
+      } else {
+        // Fallback for voice command with missing voiceprint
+        const sessionUser = getSessionUser()?.username || 'Guest';
+        if (lukasMemory.currentUsername !== sessionUser) {
+          applyUserPreferencesToVoiceAndUI(sessionUser);
+        }
+      }
+    } else if (source === 'user') {
+      // Text command: match session username or Guest
+      const sessionUser = getSessionUser()?.username || 'Guest';
+      if (lukasMemory.currentUsername !== sessionUser) {
+        applyUserPreferencesToVoiceAndUI(sessionUser);
+      }
+    }
+
     // ── Voice print training via UI ──
     if (typeof isVoicePrintTrainingActive !== 'undefined' && isVoicePrintTrainingActive) {
       isProcessingCommand = false;
@@ -4529,7 +4638,21 @@ async function processCommand(rawCommand, source) {
           statusEl.innerHTML = `<i class="fa-solid fa-circle-check"></i> Voice print successfully registered!`;
         }
         if (nameEl) nameEl.value = '';
-        renderVoiceProfilesList();
+        
+        // Switch context to newly created user and write profiles
+        lukasMemory.switchUser(voicePrintTrainingName);
+        const userId = 'user_' + Date.now();
+        lukasMemory.addFact('userId', userId);
+        lukasMemory.addFact('name', voicePrintTrainingName);
+        lukasMemory.setPreference('name', voicePrintTrainingName);
+        lukasMemory.setPreference('speechLang', 'en-IN');
+        lukasMemory.setPreference('voiceAccent', 'indian_english');
+        lukasMemory.setPreference('personalityMode', 'casual');
+        lukasMemory.setPreference('voiceRate', 'normal');
+        lukasMemory.setPreference('voiceEmotionalTone', 'adaptive');
+        
+        applyUserPreferencesToVoiceAndUI(voicePrintTrainingName);
+        
         handleAssistantResponse(`Voice print successfully registered for ${voicePrintTrainingName}.`);
       } else {
         if (statusEl) {
@@ -4543,14 +4666,33 @@ async function processCommand(rawCommand, source) {
       return;
     }
 
+    // ── Voice print training confirmation via Speech ──
+    if (typeof isRegistrationConfirmationActive !== 'undefined' && isRegistrationConfirmationActive) {
+      isProcessingCommand = false;
+      isRegistrationConfirmationActive = false;
+      
+      const yesWords = ['yes', 'sure', 'yeah', 'yep', 'ok', 'okay', 'create', 'register', 'please'];
+      if (yesWords.some(w => cmd.includes(w))) {
+        isVoiceTrainingActive = true;
+        voiceTrainingStep = 'capture_voice';
+        tempVoiceprint = null;
+        handleAssistantResponse("Initiating voice biometric registration. Please say 'Lukas, authorize my profile' now to record your vocal print.");
+        keepConversationAlive(15000);
+      } else {
+        handleAssistantResponse("Understood. Let me know if you change your mind.");
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+      }
+      return;
+    }
+
     // ── Voice print training via Speech ──
     if (typeof isVoiceTrainingActive !== 'undefined' && isVoiceTrainingActive) {
       isProcessingCommand = false;
       
-      if (voiceTrainingStep === 'request_phrase') {
+      if (voiceTrainingStep === 'capture_voice') {
         const print = voice.lastSpokenVoiceprint;
         if (!print) {
-          handleAssistantResponse("vocal registration failed: no speech audio frames detected. Please try again.");
+          handleAssistantResponse("Vocal registration failed: no speech audio frames detected. Please try again.");
           isVoiceTrainingActive = false;
           tempVoiceprint = null;
           setTimeout(() => voice.startWakeWordListener(), 1000);
@@ -4559,7 +4701,7 @@ async function processCommand(rawCommand, source) {
         
         tempVoiceprint = print;
         voiceTrainingStep = 'request_name';
-        handleAssistantResponse("Vocal signature captured successfully. What is your name, Commander?");
+        handleAssistantResponse("Vocal signature captured successfully. What is your name?");
         keepConversationAlive(15000);
         return;
       }
@@ -4574,18 +4716,123 @@ async function processCommand(rawCommand, source) {
           return;
         }
         
-        const ok = voice.biometrics.saveProfile(trainedName, tempVoiceprint);
+        tempName = trainedName;
+        voiceTrainingStep = 'request_language';
+        handleAssistantResponse("What is your preferred language? You can choose English, Kannada, or Hindi.");
+        keepConversationAlive(15000);
+        return;
+      }
+
+      if (voiceTrainingStep === 'request_language') {
+        const langInput = cmd;
+        let selectedLang = 'en-IN';
+        if (langInput.includes('kannada')) {
+          selectedLang = 'kn-IN';
+        } else if (langInput.includes('hindi')) {
+          selectedLang = 'hi-IN';
+        } else if (langInput.includes('tamil')) {
+          selectedLang = 'ta-IN';
+        }
+        
+        tempLanguage = selectedLang;
+        voiceTrainingStep = 'request_accent';
+        handleAssistantResponse("Got it. What is your preferred accent? You can choose Indian English, Bengaluru Professional, Neutral Corporate, Kannada Native, or standard international accents.");
+        keepConversationAlive(15000);
+        return;
+      }
+
+      if (voiceTrainingStep === 'request_accent') {
+        const accentInput = cmd;
+        let selectedAccent = 'indian_english';
+        if (accentInput.includes('bengaluru') || accentInput.includes('bangalore')) {
+          selectedAccent = 'bengaluru_professional';
+        } else if (accentInput.includes('neutral') || accentInput.includes('corporate')) {
+          selectedAccent = 'neutral_corporate';
+        } else if (accentInput.includes('kannada') || accentInput.includes('native')) {
+          selectedAccent = 'kannada_native';
+        } else if (accentInput.includes('american') || accentInput.includes('us')) {
+          selectedAccent = 'en-US';
+        } else if (accentInput.includes('british') || accentInput.includes('uk')) {
+          selectedAccent = 'en-GB';
+        }
+        
+        tempAccent = selectedAccent;
+        voiceTrainingStep = 'request_style';
+        handleAssistantResponse("Understood. Finally, what is your preferred communication style? You can choose casual, professional, companion, or technical.");
+        keepConversationAlive(15000);
+        return;
+      }
+
+      if (voiceTrainingStep === 'request_style') {
+        const styleInput = cmd;
+        let selectedStyle = 'casual';
+        if (styleInput.includes('professional')) {
+          selectedStyle = 'professional';
+        } else if (styleInput.includes('companion')) {
+          selectedStyle = 'companion';
+        } else if (styleInput.includes('technical')) {
+          selectedStyle = 'technical';
+        }
+        
+        tempStyle = selectedStyle;
+        
+        const ok = voice.biometrics.saveProfile(tempName, tempVoiceprint);
         isVoiceTrainingActive = false;
-        tempVoiceprint = null;
         
         if (ok) {
-          handleAssistantResponse(`Voice print successfully registered for ${trainedName}. I will now recognize you.`);
-          if (document.getElementById('nodeManagerModal').style.display === 'flex') {
-            renderVoiceProfilesList();
-          }
+          // Switch context to newly created user and write profiles
+          lukasMemory.switchUser(tempName);
+          const userId = 'user_' + Date.now();
+          lukasMemory.addFact('userId', userId);
+          lukasMemory.addFact('name', tempName);
+          lukasMemory.setPreference('name', tempName);
+          lukasMemory.setPreference('speechLang', tempLanguage);
+          lukasMemory.setPreference('voiceAccent', tempAccent);
+          lukasMemory.setPreference('personalityMode', tempStyle);
+          lukasMemory.setPreference('voiceRate', 'normal');
+          lukasMemory.setPreference('voiceEmotionalTone', 'adaptive');
+          
+          applyUserPreferencesToVoiceAndUI(tempName);
+          
+          handleAssistantResponse(`Voice print successfully registered for ${tempName}. Welcome to your personalized space.`);
         } else {
           handleAssistantResponse("Biometric database error. Failed to save vocal print.");
         }
+        
+        // Reset temp state
+        tempVoiceprint = null;
+        tempName = '';
+        tempLanguage = '';
+        tempAccent = '';
+        tempStyle = '';
+        
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+    }
+
+    // ── Voice retraining via Speech ──
+    if (typeof isVoiceRetrainingActive !== 'undefined' && isVoiceRetrainingActive) {
+      isProcessingCommand = false;
+      if (voiceRetrainingStep === 'capture_retrain_voice') {
+        const print = voice.lastSpokenVoiceprint;
+        if (!print) {
+          handleAssistantResponse("Vocal retraining failed: no speech audio frames detected. Please try again.");
+          isVoiceRetrainingActive = false;
+          voiceRetrainingName = '';
+          setTimeout(() => voice.startWakeWordListener(), 1000);
+          return;
+        }
+        
+        const ok = voice.biometrics.saveProfile(voiceRetrainingName, print);
+        isVoiceRetrainingActive = false;
+        
+        if (ok) {
+          handleAssistantResponse(`Vocal profile successfully updated for ${voiceRetrainingName}. Your settings and memory remain intact.`);
+        } else {
+          handleAssistantResponse("Failed to update vocal profile due to a biometric database error.");
+        }
+        voiceRetrainingName = '';
         setTimeout(() => voice.startWakeWordListener(), 1000);
         return;
       }
@@ -4595,17 +4842,39 @@ async function processCommand(rawCommand, source) {
     if (cmd === 'who am i' || cmd === 'identify my voice' || cmd === 'who is speaking' || cmd === 'do you know my voice') {
       isProcessingCommand = false;
       const print = voice.lastSpokenVoiceprint;
-      if (!print) {
-        handleAssistantResponse("I couldn't analyze your voice. Make sure you are speaking through the microphone.");
-        setTimeout(() => voice.startWakeWordListener(), 1000);
-        return;
-      }
-      
-      const identity = voice.biometrics.identify(print);
-      if (identity && identity.name !== 'Guest') {
-        handleAssistantResponse(`Based on your unique vocal signature, you are ${identity.name}. Welcome back, Commander.`);
+      const profiles = voice.biometrics.getProfiles();
+      const hasProfiles = Object.keys(profiles).length > 0;
+
+      if (!hasProfiles) {
+        handleAssistantResponse("I don't know who you are yet. Would you like to create a profile?");
+        isRegistrationConfirmationActive = true;
+      } else if (!print) {
+        const authUser = getSessionUser()?.username;
+        if (authUser) {
+          handleAssistantResponse(`You are logged in as ${authUser}.`);
+        } else {
+          handleAssistantResponse("I don't know who you are yet. Would you like to create a profile?");
+          isRegistrationConfirmationActive = true;
+        }
       } else {
-        handleAssistantResponse("I recognize your voice as a Guest. If you'd like me to remember you, please say 'register my voice' to train a new vocal profile.");
+        let bestMatch = "Guest";
+        let bestScore = 0;
+        for (const [name, savedPrint] of Object.entries(profiles)) {
+          const score = voice.biometrics.calculateSimilarity(print, savedPrint);
+          if (score > bestScore) {
+            bestScore = score;
+            bestMatch = name;
+          }
+        }
+
+        if (bestScore >= 0.88) {
+          handleAssistantResponse(`You are ${bestMatch}.`);
+        } else if (bestScore >= 0.70) {
+          handleAssistantResponse("I cannot confidently identify you. Would you like to verify your identity?");
+        } else {
+          handleAssistantResponse("I don't recognize this voice profile yet. Would you like to register as a new user?");
+          isRegistrationConfirmationActive = true;
+        }
       }
       setTimeout(() => voice.startWakeWordListener(), 1000);
       return;
@@ -4614,10 +4883,27 @@ async function processCommand(rawCommand, source) {
     if (cmd === 'register my voice' || cmd === 'train my voice' || cmd === 'train voice print' || cmd === 'register voice') {
       isProcessingCommand = false;
       isVoiceTrainingActive = true;
-      voiceTrainingStep = 'request_phrase';
+      voiceTrainingStep = 'capture_voice';
       tempVoiceprint = null;
       
       handleAssistantResponse("Initiating voice biometric registration. Please say 'Lukas, authorize my profile' now to record your vocal print.");
+      keepConversationAlive(15000);
+      return;
+    }
+
+    if (cmd === 'lukas, retrain my voice' || cmd === 'retrain my voice' || cmd === 'lukas, register my voice again' || cmd === 'register my voice again') {
+      isProcessingCommand = false;
+      const currentName = lukasMemory.currentUsername;
+      if (currentName === 'Guest') {
+        handleAssistantResponse("You are currently a Guest. Please say 'register my voice' to create a new profile.");
+        setTimeout(() => voice.startWakeWordListener(), 1000);
+        return;
+      }
+      
+      isVoiceRetrainingActive = true;
+      voiceRetrainingName = currentName;
+      voiceRetrainingStep = 'capture_retrain_voice';
+      handleAssistantResponse(`Initiating voice profile retraining for ${currentName}. Please say 'Lukas, authorize my profile' now to record your new vocal print.`);
       keepConversationAlive(15000);
       return;
     }
@@ -4768,8 +5054,8 @@ async function processCommand(rawCommand, source) {
       return;
     }
 
-    const openaiApiKey = localStorage.getItem('openai_api_key');
-    const geminiApiKey = localStorage.getItem('gemini_api_key');
+    const openaiApiKey = lukasMemory.getPreference('openai_api_key', '') || localStorage.getItem('openai_api_key');
+    const geminiApiKey = lukasMemory.getPreference('gemini_api_key', '') || localStorage.getItem('gemini_api_key');
     const activeProvider = openaiApiKey ? 'openai' : (geminiApiKey ? 'gemini' : 'puter');
     const activeKey = openaiApiKey || geminiApiKey || null;
 
