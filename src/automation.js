@@ -26,6 +26,7 @@ class LukasAutomationHub {
     // Load dynamic device registry from local storage
     this.dynamicDevices = JSON.parse(localStorage.getItem('lukas_dynamic_devices')) || [];
 
+    const savedGarden = localStorage.getItem('lukas_garden_state');
     this.state = {
       // Keep state.devices compatible with legacy main.js mappings
       devices: {
@@ -40,6 +41,12 @@ class LukasAutomationHub {
         airQuality: 98,
         mode: 'cool'
       },
+      garden: savedGarden ? JSON.parse(savedGarden) : {
+        moisture: 68,
+        sprinklerActive: false,
+        zone: 'Lawn',
+        weatherDelay: false
+      },
       activeRoutine: null
     };
 
@@ -47,6 +54,7 @@ class LukasAutomationHub {
     this.onClimateStateChange = null;
     this.onRoutineTriggered = null;
     this.onRegistryChange = null; // Callback when registry list modifies
+    this.onGardenStateChange = null;
   }
 
   getDeviceLegacyState(id, fallback) {
@@ -347,6 +355,14 @@ class LukasAutomationHub {
     if (this.onRoutineTriggered) this.onRoutineTriggered(routineType);
 
     return logs;
+  }
+
+  setGardenState(updates) {
+    Object.assign(this.state.garden, updates);
+    localStorage.setItem('lukas_garden_state', JSON.stringify(this.state.garden));
+    if (this.onGardenStateChange) {
+      this.onGardenStateChange(this.state.garden);
+    }
   }
 }
 

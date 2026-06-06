@@ -388,6 +388,18 @@ function initializeDashboard() {
     renderDynamicDevices();
   }
 
+  // Auto-register Garden Sprinkler if missing
+  const hasSprinkler = home.dynamicDevices.some(d =>
+    d.category === 'garden' || d.id === 'gardenSprinkler'
+  );
+  if (!hasSprinkler) {
+    const sprinklerDev = home.addDevice("Garden Sprinkler", "Backyard", "garden", "WiFi", "192.168.1.15", "demo");
+    sprinklerDev.id = 'gardenSprinkler';
+    home.saveDynamicDevices();
+    diag.logToTerminal("[SYSTEM] Auto-registered Garden Smart Sprinkler to registry.", "info");
+    renderDynamicDevices();
+  }
+
   // Wire User Interface events
   bindUIEvents();
 
@@ -2081,6 +2093,27 @@ function bindUIEvents() {
       setTimeout(() => { restartServerBtn.disabled = false; }, 3000);
     });
   }
+
+  // ── Garden Widget Event Listeners ─────────────────────────────────────
+  const gardenWaterBtn = document.getElementById('gardenWaterToggleBtn');
+  if (gardenWaterBtn) {
+    gardenWaterBtn.addEventListener('click', () => {
+      const active = !home.state.garden.sprinklerActive;
+      home.setGardenState({ sprinklerActive: active });
+      diag.logToTerminal(`[GARDEN] Sprinkler manually ${active ? 'ACTIVATED' : 'DEACTIVATED'}.`, active ? 'info' : 'warn');
+    });
+  }
+
+  const zonePills = document.querySelectorAll('.btn-zone-pill');
+  zonePills.forEach(pill => {
+    pill.addEventListener('click', (e) => {
+      const zone = e.currentTarget.getAttribute('data-zone');
+      if (zone) {
+        home.setGardenState({ zone: zone });
+        diag.logToTerminal(`[GARDEN] Sprinkler active zone routed to: ${zone.toUpperCase()}.`, 'info');
+      }
+    });
+  });
 }
 
 function updateMuteUI(isMuted) {
@@ -2256,6 +2289,65 @@ function setupAutomationHooks() {
   home.onRegistryChange = (devices) => {
     renderDynamicDevices();
   };
+
+  // Connect to garden state changes
+  home.onGardenStateChange = (gardenState) => {
+    updateGardenUI(gardenState);
+  };
+
+  // Render initial garden state
+  updateGardenUI(home.state.garden);
+}
+
+function updateGardenUI(garden) {
+  const statusLabel = document.getElementById('sprinklerStatusLabel');
+  const moistureValue = document.getElementById('soilMoistureValue');
+  const moistureBar = document.getElementById('soilMoistureBar');
+  const weatherDelayBanner = document.getElementById('gardenWeatherDelayBanner');
+  const zoneLabel = document.getElementById('sprinklerZoneLabel');
+  const flowLabel = document.getElementById('sprinklerFlowLabel');
+  const toggleBtn = document.getElementById('gardenWaterToggleBtn');
+  const playIcon = document.getElementById('sprinklerPlayIcon');
+  const btnText = document.getElementById('sprinklerBtnText');
+
+  if (statusLabel) {
+    statusLabel.textContent = garden.sprinklerActive ? 'SYSTEM ACTIVE' : 'SYSTEM OFF';
+    statusLabel.style.color = garden.sprinklerActive ? 'var(--cyan-neon)' : 'var(--rose-neon)';
+  }
+  if (moistureValue) moistureValue.textContent = `${garden.moisture}%`;
+  if (moistureBar) moistureBar.style.width = `${garden.moisture}%`;
+
+  if (weatherDelayBanner) {
+    weatherDelayBanner.style.display = garden.weatherDelay ? 'flex' : 'none';
+  }
+  if (zoneLabel) zoneLabel.textContent = `ZONE: ${(garden.zone || 'Lawn').toUpperCase()}`;
+  if (flowLabel) {
+    flowLabel.textContent = garden.sprinklerActive ? 'FLOW RATE: 4.8 GPM' : 'FLOW RATE: 0.0 GPM';
+  }
+
+  if (toggleBtn && playIcon && btnText) {
+    if (garden.sprinklerActive) {
+      toggleBtn.style.color = 'var(--cyan-neon)';
+      toggleBtn.style.borderColor = 'var(--cyan-neon)';
+      btnText.textContent = 'STOP WATERING';
+      playIcon.className = 'fa-solid fa-stop';
+    } else {
+      toggleBtn.style.color = 'var(--rose-neon)';
+      toggleBtn.style.borderColor = 'var(--rose-neon)';
+      btnText.textContent = 'START WATERING';
+      playIcon.className = 'fa-solid fa-play';
+    }
+  }
+
+  // Update zone pills active status
+  const pills = document.querySelectorAll('.btn-zone-pill');
+  pills.forEach(pill => {
+    if (pill.getAttribute('data-zone') === garden.zone) {
+      pill.classList.add('active');
+    } else {
+      pill.classList.remove('active');
+    }
+  });
 }
 
 // Helper routine trigger log output
@@ -2491,6 +2583,19 @@ async function updateWeatherUI(locationParam) {
     weatherVal.textContent = `${data.temperature}°C, ${data.condition.toUpperCase()}`;
     weatherVal.style.color = "var(--cyan-neon)";
     currentWeatherCity = data.cityName; // Keep track of city for click updates
+
+    // Sync rain prediction to Garden Eco-Watering Subsystem
+    const willRain = (data.rainChance !== undefined && data.rainChance > 50) || 
+                     data.condition.includes('rain') || 
+                     data.condition.includes('drizzle') || 
+                     data.condition.includes('thunderstorm');
+    home.setGardenState({ weatherDelay: willRain });
+    
+    if (willRain) {
+      diag.logToTerminal(`[GARDEN] Precipitation forecasted (${data.rainChance || 0}% chance). Smart irrigation delay ENGAGED.`, 'warn');
+    } else {
+      diag.logToTerminal(`[GARDEN] Weather clear. Smart irrigation systems standby.`, 'info');
+    }
   }
 }
 
@@ -3135,6 +3240,17 @@ function executeConversationalAction(act) {
         requestLocalWeatherUpdate();
         diag.logToTerminal(`[CONVERSATIONAL AI] Initiated weather sync protocol`, 'info');
       }
+    } else if (act.type === 'garden_water') {
+      const stateVal = !!act.value;
+      home.setGardenState({ sprinklerActive: stateVal });
+      diag.logToTerminal(`[CONVERSATIONAL AI] Garden watering system ${stateVal ? 'ENABLED' : 'DISABLED'}`, 'info');
+    } else if (act.type === 'garden_zone') {
+      const rawZone = typeof act.value === 'string' ? act.value : 'Lawn';
+      let zone = 'Lawn';
+      if (rawZone.toLowerCase().includes('flower')) zone = 'Flowers';
+      else if (rawZone.toLowerCase().includes('veg') || rawZone.toLowerCase().includes('plant')) zone = 'Vegetables';
+      home.setGardenState({ zone: zone });
+      diag.logToTerminal(`[CONVERSATIONAL AI] Set sprinkler zone route to: ${zone.toUpperCase()}`, 'info');
     }
   } catch (err) {
     console.error("Failed to execute conversational action:", err);
@@ -3169,7 +3285,11 @@ async function askOpenAIAssistant(query, apiKey) {
 - HVAC Mode: ${climateMode}
 - Outdoor Weather: ${weatherDetails}
 - Active Lights: ${activeLights}
-- Available Rooms/Zones: Living Room, Bedroom, Kitchen, Outdoor
+- Available Rooms/Zones: Living Room, Bedroom, Kitchen, Outdoor, Garden
+- Soil Moisture Level: ${home.state.garden.moisture}%
+- Sprinkler System: ${home.state.garden.sprinklerActive ? 'ON' : 'OFF'}
+- Sprinkler Active Zone: ${home.state.garden.zone}
+- Rain Irrigation Hold/Delay: ${home.state.garden.weatherDelay ? 'YES' : 'NO'}
 `;
 
     const systemInstruction = `You are ${assistantName}, a premium human-like smart home voice assistant. You are capable of direct smart home control and conversational interactions. 
@@ -3182,8 +3302,8 @@ JSON Schema:
   "response": "Conversational reply to the user (concise, natural, 1-2 sentences. Avoid listing device names unless asked. Be polite and helper-focused)",
   "actions": [
     {
-      "type": "climate_temp" | "climate_mode" | "device_power" | "device_color" | "device_brightness" | "media_control" | "media_route" | "cctv_feed" | "reminder_set" | "reminder_clear" | "system_diagnostics" | "system_reboot" | "theme_toggle" | "weather_refresh",
-      "target": "thermostat" | "device_id" | "zone_name" | "media" | "cctv" | "reminder" | "system" | "theme" | "weather",
+      "type": "climate_temp" | "climate_mode" | "device_power" | "device_color" | "device_brightness" | "media_control" | "media_route" | "cctv_feed" | "reminder_set" | "reminder_clear" | "system_diagnostics" | "system_reboot" | "theme_toggle" | "weather_refresh" | "garden_water" | "garden_zone",
+      "target": "thermostat" | "device_id" | "zone_name" | "media" | "cctv" | "reminder" | "system" | "theme" | "weather" | "garden",
       "value": string | number | boolean | object
     }
   ]
@@ -3204,11 +3324,13 @@ Available Actions Guide:
 12. Reboot Dashboard System: {"type": "system_reboot", "target": "system", "value": null}
 13. Toggle Light/Dark Theme: {"type": "theme_toggle", "target": "theme", "value": "light" | "dark" | "toggle"}
 14. Sync/Refresh Weather: {"type": "weather_refresh", "target": "weather", "value": null}
+15. Turn Sprinkler On/Off: {"type": "garden_water", "target": "garden", "value": true | false}
+16. Select Sprinkler Zone: {"type": "garden_zone", "target": "garden", "value": "Lawn" | "Flowers" | "Vegetables"}
 
 Current System Context:
 ${systemStatus}
 
-Think step-by-step. If the user asks for something related to the home climate, lights, or locks, return the appropriate command in the actions array. If they ask a general question (e.g. "what is the speed of sound"), reply in the "response" property with an empty "actions" array.`;
+Think step-by-step. If the user asks for something related to the home climate, lights, locks, or sprinkler systems, return the appropriate command in the actions array. If they ask a general question (e.g. "what is the speed of sound"), reply in the "response" property with an empty "actions" array.`;
 
     const url = "https://api.openai.com/v1/chat/completions";
     const response = await Promise.race([
@@ -3289,7 +3411,11 @@ async function askGeminiAssistant(query, apiKey) {
 - HVAC Mode: ${climateMode}
 - Outdoor Weather: ${weatherDetails}
 - Active Lights: ${activeLights}
-- Available Rooms/Zones: Living Room, Bedroom, Kitchen, Outdoor
+- Available Rooms/Zones: Living Room, Bedroom, Kitchen, Outdoor, Garden
+- Soil Moisture Level: ${home.state.garden.moisture}%
+- Sprinkler System: ${home.state.garden.sprinklerActive ? 'ON' : 'OFF'}
+- Sprinkler Active Zone: ${home.state.garden.zone}
+- Rain Irrigation Hold/Delay: ${home.state.garden.weatherDelay ? 'YES' : 'NO'}
 `;
 
     const systemInstruction = `You are ${assistantName}, a premium human-like smart home voice assistant. You are capable of direct smart home control and conversational interactions. 
@@ -3302,8 +3428,8 @@ JSON Schema:
   "response": "Conversational reply to the user (concise, natural, 1-2 sentences. Avoid listing device names unless asked. Be polite and helper-focused)",
   "actions": [
     {
-      "type": "climate_temp" | "climate_mode" | "device_power" | "device_color" | "device_brightness" | "media_control" | "media_route" | "cctv_feed" | "reminder_set" | "reminder_clear" | "system_diagnostics" | "system_reboot" | "theme_toggle" | "weather_refresh",
-      "target": "thermostat" | "device_id" | "zone_name" | "media" | "cctv" | "reminder" | "system" | "theme" | "weather",
+      "type": "climate_temp" | "climate_mode" | "device_power" | "device_color" | "device_brightness" | "media_control" | "media_route" | "cctv_feed" | "reminder_set" | "reminder_clear" | "system_diagnostics" | "system_reboot" | "theme_toggle" | "weather_refresh" | "garden_water" | "garden_zone",
+      "target": "thermostat" | "device_id" | "zone_name" | "media" | "cctv" | "reminder" | "system" | "theme" | "weather" | "garden",
       "value": string | number | boolean | object
     }
   ]
@@ -3324,11 +3450,13 @@ Available Actions Guide:
 12. Reboot Dashboard System: {"type": "system_reboot", "target": "system", "value": null}
 13. Toggle Light/Dark Theme: {"type": "theme_toggle", "target": "theme", "value": "light" | "dark" | "toggle"}
 14. Sync/Refresh Weather: {"type": "weather_refresh", "target": "weather", "value": null}
+15. Turn Sprinkler On/Off: {"type": "garden_water", "target": "garden", "value": true | false}
+16. Select Sprinkler Zone: {"type": "garden_zone", "target": "garden", "value": "Lawn" | "Flowers" | "Vegetables"}
 
 Current System Context:
 ${systemStatus}
 
-Think step-by-step. If the user asks for something related to the home climate, lights, or locks, return the appropriate command in the actions array. If they ask a general question (e.g. "what is the speed of sound"), reply in the "response" property with an empty "actions" array.`;
+Think step-by-step. If the user asks for something related to the home climate, lights, locks, or sprinkler systems, return the appropriate command in the actions array. If they ask a general question (e.g. "what is the speed of sound"), reply in the "response" property with an empty "actions" array.`;
 
     let resultJsonText = "";
 

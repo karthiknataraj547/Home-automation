@@ -3053,3 +3053,54 @@ body.light-theme #wizardPreviewName {
   text-shadow: 0 0 8px var(--cyan-neon-glow);
 }
 
+/* ═══════════════════ GARDEN & ECO-WATERING WIDGET ═══════════════════ */
+.garden-widget {
+  min-height: 240px;
+}
+
+.btn-zone-pill {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 20px;
+  color: rgba(255, 255, 255, 0.6);
+  padding: 6px 12px;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  font-weight: bold;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  text-align: center;
+}
+
+.btn-zone-pill:hover {
+  background: rgba(0, 240, 255, 0.05);
+  border-color: rgba(0, 240, 255, 0.25);
+  color: #fff;
+}
+
+.btn-zone-pill.active {
+  background: rgba(0, 240, 255, 0.1);
+  border-color: var(--cyan-neon);
+  color: var(--cyan-neon);
+  box-shadow: 0 0 10px rgba(0, 240, 255, 0.15);
+  text-shadow: 0 0 5px rgba(0, 240, 255, 0.5);
+}
+
+.weather-delay-banner i {
+  animation: pulse 1s infinite alternate;
+}
+
+@keyframes pulse {
+  from { opacity: 0.4; }
+  to { opacity: 1; }
+}
+
+@media (max-width: 768px) {
+  .btn-zone-pill {
+    padding: 8px 14px;
+    font-size: 0.72rem;
+  }
+}
+
+
