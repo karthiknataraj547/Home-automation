@@ -145,8 +145,19 @@ let tempVoiceprint = null;
 let isVoicePrintTrainingActive = false;
 let voicePrintTrainingName = '';
 
-// Keep mic active for follow-up commands after a voice exchange (15 second window)
-function keepConversationAlive(durationMs = 15000) {
+// Keep mic active for follow-up commands after a voice exchange (respects user timeout selection)
+function keepConversationAlive(durationMs = null) {
+  const timeoutStr = localStorage.getItem('lukas_continuous_convo_timeout');
+  const userTimeout = timeoutStr !== null ? parseInt(timeoutStr) : 15000;
+  
+  if (userTimeout <= 0) {
+    conversationActive = false;
+    if (conversationTimer) clearTimeout(conversationTimer);
+    return;
+  }
+  
+  const actualDuration = durationMs !== null ? Math.min(durationMs, userTimeout) : userTimeout;
+
   conversationActive = true;
   if (conversationTimer) clearTimeout(conversationTimer);
   conversationTimer = setTimeout(() => {
@@ -159,7 +170,7 @@ function keepConversationAlive(durationMs = 15000) {
         voice.startWakeWordListener();
       }
     }
-  }, durationMs);
+  }, actualDuration);
 }
 
 function endConversation() {
@@ -2645,7 +2656,21 @@ function bindUIEvents() {
       const speechSupportMsg = document.getElementById('speechSupportMsg');
       if (speechSupportMsg && voice.recognition) {
         speechSupportMsg.textContent = `WebSpeech Active (${selectedLang})`;
+        speechSupportMsg.style.color = 'var(--emerald-neon)';
       }
+    });
+  }
+
+  // ── Continuous Conversation Mode Timeout ────────────────────────────────
+  const continuousConvoSelect = document.getElementById('continuousConvoSelect');
+  if (continuousConvoSelect) {
+    const savedTimeout = localStorage.getItem('lukas_continuous_convo_timeout') || '15000';
+    continuousConvoSelect.value = savedTimeout;
+    
+    continuousConvoSelect.addEventListener('change', () => {
+      const selectedTimeout = continuousConvoSelect.value;
+      localStorage.setItem('lukas_continuous_convo_timeout', selectedTimeout);
+      diag.logToTerminal(`[SETTINGS] Continuous conversation mode changed: ${selectedTimeout === '0' ? 'Disabled' : (selectedTimeout / 1000) + 's window'}.`, 'info');
     });
   }
 
@@ -4439,9 +4464,95 @@ async function processCommand(rawCommand, source) {
       return;
     }
 
+    // ── Universal Language Engine: Direct Speech Language Switching Directives ──
+    const langSwitchMatch = cmd.match(/(?:change|switch|set)\s+(?:my\s+)?(?:speech\s+)?(?:recognition\s+)?(?:language|dialect)\s+(?:to\s+)?([a-z\s]+)/i)
+      || cmd.match(/(?:speak|talk\s+in)\s+([a-z\s]+)/i);
+    if (langSwitchMatch) {
+      const targetLangName = langSwitchMatch[1].trim().toLowerCase();
+      const LANGUAGE_LOCALE_MAP = {
+        'english': 'en-IN',
+        'english india': 'en-IN',
+        'english us': 'en-US',
+        'english united states': 'en-US',
+        'english uk': 'en-GB',
+        'english united kingdom': 'en-GB',
+        'english australia': 'en-AU',
+        'english canada': 'en-CA',
+        'hindi': 'hi-IN',
+        'kannada': 'kn-IN',
+        'tamil': 'ta-IN',
+        'telugu': 'te-IN',
+        'malayalam': 'ml-IN',
+        'marathi': 'mr-IN',
+        'gujarati': 'gu-IN',
+        'bengali': 'bn-IN',
+        'punjabi': 'pa-IN',
+        'urdu': 'ur-PK',
+        'arabic': 'ar-AE',
+        'french': 'fr-FR',
+        'german': 'de-DE',
+        'spanish': 'es-ES',
+        'portuguese': 'pt-PT',
+        'italian': 'it-IT',
+        'japanese': 'ja-JP',
+        'korean': 'ko-KR',
+        'mandarin': 'zh-CN',
+        'chinese': 'zh-CN',
+        'russian': 'ru-RU'
+      };
+
+      const locale = LANGUAGE_LOCALE_MAP[targetLangName];
+      if (locale) {
+        isProcessingCommand = false;
+        const coreBtn = document.getElementById('lukasCoreBtn');
+        if (coreBtn) coreBtn.classList.remove('processing');
+
+        localStorage.setItem('lukas_speech_lang', locale);
+        voice.setLanguage(locale);
+        
+        const speechLangSelect = document.getElementById('speechLangSelect');
+        if (speechLangSelect) {
+          speechLangSelect.value = locale;
+        }
+        const speechSupportMsg = document.getElementById('speechSupportMsg');
+        if (speechSupportMsg && voice.recognition) {
+          speechSupportMsg.textContent = `WebSpeech Active (${locale})`;
+          speechSupportMsg.style.color = 'var(--emerald-neon)';
+        }
+
+        diag.logToTerminal(`[Universal Language] Switched active speech locale to: ${locale} (${targetLangName})`, 'info');
+        
+        const langAckMap = {
+          'es-ES': 'Entendido. He cambiado mi idioma al español.',
+          'fr-FR': 'Compris. J\'ai changé ma langue pour le français.',
+          'de-DE': 'Verstanden. Ich habe meine Sprache auf Deutsch umgestellt.',
+          'hi-IN': 'समझ गया। मैंने अपनी भाषा हिंदी में बदल दी है।',
+          'kn-IN': 'ತಿಳಿದಿದೆ. ನಾನು ನನ್ನ ಭಾಷೆಯನ್ನು ಕನ್ನಡಕ್ಕೆ ಬದಲಾಯಿಸಿದ್ದೇನೆ.',
+          'ta-IN': 'புரிந்தது. நான் எனது மொழியை தமிழுக்கு மாற்றியுள்ளேன்.',
+          'te-IN': 'అర్థమైంది. నేను నా భాషను తెలుగులోకి మార్చాను.',
+          'ja-JP': '了解しました。言語を日本語に切り替えました。',
+          'ru-RU': 'Понял. Я переключил язык на русский.'
+        };
+        const ack = langAckMap[locale] || `Acknowledged, Commander. Active speech interface language switched to ${targetLangName.toUpperCase()} (${locale}).`;
+        
+        lukasMemory.addMessage('user', rawCommand);
+        lukasMemory.addMessage('assistant', ack);
+        handleAssistantResponse(ack);
+        keepConversationAlive(8000);
+        return;
+      }
+    }
+
     // ══ LUKAS MEMORY: Record user message + extract facts ══
     lukasMemory.addMessage('user', rawCommand);
     lukasMemory.extractAndStoreFacts(rawCommand);
+
+    // ── Proactive Project Launch Suggestions Hook ──
+    const launchMatch = rawCommand.match(/\b(?:launched|published|live)\s+(?:my\s+)?(?:store|website|app|product|shop|site)\b/i);
+    if (launchMatch) {
+      rawCommand = rawCommand + "\n[AUTONOMOUS ASSISTANT NOTE: Commander has just launched their project. Proactively suggest analytics setup, SEO improvements, marketing campaigns, conversion optimizations, and customer support workflows as professional next actions.]";
+      diag.logToTerminal("[AI CORE] Project launch signal detected. Injecting autonomous assistant triggers.", "info");
+    }
 
     const coreBtn = document.getElementById('lukasCoreBtn');
     if (coreBtn) {

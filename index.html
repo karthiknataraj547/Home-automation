@@ -750,13 +750,50 @@
                 </select>
               </div>
               <div class="form-group" style="margin-bottom:0;">
-                <label for="speechLangSelect" style="font-size:0.58rem; color:#64748b; margin-bottom:0.25rem; display:block;">Speech Recognition Language</label>
+                <label for="speechLangSelect" style="font-size:0.58rem; color:#64748b; margin-bottom:0.25rem; display:block;">Speech Recognition Language & Accent</label>
                 <select id="speechLangSelect" class="node-select-custom" style="width:100%; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08); color:#fff; border-radius:4px; padding:0.3rem 0.5rem; font-size:0.65rem; height:28px; font-family:var(--font-sans);">
-                  <option value="en-IN">English (India)</option>
-                  <option value="en-US">English (United States)</option>
-                  <option value="en-GB">English (United Kingdom)</option>
-                  <option value="hi-IN">Hindi (India)</option>
-                  <option value="kn-IN">Kannada (India)</option>
+                  <optgroup label="English Accents">
+                    <option value="en-US">English (United States)</option>
+                    <option value="en-GB">English (United Kingdom)</option>
+                    <option value="en-IN">English (India)</option>
+                    <option value="en-AU">English (Australia)</option>
+                    <option value="en-CA">English (Canada)</option>
+                  </optgroup>
+                  <optgroup label="Indic Languages">
+                    <option value="hi-IN">Hindi (हिन्दी)</option>
+                    <option value="kn-IN">Kannada (ಕನ್ನಡ)</option>
+                    <option value="ta-IN">Tamil (தமிழ்)</option>
+                    <option value="te-IN">Telugu (తెలుగు)</option>
+                    <option value="ml-IN">Malayalam (മലയാളം)</option>
+                    <option value="mr-IN">Marathi (मराठी)</option>
+                    <option value="gu-IN">Gujarati (ગુજરાતી)</option>
+                    <option value="bn-IN">Bengali (বাংলা)</option>
+                    <option value="pa-IN">Punjabi (ਪੰਜਾਬੀ)</option>
+                    <option value="ur-PK">Urdu (اردو)</option>
+                  </optgroup>
+                  <optgroup label="Global Languages">
+                    <option value="ar-AE">Arabic (العربية)</option>
+                    <option value="fr-FR">French (Français)</option>
+                    <option value="de-DE">German (Deutsch)</option>
+                    <option value="es-ES">Spanish (Español)</option>
+                    <option value="pt-PT">Portuguese (Português)</option>
+                    <option value="it-IT">Italian (Italiano)</option>
+                    <option value="ja-JP">Japanese (日本語)</option>
+                    <option value="ko-KR">Korean (한국어)</option>
+                    <option value="zh-CN">Mandarin Chinese (中文)</option>
+                    <option value="ru-RU">Russian (Русский)</option>
+                  </optgroup>
+                </select>
+              </div>
+              <div class="form-group" style="margin-bottom:0; margin-top:0.4rem;">
+                <label for="continuousConvoSelect" style="font-size:0.58rem; color:#64748b; margin-bottom:0.25rem; display:block;">Continuous Conversation Mode</label>
+                <select id="continuousConvoSelect" class="node-select-custom" style="width:100%; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08); color:#fff; border-radius:4px; padding:0.3rem 0.5rem; font-size:0.65rem; height:28px; font-family:var(--font-sans);">
+                  <option value="5000">5 Seconds (Short)</option>
+                  <option value="10000">10 Seconds (Normal)</option>
+                  <option value="15000">15 Seconds (Default)</option>
+                  <option value="30000">30 Seconds (Extended)</option>
+                  <option value="60000">60 Seconds (Max)</option>
+                  <option value="0">Disabled (Wake Word required every turn)</option>
                 </select>
               </div>
               <div class="form-group" style="margin-bottom:0; display:flex; align-items:center; gap:0.5rem; margin-top:0.15rem;">

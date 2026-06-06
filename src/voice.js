@@ -696,6 +696,58 @@ class LukasVoiceController {
     return parts.map(s => s.trim()).filter(s => s.length > 1);
   }
 
+  // Detect language based on unicode script blocks and signature words
+  detectLanguageOfText(text) {
+    if (!text) return null;
+    
+    // Japanese (Hiragana/Katakana / Kanji)
+    if (/[\u3040-\u309f\u30a0-\u30ff]/i.test(text)) return 'ja-JP';
+    // Korean (Hangul)
+    if (/[\uac00-\ud7af\u1100-\u11ff]/i.test(text)) return 'ko-KR';
+    // Chinese Hanzi (without Japanese kana)
+    if (/[\u4e00-\u9fff]/i.test(text)) return 'zh-CN';
+    // Russian / Cyrillic
+    if (/[\u0400-\u04ff]/i.test(text)) return 'ru-RU';
+    // Arabic / Urdu
+    if (/[\u0600-\u06ff]/i.test(text)) return 'ar-AE';
+    
+    // Indic scripts
+    if (/[\u0900-\u097f]/i.test(text)) return 'hi-IN'; // Hindi / Marathi
+    if (/[\u0980-\u09ff]/i.test(text)) return 'bn-IN'; // Bengali
+    if (/[\u0a00-\u0a7f]/i.test(text)) return 'pa-IN'; // Punjabi
+    if (/[\u0a80-\u0aff]/i.test(text)) return 'gu-IN'; // Gujarati
+    if (/[\u0b80-\u0bff]/i.test(text)) return 'ta-IN'; // Tamil
+    if (/[\u0c00-\u0c7f]/i.test(text)) return 'te-IN'; // Telugu
+    if (/[\u0c80-\u0cff]/i.test(text)) return 'kn-IN'; // Kannada
+    if (/[\u0d00-\u0d7f]/i.test(text)) return 'ml-IN'; // Malayalam
+    
+    // Check for signature European language markers
+    const lower = text.toLowerCase();
+    
+    // French
+    if (/\b(le|la|les|un|une|des|et|en|que|est|dans|pour|qui|avec|sur|plus|nous|vous|elle|elles|oui|non|bonjour|merci)\b/i.test(lower) || /[éàèùâêîôûëïüçœÆ]/i.test(text)) {
+      if (lower.includes('oui') || lower.includes('bonjour') || lower.includes('merci') || lower.includes('s\'il') || lower.includes('l\'h')) return 'fr-FR';
+    }
+    // Spanish
+    if (/\b(el|la|los|las|un|una|unos|unas|y|en|que|es|con|por|para|como|pero|este|esta|todo|todos|hola|gracias|sí|no)\b/i.test(lower) || /[áéíóúüñ¿¡]/i.test(text)) {
+      if (lower.includes('hola') || lower.includes('gracias') || lower.includes('sí') || lower.includes('por favor')) return 'es-ES';
+    }
+    // German
+    if (/\b(der|die|das|und|ist|ich|nicht|zu|es|in|mit|den|von|für|dass|sind|wir|ihr|sie|ja|nein|hallo|danke)\b/i.test(lower) || /[äöüßÄÖÜ]/i.test(text)) {
+      if (lower.includes('ja') || lower.includes('hallo') || lower.includes('bitte') || lower.includes('danke') || lower.includes('guten')) return 'de-DE';
+    }
+    // Portuguese
+    if (/\b(o|a|os|as|um|uma|e|em|que|é|com|por|para|como|mas|este|esta|tudo|todos|olá|obrigado|sim|não)\b/i.test(lower) || /[ãõáéíóúçêô]/i.test(text)) {
+      if (lower.includes('olá') || lower.includes('obrigado') || lower.includes('sim') || lower.includes('por favor')) return 'pt-PT';
+    }
+    // Italian
+    if (/\b(il|la|i|gli|le|un|una|e|in|che|è|con|per|come|ma|questo|questa|tutto|tutti|ciao|grazie|sì|no)\b/i.test(lower) || /[àèìòùéóí]/i.test(text)) {
+      if (lower.includes('ciao') || lower.includes('grazie') || lower.includes('sì') || lower.includes('prego')) return 'it-IT';
+    }
+    
+    return null;
+  }
+
   // Stream-compatible sentence speak handler
   speakSentence(text) {
     if (!text || !text.trim()) return;
@@ -714,7 +766,9 @@ class LukasVoiceController {
     const utterance = new SpeechSynthesisUtterance(cleanedText);
     this.queuedUtterances.push(utterance);
 
-    const speechLang = this.speechLang || 'en-IN';
+    // Dynamic language detection
+    const detectedLang = this.detectLanguageOfText(cleanedText);
+    const speechLang = detectedLang || this.speechLang || 'en-IN';
     const activeVoice = this.getVoiceForLanguage(speechLang);
     if (activeVoice) {
       utterance.voice = activeVoice;
