@@ -11,6 +11,7 @@ import { loginUser, registerUser, isAuthenticated, logoutUser } from './src/auth
 import LukasMemory from './src/ai/memory.js';
 import LukasOrchestrator, { INTENT } from './src/ai/orchestrator.js';
 import LukasResearchAgent from './src/ai/research.js';
+import LukasReasoningEngine from './src/ai/reasoning.js';
 import { generateConversationalResponse, parseHomeCommand, scoreResponse } from './src/ai/core.js';
 
 // Instantiate core hubs
@@ -23,6 +24,7 @@ const diag = new LukasDiagnosticsHub();
 const lukasMemory = new LukasMemory();
 const lukasOrchestrator = new LukasOrchestrator(lukasMemory);
 const lukasResearch = new LukasResearchAgent();
+const lukasReasoning = new LukasReasoningEngine();
 
 // Local Media Tracks Playlist with copyright-free MP3 streams
 const playlist = [
@@ -545,6 +547,7 @@ function bindUIEvents() {
 
   // Mic Activation (Single-turn voice command listening)
   micBtn.addEventListener('click', () => {
+    voice.warmUpMic(); // Warm up mic stream on user gesture
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
     const coreBtn = document.getElementById('lukasCoreBtn');
     
@@ -830,6 +833,7 @@ function bindUIEvents() {
 
   // Click core for voice trigger shortcut (Single-turn voice command listening)
   document.getElementById('lukasCoreBtn').addEventListener('click', () => {
+    voice.warmUpMic(); // Warm up mic stream on user gesture
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
     const coreBtn = document.getElementById('lukasCoreBtn');
     
@@ -3282,93 +3286,379 @@ function executeConversationalAction(act) {
         requestLocalWeatherUpdate();
         diag.logToTerminal(`[CONVERSATIONAL AI] Initiated weather sync protocol`, 'info');
       }
-    } else if (act.type === 'garden_water') {
-      const stateVal = !!act.value;
-      home.setGardenState({ sprinklerActive: stateVal });
-      diag.logToTerminal(`[CONVERSATIONAL AI] Garden watering system ${stateVal ? 'ENABLED' : 'DISABLED'}`, 'info');
-    } else if (act.type === 'garden_zone') {
-      const rawZone = typeof act.value === 'string' ? act.value : 'Lawn';
-      let zone = 'Lawn';
-      if (rawZone.toLowerCase().includes('flower')) zone = 'Flowers';
-      else if (rawZone.toLowerCase().includes('veg') || rawZone.toLowerCase().includes('plant')) zone = 'Vegetables';
-      home.setGardenState({ zone: zone });
-      diag.logToTerminal(`[CONVERSATIONAL AI] Set sprinkler zone route to: ${zone.toUpperCase()}`, 'info');
     }
   } catch (err) {
     console.error("Failed to execute conversational action:", err);
   }
 }
 
-// Ask OpenAI for context-aware conversational response and dynamic device control
-async function askOpenAIAssistant(query, apiKey) {
-  return await _callUnifiedAssistant(query, apiKey, 'openai');
-}
-
-// Ask Gemini or Puter client-side AI for context-aware conversational response and dynamic device control
-async function askGeminiAssistant(query, apiKey) {
-  return await _callUnifiedAssistant(query, apiKey || null, apiKey ? 'gemini' : 'puter');
-}
-
 async function processCommand(rawCommand, source) {
   try {
     // Clear any active voice capturing timeouts immediately
-  if (typeof noCommandTimeout !== 'undefined' && noCommandTimeout) {
-    clearTimeout(noCommandTimeout);
-    noCommandTimeout = null;
+    if (typeof noCommandTimeout !== 'undefined' && noCommandTimeout) {
+      clearTimeout(noCommandTimeout);
+      noCommandTimeout = null;
+    }
+    if (typeof proceedTimeout !== 'undefined' && proceedTimeout) {
+      clearTimeout(proceedTimeout);
+      proceedTimeout = null;
+    }
+
+    const cmd = rawCommand.toLowerCase().trim();
+    appendChatBubble(rawCommand, 'user');
+    diag.spikeCPU();
+
+    // ══ LUKAS MEMORY: Record user message + extract facts ══
+    lukasMemory.addMessage('user', rawCommand);
+    lukasMemory.extractAndStoreFacts(rawCommand);
+
+    const coreBtn = document.getElementById('lukasCoreBtn');
+    if (coreBtn) {
+      coreBtn.classList.remove('listening');
+      coreBtn.classList.add('processing');
+    }
+
+    // Print intent analysis details to high-tech terminal console log
+    diag.logToTerminal(`Incoming directive: "${rawCommand}" (${source.toUpperCase()})`, 'info');
+
+    // 1. Precheck using Reasoning Engine
+    const precheckResult = lukasReasoning.precheck(rawCommand);
+    if (!precheckResult.valid) {
+      handleAssistantResponse(`Failed pre-check: ${precheckResult.reason}`);
+      return;
+    }
+
+    const openaiApiKey = localStorage.getItem('openai_api_key');
+    const geminiApiKey = localStorage.getItem('gemini_api_key');
+    const activeProvider = openaiApiKey ? 'openai' : (geminiApiKey ? 'gemini' : 'puter');
+    const activeKey = openaiApiKey || geminiApiKey || null;
+
+    // Get home context summary for intent analysis
+    const homeContext = `Active devices: ${home.dynamicDevices.filter(d => d.on).map(d => d.name).join(', ') || 'None'}. Indoor Temp: ${home.state.climate.indoorTemp}°C, target: ${home.state.climate.targetTemp}°C.`;
+
+    // 2. Orchestration Intent Analysis
+    diag.logToTerminal("[AI ORCHESTRATOR] Classifying intent...", "info");
+    const routing = await lukasOrchestrator.analyze(rawCommand, homeContext, activeKey, activeProvider);
+    diag.logToTerminal(`[AI INTENT] Routed to: ${routing.intent.toUpperCase()} (Confidence: ${Math.round(routing.confidence * 100)}%)`, 'info');
+
+    // Handle intent-specific routing
+    switch (routing.intent) {
+      case INTENT.HOME_CONTROL:
+        await handleHomeControlIntent(rawCommand, activeKey, activeProvider);
+        break;
+
+      case INTENT.RESEARCH:
+        await handleResearchIntent(rawCommand, activeKey, activeProvider);
+        break;
+
+      case INTENT.MEMORY_QUERY:
+        await handleMemoryQueryIntent(rawCommand, activeKey, activeProvider);
+        break;
+
+      case INTENT.WEATHER:
+        await handleWeatherIntent(rawCommand);
+        break;
+
+      case INTENT.MEDIA:
+        await handleMediaIntent(cmd, rawCommand);
+        break;
+
+      case INTENT.AUTOMATION:
+        await handleAutomationIntent(cmd, rawCommand);
+        break;
+
+      case INTENT.MATH:
+        await handleMathIntent(rawCommand, activeKey, activeProvider);
+        break;
+
+      case INTENT.SYSTEM:
+        await handleSystemIntent(cmd);
+        break;
+
+      case INTENT.CONVERSATION:
+      case INTENT.TASK_EXECUTION:
+      case INTENT.PLANNING:
+      case INTENT.ANALYSIS:
+      default:
+        await handleConversationalIntent(rawCommand, routing.intent, activeKey, activeProvider);
+        break;
+    }
+
+  } catch (err) {
+    console.error("Error in processCommand:", err);
+    diag.logToTerminal(`[AI CORE] Error during command execution: ${err.message}`, "error");
+    handleAssistantResponse("Sorry, I encountered an internal system error while executing that request.");
   }
-  if (typeof proceedTimeout !== 'undefined' && proceedTimeout) {
-    clearTimeout(proceedTimeout);
-    proceedTimeout = null;
-  }
+}
 
-  const cmd = rawCommand.toLowerCase().trim();
-  appendChatBubble(rawCommand, 'user');
-  diag.spikeCPU();
+// ═══════════════════ INTENT SPECIFIC HANDLERS ═══════════════════
 
-  // ══ LUKAS MEMORY: Record user message + extract facts ══
-  lukasMemory.addMessage('user', rawCommand);
-  lukasMemory.extractAndStoreFacts(rawCommand);
-
-
-  const coreBtn = document.getElementById('lukasCoreBtn');
-  if (coreBtn) {
-    coreBtn.classList.remove('listening');
-    coreBtn.classList.add('processing');
-  }
-
-  // Print intent analysis details to high-tech terminal console log
-  diag.logToTerminal(`Incoming directive: "${rawCommand}" (${source.toUpperCase()})`, 'info');
-
-  // Compound/Conjunction command detection to bypass rule-based matching
-  const isCompound = /\b(and|then|also)\b/i.test(cmd) || (cmd.includes('play') && cmd.includes('light')) || (cmd.includes('media') && cmd.includes('light')) || (cmd.includes('music') && cmd.includes('light'));
-  const openaiApiKey = localStorage.getItem('openai_api_key');
-  const geminiApiKey = localStorage.getItem('gemini_api_key');
-  const hasAi = openaiApiKey || geminiApiKey || (window.puter && window.puter.ai);
+async function handleHomeControlIntent(rawCommand, apiKey, apiProvider) {
+  diag.logToTerminal("[AI PARSER] Extracting home control entities...", "info");
+  const parsed = await parseHomeCommand(rawCommand, apiKey, apiProvider);
   
-  if (isCompound && hasAi) {
-    diag.logToTerminal("[AI CORE] Compound/Conjunction command detected. Routing to Conversational AI...", "info");
-    const assistantPromise = openaiApiKey 
-      ? askOpenAIAssistant(rawCommand, openaiApiKey) 
-      : askGeminiAssistant(rawCommand, geminiApiKey);
-
-    assistantPromise.then(response => {
-      if (response) {
-        diag.logToTerminal(`[LUKAS REPLY] "${response}"`, 'info');
-        appendChatBubble(response, 'assistant');
-        voice.stopWakeWordListener();
-        voice.speak(response);
-      } else {
-        diag.logToTerminal("[AI CORE] Conversational AI failed. Performing local search fallback...", "warn");
-        runWikipediaSearchFallback(rawCommand);
-      }
-    });
+  if (!parsed || parsed.category === 'unknown') {
+    diag.logToTerminal("[AI PARSER] Structured parse returned unknown. Falling back to local pattern matching.", "warn");
+    executeLocalHomeControlFallback(rawCommand);
     return;
   }
 
-  // AI-assisted Parsing Engine execution
-  let handledByAI = false;
+  diag.logToTerminal(`[AI PARSER] Category: ${parsed.category} | Action: ${parsed.action} | Target: ${parsed.targetDeviceName || parsed.targetZone || 'Global'}`, "info");
+  executeParsedHomeControl(parsed);
+}
+
+async function handleResearchIntent(rawCommand, apiKey, apiProvider) {
+  diag.logToTerminal(`[RESEARCH AGENT] Initiating web research for: "${rawCommand}"...`, "info");
+  
+  let query = rawCommand;
+  const cleanMatch = rawCommand.match(/(?:search for|search|research|look up|tell me about|what is|who is|define)\s+(.+)/i);
+  if (cleanMatch && cleanMatch[1]) {
+    query = cleanMatch[1].trim();
+  }
+
+  const result = await lukasResearch.research(query, { apiKey, apiProvider, memory: lukasMemory });
+  
+  if (result && result.answer) {
+    diag.logToTerminal(`[RESEARCH AGENT] Research finished with confidence: ${Math.round(result.confidence * 100)}%`, "info");
+    
+    // Split for spoken readout (first two sentences)
+    const sentences = result.answer.split(/(?<=[.!?])\s+/);
+    const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(" ");
+    
+    diag.logToTerminal(`[LUKAS REPLY] "${speechSummary}"`, 'info');
+    
+    const displayAnswer = `${result.answer}\n\n*Sources: ${result.sources.join(', ') || 'Web Search'}*`;
+    appendChatBubble(displayAnswer, 'assistant');
+    voice.stopWakeWordListener();
+    voice.speak(speechSummary);
+    
+    lukasMemory.addMessage('assistant', displayAnswer, 'research');
+    keepConversationAlive(12000); // Hold mic active for follow-ups
+  } else {
+    handleAssistantResponse(`I performed a web search for "${query}" but found no matching records.`);
+  }
+}
+
+async function handleMemoryQueryIntent(rawCommand, apiKey, apiProvider) {
+  diag.logToTerminal("[MEMORY AGENT] Recalling information from memory...", "info");
+  
+  const systemPrompt = `You are LUKAS's memory recall assistant. The user is asking about something you should remember.
+Use the remembered facts and preferences below to answer their question accurately.
+
+[REMEMBERED FACTS]
+${lukasMemory.buildContextBlock()}`;
+
+  const response = await generateConversationalResponse({
+    userMessage: rawCommand,
+    memory: lukasMemory,
+    intent: 'memory_query',
+    apiKey,
+    apiProvider
+  });
+
+  if (response) {
+    lukasMemory.addMessage('assistant', response, 'memory_query');
+    handleAssistantResponse(response);
+    keepConversationAlive(8000);
+  } else {
+    handleAssistantResponse("My memory banks are intact, but I couldn't find a record matching that query.");
+  }
+}
+
+async function handleWeatherIntent(rawCommand) {
+  const cmd = rawCommand.toLowerCase().trim();
+  let weatherCity = "";
+  const match = cmd.match(/(?:weather|temperature|temp|climate|forecast|raining|snowing|hot|cold|conditions|rain|snow|wind|precipitation|shower|cloudy|sunny|clear)\s+(?:in|at|for)\s+([a-zA-Z\s.-]+)/i);
+  if (match && match[1]) {
+    weatherCity = match[1].trim();
+  }
+
+  const targetCity = weatherCity;
+  if (!targetCity) {
+    diag.logToTerminal("[WEATHER QUERY] Retrieving browser GPS coordinates for local forecast...", "info");
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const data = await fetchRealTimeWeather({
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            name: "My Location"
+          });
+          handleWeatherResponse(data);
+          keepConversationAlive(8000);
+        },
+        async (error) => {
+          const fallbackCity = getDefaultCityFromTimezone();
+          diag.logToTerminal(`[GPS] Geolocation failed (${error.message}). Checking fallback city: ${fallbackCity}...`, "warn");
+          const data = await fetchRealTimeWeather(fallbackCity);
+          handleWeatherResponse(data);
+          keepConversationAlive(8000);
+        },
+        { timeout: 5000 }
+      );
+    } else {
+      const fallbackCity = getDefaultCityFromTimezone();
+      diag.logToTerminal("[GPS] Geolocation unsupported. Checking fallback city...", "warn");
+      const data = await fetchRealTimeWeather(fallbackCity);
+      handleWeatherResponse(data);
+      keepConversationAlive(8000);
+    }
+  } else {
+    const data = await fetchRealTimeWeather(targetCity);
+    handleWeatherResponse(data);
+    keepConversationAlive(8000);
+  }
+}
+
+async function handleMediaIntent(cmd, rawCommand) {
+  executeParsedHomeControl({
+    category: 'media',
+    action: cmd.includes('pause') || cmd.includes('stop') ? 'pause' : cmd.includes('next') ? 'next' : cmd.includes('prev') ? 'prev' : 'play',
+    value: rawCommand
+  });
+}
+
+async function handleAutomationIntent(cmd, rawCommand) {
+  const isClearReminders = /\b(clear|delete|remove)\s*(?:all\s*)?(?:reminder|task|alarm|timer)s?\b/i.test(cmd);
+  if (isClearReminders) {
+    reminderTimers.forEach((t) => clearTimeout(t));
+    reminderTimers.clear();
+    lukasReminders.length = 0;
+    saveReminders();
+    handleAssistantResponse("All reminders have been cleared, Commander.");
+    return;
+  }
+
+  const isListReminders = /\b(list|show|view|what|my)\s*(?:all\s*)?(?:reminder|task|alarm|timer)s?\b/i.test(cmd) || (cmd.includes('reminder') && (cmd.includes('list') || cmd.includes('show') || cmd.includes('what')));
+  if (isListReminders) {
+    const active = lukasReminders.filter(r => !r.fired);
+    if (active.length === 0) {
+      handleAssistantResponse("You have no active reminders, Commander.");
+    } else {
+      const listText = active.map((r, i) => {
+        const t = new Date(r.fireAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `${i + 1}. ${r.text} — at ${t}`;
+      }).join('. ');
+      handleAssistantResponse(`You have ${active.length} active reminder${active.length > 1 ? 's' : ''}. ${listText}`);
+    }
+    return;
+  }
+
+  const inlineTime = parseReminderTime(cmd);
+  const inlineText = extractReminderText(rawCommand);
+  
+  if (inlineTime && inlineText && inlineText !== 'Reminder') {
+    addReminder(inlineText, inlineTime);
+    const timeStr = inlineTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    handleAssistantResponse(`Reminder set: "${inlineText}" — I'll alert you at ${timeStr}, Commander.`);
+    return;
+  }
+  
+  if (inlineTime && (!inlineText || inlineText === 'Reminder')) {
+    activeFollowUp = { type: 'reminder_input', time: inlineTime };
+    handleAssistantResponse("What should I remind you about, Commander?");
+    return;
+  }
+  
+  if (!inlineTime && inlineText && inlineText !== 'Reminder') {
+    const defaultTime = new Date(Date.now() + 5 * 60000);
+    addReminder(inlineText, defaultTime);
+    const timeStr = defaultTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    handleAssistantResponse(`Reminder set: "${inlineText}" — defaulting to 5 minutes from now at ${timeStr}, Commander.`);
+    return;
+  }
+  
+  activeFollowUp = { type: 'reminder_input' };
+  handleAssistantResponse("What would you like to be reminded about, Commander?");
+}
+
+async function handleMathIntent(rawCommand, apiKey, apiProvider) {
+  diag.logToTerminal("[AI MATH] Solving mathematical query...", "info");
+  const systemPrompt = "You are LUKAS's math assistant. Solve the user's mathematical query. Return a clear and direct numerical answer.";
+  const response = await generateConversationalResponse({
+    userMessage: rawCommand,
+    memory: null,
+    intent: 'math',
+    apiKey,
+    apiProvider
+  });
+  if (response) {
+    handleAssistantResponse(response);
+  } else {
+    handleAssistantResponse("I couldn't solve the calculation. Please try again.");
+  }
+}
+
+async function handleSystemIntent(cmd) {
+  if (cmd.includes('clear memory') || cmd.includes('forget me') || cmd.includes('clear history')) {
+    lukasMemory.clearAllMemory();
+    handleAssistantResponse("All conversation logs and long-term memory facts have been cleared.");
+    return;
+  }
+  
+  const cpu = Math.round(diag.metrics.cpu);
+  const temp = diag.metrics.temp.toFixed(1);
+  const security = diag.metrics.security.toFixed(1);
+  handleAssistantResponse(`Diagnostics: CPU Load at ${cpu}%, Thermals stable at ${temp}°C, Firewall Shield Integrity at ${security}%. Core database is normal.`);
+  diag.logToTerminal("[AI CORE] Performing system diagnostic dump...", "info");
+  setTimeout(() => {
+    diag.logToTerminal(`&gt; CPU: ${cpu}% | RAM: ${diag.metrics.ram.toFixed(1)}% | Core Temp: ${temp}C`, 'info');
+  }, 350);
+}
+
+async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvider) {
+  diag.logToTerminal(`[AI CORE] Querying Conversational AI for: "${rawCommand}"...`, "info");
+  
+  const homeContext = `Active devices: ${home.dynamicDevices.filter(d => d.on).map(d => d.name).join(', ') || 'None'}. Climate target: ${home.state.climate.targetTemp}°C.`;
+
+  const response = await generateConversationalResponse({
+    userMessage: rawCommand,
+    memory: lukasMemory,
+    homeContext,
+    intent,
+    apiKey,
+    apiProvider
+  });
+
+  if (response) {
+    const validation = lukasReasoning.validate(rawCommand, response);
+    if (!validation.valid) {
+      diag.logToTerminal(`[REASONING WARNING] Output validation failed (Score: ${validation.score}). Issues: ${validation.issues.join(', ')}. Regenerating with correction...`, 'warn');
+      
+      const correctionPrompt = `The previous response failed quality checks with issues: ${validation.issues.join(', ')}. Please write a higher quality, correct, and professional response.`;
+      
+      const correctedResponse = await generateConversationalResponse({
+        userMessage: `${rawCommand}\n\n[Correction Note: ${correctionPrompt}]`,
+        memory: lukasMemory,
+        homeContext,
+        intent,
+        apiKey,
+        apiProvider
+      });
+      
+      const finalResponse = correctedResponse || response;
+      lukasMemory.addMessage('assistant', finalResponse, intent);
+      handleAssistantResponse(finalResponse);
+    } else {
+      lukasMemory.addMessage('assistant', response, intent);
+      handleAssistantResponse(response);
+    }
+    
+    const isQuestion = response.trim().endsWith('?') || response.includes('?');
+    if (isQuestion || intent === 'planning' || intent === 'task_execution') {
+      keepConversationAlive(10000);
+    }
+  } else {
+    runWikipediaSearchFallback(rawCommand);
+  }
+}
+
+// ═══════════════════ SUB-ROUTINE EXECUTION WRAPPERS ═══════════════════
+
+function executeParsedHomeControl(parsed) {
   let aiResponseText = "";
   let aiIsControlAction = false;
+  let handledByAI = false;
 
   const colorMap = {
     'red': '#ff0000', 'green': '#10b981', 'blue': '#3b82f6', 'purple': '#a855f7',
@@ -3377,20 +3667,7 @@ async function processCommand(rawCommand, source) {
     'gold': '#f59e0b', 'crimson': '#e11d48'
   };
 
-  let parsed = null;
-  if (openaiApiKey) {
-    diag.logToTerminal("[AI PARSER] Querying OpenAI AI intent parser...", "info");
-    parsed = await parseCommandWithOpenAI(rawCommand, openaiApiKey);
-  } else if (geminiApiKey) {
-    diag.logToTerminal("[AI PARSER] Querying Gemini AI intent parser...", "info");
-    parsed = await parseCommandWithGemini(rawCommand, geminiApiKey);
-  } else {
-    parsed = await parseCommandWithAI(rawCommand);
-  }
-
   if (parsed && parsed.category && parsed.category !== 'unknown') {
-    diag.logToTerminal(`[AI INTENT] Category: ${parsed.category.toUpperCase()} | Action: ${parsed.action ? parsed.action.toUpperCase() : 'NONE'} | Zone: ${parsed.targetZone || 'GLOBAL'}`, 'info');
-    
     // LIGHTS
     if (parsed.category === 'light') {
       aiIsControlAction = true;
@@ -3470,7 +3747,7 @@ async function processCommand(rawCommand, source) {
           for (const dev of home.dynamicDevices) {
             if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, brightness: percent });
           }
-          aiResponseText = `Acknowledged. Adjusting all active light brightness levels to ${percent} percent.`;
+          aiResponseText = `Adjusting all active light brightness levels to ${percent} percent.`;
         } else {
           const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
           const newState = !isAnyOn;
@@ -3685,744 +3962,380 @@ async function processCommand(rawCommand, source) {
 
     if (handledByAI) {
       handleAssistantResponse(aiResponseText, aiIsControlAction);
-      return;
     }
   }
-  
-  // Handle active conversational follow-up context first
-  if (activeFollowUp) {
-    const followUp = activeFollowUp;
-    activeFollowUp = null; // Clear context immediately
-    
-    if (followUp.type === "weather_fallback") {
-      const yesAnswers = ["yes", "sure", "ok", "yeah", "yep", "do it", "please", "confirm"];
-      let matchedCity = "";
-      
-      for (const opt of followUp.options) {
-        if (cmd.includes(opt.toLowerCase())) {
-          matchedCity = opt;
-          break;
-        }
-      }
-      
-      if (yesAnswers.some(ans => cmd.includes(ans))) {
-        matchedCity = followUp.options[0]; // Take default fallback
-      }
-      
-      if (matchedCity) {
-        diag.logToTerminal(`[FOLLOW-UP] User accepted recommendation. Checking weather in ${matchedCity}...`, "info");
-        const data = await fetchRealTimeWeather(matchedCity);
-        handleWeatherResponse(data);
-        return;
-      } else if (cmd.includes("no") || cmd.includes("stop") || cmd.includes("never mind") || cmd.includes("cancel")) {
-        handleAssistantResponse("I don't have information about that, Commander.");
-        return;
-      }
-    } else if (followUp.type === "search_fallback") {
-      if (cmd.includes("diagnostic") || cmd.includes("health") || cmd.includes("system") || cmd.includes("status")) {
-        diag.logToTerminal("[FOLLOW-UP] User selected diagnostics check.", "info");
-        processCommand("run system diagnostics", "voice");
-        return;
-      } else if (cmd.includes("wiki") || cmd.includes("wikipedia") || cmd.includes("broad") || cmd.includes("search")) {
-        diag.logToTerminal(`[FOLLOW-UP] User selected broad Wikipedia search for "${followUp.originalQuery}".`, "info");
-        const result = await searchInternet(followUp.originalQuery);
-        if (result) {
-          const sentences = result.summary.split(/(?<=[.!?])\s+/);
-          const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(" ");
-          appendChatBubble(`${result.title}: ${result.summary}`, 'assistant', result.url);
-          voice.speak(speechSummary);
-        } else {
-          handleAssistantResponse("I attempted a secondary index query, but it failed to yield any records.");
-        }
-        return;
-      } else if (cmd.includes("no") || cmd.includes("stop") || cmd.includes("never mind") || cmd.includes("cancel")) {
-        handleAssistantResponse("I don't have information about that, Commander.");
-        return;
-      }
-    } else if (followUp.type === "reminder_input") {
-      // User is providing the reminder text after being asked
-      const time = parseReminderTime(cmd);
-      const label = extractReminderText(rawCommand);
-      const fireAt = time || new Date(Date.now() + 5 * 60000); // Default 5 minutes if no time given
-      addReminder(label, fireAt);
-      const timeStr = fireAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      handleAssistantResponse(`Reminder set: "${label}" — I'll alert you at ${timeStr}, Commander.`);
-      return;
-    }
-  }
-  
-  // ═══════════════════ REMINDER/TASK COMMAND DETECTION ═══════════════════
-  const isReminderCmd = /\b(remind|reminder|set\s*(?:a\s*)?reminder|set\s*(?:a\s*)?task|set\s*(?:a\s*)?alarm|set\s*(?:a\s*)?timer)\b/i.test(cmd);
-  const isListReminders = /\b(list|show|view|what|my)\s*(?:all\s*)?(?:reminder|task|alarm|timer)s?\b/i.test(cmd) || (cmd.includes('reminder') && (cmd.includes('list') || cmd.includes('show') || cmd.includes('what')));
-  const isClearReminders = /\b(clear|delete|remove)\s*(?:all\s*)?(?:reminder|task|alarm|timer)s?\b/i.test(cmd);
+}
 
-  if (isClearReminders) {
-    reminderTimers.forEach((t) => clearTimeout(t));
-    reminderTimers.clear();
-    lukasReminders.length = 0;
-    saveReminders();
-    handleAssistantResponse("All reminders have been cleared, Commander.");
-    return;
-  }
-
-  if (isListReminders) {
-    const active = lukasReminders.filter(r => !r.fired);
-    if (active.length === 0) {
-      handleAssistantResponse("You have no active reminders, Commander.");
-    } else {
-      const listText = active.map((r, i) => {
-        const t = new Date(r.fireAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        return `${i + 1}. ${r.text} — at ${t}`;
-      }).join('. ');
-      handleAssistantResponse(`You have ${active.length} active reminder${active.length > 1 ? 's' : ''}. ${listText}`);
-    }
-    return;
-  }
-
-  if (isReminderCmd) {
-    // Check if the command already has time + text inline: "remind me in 5 minutes to go home"
-    const inlineTime = parseReminderTime(cmd);
-    const inlineText = extractReminderText(rawCommand);
-    
-    if (inlineTime && inlineText && inlineText !== 'Reminder') {
-      // Full inline command — set it directly
-      addReminder(inlineText, inlineTime);
-      const timeStr = inlineTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      handleAssistantResponse(`Reminder set: "${inlineText}" — I'll alert you at ${timeStr}, Commander.`);
-      return;
-    }
-    
-    if (inlineTime && (!inlineText || inlineText === 'Reminder')) {
-      // Has time but no label — ask what the reminder is about
-      activeFollowUp = { type: 'reminder_input', time: inlineTime };
-      handleAssistantResponse("What should I remind you about, Commander?");
-      return;
-    }
-    
-    if (!inlineTime && inlineText && inlineText !== 'Reminder') {
-      // Has label but no time — default to 5 minutes
-      const defaultTime = new Date(Date.now() + 5 * 60000);
-      addReminder(inlineText, defaultTime);
-      const timeStr = defaultTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      handleAssistantResponse(`Reminder set: "${inlineText}" — defaulting to 5 minutes from now at ${timeStr}, Commander.`);
-      return;
-    }
-    
-    // Just "set a reminder" with nothing else — ask what
-    activeFollowUp = { type: 'reminder_input' };
-    handleAssistantResponse("What would you like to be reminded about, Commander?");
-    return;
-  }
-  // ═══════════════════ END REMINDER DETECTION ═══════════════════
-
-  diag.logToTerminal("[AI CORE] Parsing token patterns & entities...", "info");
-
-  // TIME / DATE COMMAND INTENT
-  let isTimeQuery = false;
-  let isDateQuery = false;
-  
-  const weatherKeywords = ["weather", "forecast", "raining", "snowing", "climate", "conditions", "rain", "snow", "wind", "precipitation", "shower", "cloudy", "sunny", "clear", "temp", "temperature", "hot", "cold"];
-  const hasAutomationOrWeatherKeywords = weatherKeywords.some(w => cmd.includes(w)) || cmd.includes("light") || cmd.includes("lock") || cmd.includes("routine") || cmd.includes("music") || cmd.includes("song") || cmd.includes("play") || cmd.includes("pause") || cmd.includes("cctv");
-  
-  if (!hasAutomationOrWeatherKeywords) {
-    if (/\btime\b/i.test(cmd) && (cmd.includes("what") || cmd.includes("tell") || cmd.includes("current") || cmd.includes("now"))) {
-      isTimeQuery = true;
-    }
-    if ((/\bdate\b/i.test(cmd) || /\bday\b/i.test(cmd) || /\bmonth\b/i.test(cmd) || /\byear\b/i.test(cmd) || cmd.includes("weekday")) && (cmd.includes("what") || cmd.includes("tell") || cmd.includes("current") || cmd.includes("today") || cmd.includes("now"))) {
-      isDateQuery = true;
-    }
-  }
-  
-  if (isTimeQuery) {
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    diag.logToTerminal(`[TIME] Retrieving local system clock: ${timeStr}`, "info");
-    setTimeout(() => {
-      handleAssistantResponse(`The current system time is ${timeStr}.`);
-    }, 200);
-    return;
-  }
-
-  if (isDateQuery) {
-    const now = new Date();
-    const dateStr = now.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    diag.logToTerminal(`[DATE] Retrieving local system calendar: ${dateStr}`, "info");
-    setTimeout(() => {
-      handleAssistantResponse(`Today is ${dateStr}.`);
-    }, 200);
-    return;
-  }
-
-  // WEATHER COMMAND INTENT
-  let isWeatherQuery = false;
-  let weatherCity = "";
-  
-  const isOutdoorOrCity = cmd.includes("in") || cmd.includes("at") || cmd.includes("for") || cmd.includes("outside") || cmd.includes("outdoor") || cmd.includes("today") || cmd.includes("tomorrow") || cmd.includes("forecast") || weatherKeywords.some(w => cmd.includes(w));
-  const isClimateAdjustment = cmd.includes("set") || cmd.includes("turn") || cmd.includes("make") || cmd.includes("change") || cmd.includes("adjust") || cmd.includes("thermostat") || cmd.includes("up") || cmd.includes("down") || cmd.includes("increase") || cmd.includes("decrease") || cmd.includes("warmer") || cmd.includes("cooler");
-  const hasWeatherKeyword = weatherKeywords.some(w => cmd.includes(w)) && (isOutdoorOrCity && !isClimateAdjustment);
-
-  if (hasWeatherKeyword) {
-    isWeatherQuery = true;
-    const match = cmd.match(/(?:weather|temperature|temp|climate|forecast|raining|snowing|hot|cold|conditions|rain|snow|wind|precipitation|shower|cloudy|sunny|clear)\s+(?:in|at|for)\s+([a-zA-Z\s.-]+)/i);
-    if (match && match[1]) {
-      weatherCity = match[1].trim();
-    }
-  }
-
-  if (isWeatherQuery) {
-    const targetCity = weatherCity;
-    
-    if (!targetCity) {
-      // Direct coordinate lookup for "current location weather"
-      diag.logToTerminal("[WEATHER QUERY] Retrieving browser GPS coordinates for local forecast...", "info");
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          async (position) => {
-            const data = await fetchRealTimeWeather({
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-              name: "My Location"
-            });
-            handleWeatherResponse(data);
-          },
-          async (error) => {
-            const fallbackCity = getDefaultCityFromTimezone();
-            diag.logToTerminal(`[GPS] Geolocation failed (${error.message}). Checking fallback city: ${fallbackCity}...`, "warn");
-            const data = await fetchRealTimeWeather(fallbackCity);
-            handleWeatherResponse(data);
-          },
-          { timeout: 5000 }
-        );
-      } else {
-        const fallbackCity = getDefaultCityFromTimezone();
-        diag.logToTerminal("[GPS] Geolocation unsupported. Checking fallback city...", "warn");
-        fetchRealTimeWeather(fallbackCity).then(handleWeatherResponse);
-      }
-    } else {
-      // Specified city
-      setTimeout(async () => {
-        const data = await fetchRealTimeWeather(targetCity);
-        handleWeatherResponse(data);
-      }, 200);
-    }
-    return;
-  }
-
-  // CRYPTO SPOT RATE INTENT
-  let isCryptoQuery = false;
-  let cryptoAsset = "";
-  if (cmd.includes("bitcoin") || cmd.includes("btc")) {
-    isCryptoQuery = true;
-    cryptoAsset = "BTC";
-  } else if (cmd.includes("ethereum") || cmd.includes("eth")) {
-    isCryptoQuery = true;
-    cryptoAsset = "ETH";
-  } else if (cmd.includes("solana") || cmd.includes("sol")) {
-    isCryptoQuery = true;
-    cryptoAsset = "SOL";
-  }
-
-  if (isCryptoQuery) {
-    setTimeout(async () => {
-      diag.logToTerminal(`[CRYPTO] Fetching spot rate for ${cryptoAsset}...`, "info");
-      try {
-        const response = await fetch(`https://api.coinbase.com/v2/prices/${cryptoAsset}-USD/spot`);
-        if (response.ok) {
-          const data = await response.json();
-          const price = parseFloat(data.data.amount).toLocaleString([], { style: 'currency', currency: 'USD' });
-          handleAssistantResponse(`The current exchange rate for ${cryptoAsset === 'BTC' ? 'Bitcoin' : cryptoAsset === 'ETH' ? 'Ethereum' : 'Solana'} is ${price} USD.`);
-        } else {
-          handleAssistantResponse(`I was unable to retrieve the exchange rate for ${cryptoAsset}.`);
-        }
-      } catch (e) {
-        console.warn("Crypto rate fetch failed:", e);
-        handleAssistantResponse(`Connection error to the digital exchange service.`);
-      }
-    }, 200);
-    return;
-  }
-
-  // INTERNET SEARCH INTENT
-  let isSearchQuery = false;
-  let searchQuery = "";
-  
-  if (cmd.startsWith("what is ") || cmd.startsWith("what's ")) {
-    isSearchQuery = true;
-    searchQuery = rawCommand.substring(cmd.indexOf("is ") + 3).trim();
-  } else if (cmd.startsWith("who is ") || cmd.startsWith("who's ")) {
-    isSearchQuery = true;
-    searchQuery = rawCommand.substring(cmd.indexOf("is ") + 3).trim();
-  } else if (cmd.startsWith("tell me about ")) {
-    isSearchQuery = true;
-    searchQuery = rawCommand.substring(cmd.indexOf("about ") + 6).trim();
-  } else if (cmd.startsWith("search for ") || cmd.startsWith("search ")) {
-    isSearchQuery = true;
-    searchQuery = rawCommand.substring(cmd.indexOf("search ") + (cmd.startsWith("search for ") ? 11 : 7)).trim();
-  } else if (cmd.startsWith("define ") || cmd.startsWith("explain ")) {
-    isSearchQuery = true;
-    searchQuery = rawCommand.substring(cmd.indexOf(" ") + 1).trim();
-  } else if (cmd.startsWith("information on ") || cmd.startsWith("information about ")) {
-    isSearchQuery = true;
-    searchQuery = rawCommand.substring(cmd.indexOf(" ") + 1).trim();
-  }
-
-  if (isSearchQuery) {
-    diag.logToTerminal(`[INTERNET SEARCH] Querying Wikipedia databases for "${searchQuery}"...`, "info");
-    
-    const result = await searchInternet(searchQuery);
-    if (result) {
-      diag.logToTerminal(`[AI SEARCH] Found matching entry: "${result.title}"`, "info");
-      
-      // Split into sentences for spoken readout (limit to first two sentences)
-      const sentences = result.summary.split(/(?<=[.!?])\s+/);
-      const speechSummary = sentences.slice(0, 2).filter(s => s.trim().length > 0).join(" ");
-      
-      diag.logToTerminal(`[LUKAS REPLY] "${speechSummary}"`, 'info');
-      appendChatBubble(`${result.title}: ${result.summary}`, 'assistant', result.url);
-      voice.stopWakeWordListener();
-      voice.speak(speechSummary);
-    } else {
-      handleAssistantResponse(`I searched the internet for "${searchQuery}", but couldn't locate any matching records.`);
-    }
-    return;
-  }
-
-  // Parser Rules
+function executeLocalHomeControlFallback(rawCommand) {
+  const cmd = rawCommand.toLowerCase().trim();
   let responseText = "";
-  let handledBySearch = false;
   let isControlAction = false;
+
+  const colorMap = {
+    'red': '#ff0000', 'green': '#10b981', 'blue': '#3b82f6', 'purple': '#a855f7',
+    'cyan': '#00f0ff', 'orange': '#ff9f3b', 'white': '#ffffff', 'yellow': '#eab308',
+    'pink': '#ec4899', 'magenta': '#d946ef', 'lime': '#84cc16', 'teal': '#14b8a6',
+    'gold': '#f59e0b', 'crimson': '#e11d48'
+  };
 
   // Check if command references a dynamically registered device
   let dynamicMatch = null;
   const isGlobalCommand = cmd.includes('all') || cmd.includes('every') || cmd.includes('entire') || cmd.includes('house');
     
-    if (!isGlobalCommand) {
-      for (const dev of home.dynamicDevices) {
-        const devNameLower = dev.name.toLowerCase();
-        // Look for match of complete name or principal keyword
-        if (cmd.includes(devNameLower) || (devNameLower.split(' ').length > 1 && devNameLower.split(' ').some(word => word.length > 4 && cmd.includes(word)))) {
-          const isLegacy = ["livingRoomLight", "bedroomLight", "kitchenLight", "outdoorLock"].includes(dev.id);
-          if (!isLegacy) {
-            dynamicMatch = dev;
-            break;
-          }
-        }
-      }
-    }
-
-    if (!dynamicMatch && !isGlobalCommand) {
-      // Secondary fallback match checking principal nouns
-      for (const dev of home.dynamicDevices) {
+  if (!isGlobalCommand) {
+    for (const dev of home.dynamicDevices) {
+      const devNameLower = dev.name.toLowerCase();
+      if (cmd.includes(devNameLower) || (devNameLower.split(' ').length > 1 && devNameLower.split(' ').some(word => word.length > 4 && cmd.includes(word)))) {
         const isLegacy = ["livingRoomLight", "bedroomLight", "kitchenLight", "outdoorLock"].includes(dev.id);
-        if (isLegacy) continue;
-        const words = dev.name.toLowerCase().split(' ');
-        const keyWords = words.filter(w => !['smart', 'node', 'device', 'the', 'light', 'lock', 'room'].includes(w));
-        if (keyWords.some(kw => cmd.includes(kw))) {
+        if (!isLegacy) {
           dynamicMatch = dev;
           break;
         }
       }
     }
+  }
 
-    if (dynamicMatch) {
-      const turnOn = /\bon\b/.test(cmd) || cmd.includes('activate') || cmd.includes('enable') || cmd.includes('start') || cmd.includes('turn on') || cmd.includes('open');
-      const turnOff = /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('deactivate') || cmd.includes('disable') || cmd.includes('shutdown') || cmd.includes('stop') || cmd.includes('turn off') || cmd.includes('close') || cmd.includes('lock');
-      
-      const updates = {};
-      let actionLabel = "";
-      
-      if (dynamicMatch.category === 'security') {
-        if (turnOn) {
-          updates.locked = false;
-          actionLabel = "unlocked";
-        } else if (turnOff) {
-          updates.locked = true;
-          actionLabel = "locked and secured";
-        } else {
-          updates.locked = !dynamicMatch.locked;
-          actionLabel = !dynamicMatch.locked ? "locked and secured" : "unlocked";
-        }
+  if (!dynamicMatch && !isGlobalCommand) {
+    for (const dev of home.dynamicDevices) {
+      const isLegacy = ["livingRoomLight", "bedroomLight", "kitchenLight", "outdoorLock"].includes(dev.id);
+      if (isLegacy) continue;
+      const words = dev.name.toLowerCase().split(' ');
+      const keyWords = words.filter(w => !['smart', 'node', 'device', 'the', 'light', 'lock', 'room'].includes(w));
+      if (keyWords.some(kw => cmd.includes(kw))) {
+        dynamicMatch = dev;
+        break;
+      }
+    }
+  }
+
+  if (dynamicMatch) {
+    const turnOn = /\bon\b/.test(cmd) || cmd.includes('activate') || cmd.includes('enable') || cmd.includes('start') || cmd.includes('turn on') || cmd.includes('open');
+    const turnOff = /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('deactivate') || cmd.includes('disable') || cmd.includes('shutdown') || cmd.includes('stop') || cmd.includes('turn off') || cmd.includes('close') || cmd.includes('lock');
+    
+    const updates = {};
+    let actionLabel = "";
+    
+    if (dynamicMatch.category === 'security') {
+      if (turnOn) {
+        updates.locked = false;
+        actionLabel = "unlocked";
+      } else if (turnOff) {
+        updates.locked = true;
+        actionLabel = "locked and secured";
       } else {
-        if (turnOn) {
+        updates.locked = !dynamicMatch.locked;
+        actionLabel = !dynamicMatch.locked ? "locked and secured" : "unlocked";
+      }
+    } else {
+      if (turnOn) {
+        updates.on = true;
+        actionLabel = "activated";
+      } else if (turnOff) {
+        updates.on = false;
+        actionLabel = "deactivated";
+      } else {
+        updates.on = !dynamicMatch.on;
+        actionLabel = !dynamicMatch.on ? "activated" : "deactivated";
+      }
+      
+      if (dynamicMatch.category === 'light') {
+        const numbers = cmd.match(/\d+/);
+        if (numbers) {
+          updates.brightness = Math.min(100, Math.max(10, parseInt(numbers[0])));
           updates.on = true;
-          actionLabel = "activated";
-        } else if (turnOff) {
-          updates.on = false;
-          actionLabel = "deactivated";
-        } else {
-          updates.on = !dynamicMatch.on;
-          actionLabel = !dynamicMatch.on ? "activated" : "deactivated";
+          actionLabel = `activated at ${updates.brightness}% brightness`;
         }
         
-        if (dynamicMatch.category === 'light') {
-          const numbers = cmd.match(/\d+/);
-          if (numbers) {
-            updates.brightness = Math.min(100, Math.max(10, parseInt(numbers[0])));
-            updates.on = true;
-            actionLabel = `activated at ${updates.brightness}% brightness`;
-          }
-          
-          let hexColor = null;
-          let colorLabel = "";
-          if (cmd.includes('red')) { hexColor = "#ff0000"; colorLabel = "crimson red"; }
-          else if (cmd.includes('green')) { hexColor = "#10b981"; colorLabel = "emerald green"; }
-          else if (cmd.includes('blue')) { hexColor = "#3b82f6"; colorLabel = "royal blue"; }
-          else if (cmd.includes('purple')) { hexColor = "#a855f7"; colorLabel = "purple"; }
-          else if (cmd.includes('cyan')) { hexColor = "#00f0ff"; colorLabel = "neon cyan"; }
-          else if (cmd.includes('orange')) { hexColor = "#ff9f3b"; colorLabel = "amber orange"; }
-          else if (cmd.includes('white')) { hexColor = "#ffffff"; colorLabel = "cool white"; }
-          
-          if (hexColor) {
-            updates.color = hexColor;
-            updates.on = true;
-            actionLabel += (actionLabel ? " and set to " : "activated and set to ") + colorLabel;
-          }
+        let hexColor = null;
+        let colorLabel = "";
+        if (cmd.includes('red')) { hexColor = "#ff0000"; colorLabel = "crimson red"; }
+        else if (cmd.includes('green')) { hexColor = "#10b981"; colorLabel = "emerald green"; }
+        else if (cmd.includes('blue')) { hexColor = "#3b82f6"; colorLabel = "royal blue"; }
+        else if (cmd.includes('purple')) { hexColor = "#a855f7"; colorLabel = "purple"; }
+        else if (cmd.includes('cyan')) { hexColor = "#00f0ff"; colorLabel = "neon cyan"; }
+        else if (cmd.includes('orange')) { hexColor = "#ff9f3b"; colorLabel = "amber orange"; }
+        else if (cmd.includes('white')) { hexColor = "#ffffff"; colorLabel = "cool white"; }
+        
+        if (hexColor) {
+          updates.color = hexColor;
+          updates.on = true;
+          actionLabel += (actionLabel ? " and set to " : "activated and set to ") + colorLabel;
         }
       }
-      
-      home.setDeviceState(dynamicMatch.id, updates);
-      responseText = `Understood. I have successfully ${actionLabel} the ${dynamicMatch.name} in the ${dynamicMatch.zone}.`;
-      diag.logToTerminal(`[AI VOICE CONTROL] Dynamic device match: ${dynamicMatch.name} -> Updates applied: ${JSON.stringify(updates)}`, 'info');
-      
-      handleAssistantResponse(responseText, true);
-      return;
     }
     
-    // LIGHTS DIRECTIVES
-    const isRoomCommand = cmd.includes('living') || cmd.includes('bedroom') || cmd.includes('kitchen') || cmd.includes('salon') || cmd.includes('cook') || cmd.includes('sleep');
-    const isGeneralLightCommand = cmd.includes('light') || cmd.includes('lamp') || cmd.includes('illumination') || cmd.includes('bulb') || cmd.includes('led');
-    const isColor = cmd.includes('color') || cmd.includes('colour') || Object.keys(colorMap).some(name => cmd.includes(name));
+    home.setDeviceState(dynamicMatch.id, updates);
+    responseText = `Understood. I have successfully ${actionLabel} the ${dynamicMatch.name} in the ${dynamicMatch.zone}.`;
+    diag.logToTerminal(`[AI VOICE CONTROL] Dynamic device match: ${dynamicMatch.name} -> Updates applied: ${JSON.stringify(updates)}`, 'info');
     
-    if (isGeneralLightCommand || (isRoomCommand && (/\bon\b/.test(cmd) || /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('dim') || cmd.includes('brightness') || cmd.includes('color') || cmd.includes('colour') || cmd.includes('percent') || cmd.includes('%') || isColor))) {
-      let zone = null;
-      let zoneLabel = "";
-      if (cmd.includes('living') || cmd.includes('salon')) { zone = DEVICES.LIVING_ROOM; zoneLabel = "Living Room"; }
-      else if (cmd.includes('bedroom') || cmd.includes('sleep')) { zone = DEVICES.BEDROOM; zoneLabel = "Bedroom"; }
-      else if (cmd.includes('kitchen') || cmd.includes('cook')) { zone = DEVICES.KITCHEN; zoneLabel = "Kitchen"; }
-      
-      const turnOn = /\bon\b/.test(cmd) || cmd.includes('activate') || cmd.includes('enable') || cmd.includes('start');
-      const turnOff = /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('deactivate') || cmd.includes('disable') || cmd.includes('shutdown') || cmd.includes('stop');
-      const isDimming = cmd.includes('dim') || cmd.includes('percent') || cmd.includes('%') || cmd.includes('brightness') || cmd.includes('intensity');
+    handleAssistantResponse(responseText, true);
+    return;
+  }
+  
+  // LIGHTS DIRECTIVES
+  const isRoomCommand = cmd.includes('living') || cmd.includes('bedroom') || cmd.includes('kitchen') || cmd.includes('salon') || cmd.includes('cook') || cmd.includes('sleep');
+  const isGeneralLightCommand = cmd.includes('light') || cmd.includes('lamp') || cmd.includes('illumination') || cmd.includes('bulb') || cmd.includes('led');
+  const isColor = cmd.includes('color') || cmd.includes('colour') || Object.keys(colorMap).some(name => cmd.includes(name));
+  
+  if (isGeneralLightCommand || (isRoomCommand && (/\bon\b/.test(cmd) || /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('dim') || cmd.includes('brightness') || cmd.includes('color') || cmd.includes('colour') || cmd.includes('percent') || cmd.includes('%') || isColor))) {
+    let zone = null;
+    let zoneLabel = "";
+    if (cmd.includes('living') || cmd.includes('salon')) { zone = DEVICES.LIVING_ROOM; zoneLabel = "Living Room"; }
+    else if (cmd.includes('bedroom') || cmd.includes('sleep')) { zone = DEVICES.BEDROOM; zoneLabel = "Bedroom"; }
+    else if (cmd.includes('kitchen') || cmd.includes('cook')) { zone = DEVICES.KITCHEN; zoneLabel = "Kitchen"; }
+    
+    const turnOn = /\bon\b/.test(cmd) || cmd.includes('activate') || cmd.includes('enable') || cmd.includes('start');
+    const turnOff = /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('deactivate') || cmd.includes('disable') || cmd.includes('shutdown') || cmd.includes('stop');
+    const isDimming = cmd.includes('dim') || cmd.includes('percent') || cmd.includes('%') || cmd.includes('brightness') || cmd.includes('intensity');
 
-      if (zone) {
-        isControlAction = true;
-        if (turnOn) {
-          home.setDeviceState(zone, { on: true });
-          responseText = `Perfect, I have activated the lighting grid in the ${zoneLabel}.`;
-        } else if (turnOff) {
-          home.setDeviceState(zone, { on: false });
-          responseText = `Acknowledged. Deactivating lighting systems in the ${zoneLabel}.`;
-        } else if (isDimming) {
-          // Parse brightness percentage
-          const numbers = cmd.match(/\d+/);
-          const percentVal = numbers ? parseInt(numbers[0]) : 50;
-          home.setDeviceState(zone, { on: true, brightness: percentVal });
-          responseText = `Configured the ${zoneLabel} lights brightness capacity to ${percentVal} percent.`;
-        } else if (isColor) {
-          let hexColor = null;
-          let colorLabel = "";
-          for (const [name, hex] of Object.entries(colorMap)) {
-            if (cmd.includes(name)) {
-              hexColor = hex;
-              colorLabel = name;
-              break;
-            }
+    if (zone) {
+      isControlAction = true;
+      if (turnOn) {
+        home.setDeviceState(zone, { on: true });
+        responseText = `Perfect, I have activated the lighting grid in the ${zoneLabel}.`;
+      } else if (turnOff) {
+        home.setDeviceState(zone, { on: false });
+        responseText = `Acknowledged. Deactivating lighting systems in the ${zoneLabel}.`;
+      } else if (isDimming) {
+        const numbers = cmd.match(/\d+/);
+        const percentVal = numbers ? parseInt(numbers[0]) : 50;
+        home.setDeviceState(zone, { on: true, brightness: percentVal });
+        responseText = `Configured the ${zoneLabel} lights brightness capacity to ${percentVal} percent.`;
+      } else if (isColor) {
+        let hexColor = null;
+        let colorLabel = "";
+        for (const [name, hex] of Object.entries(colorMap)) {
+          if (cmd.includes(name)) {
+            hexColor = hex;
+            colorLabel = name;
+            break;
           }
-          if (!hexColor) {
-            hexColor = "#ffffff";
-            colorLabel = "white";
-          }
+        }
+        if (!hexColor) {
+          hexColor = "#ffffff";
+          colorLabel = "white";
+        }
 
-          home.setDeviceState(zone, { on: true, color: hexColor });
-          responseText = `Affirmative. Setting the ${zoneLabel} spectrum overlay to ${colorLabel}.`;
-        } else {
-          // Toggle light if unspecified
-          const currentState = home.state.devices[zone].on;
-          home.setDeviceState(zone, { on: !currentState });
-          responseText = `Toggling the ${zoneLabel} lighting grid ${!currentState ? 'ON' : 'OFF'}.`;
+        home.setDeviceState(zone, { on: true, color: hexColor });
+        responseText = `Affirmative. Setting the ${zoneLabel} spectrum overlay to ${colorLabel}.`;
+      } else {
+        const currentState = home.state.devices[zone].on;
+        home.setDeviceState(zone, { on: !currentState });
+        responseText = `Toggling the ${zoneLabel} lighting grid ${!currentState ? 'ON' : 'OFF'}.`;
+      }
+    } else {
+      // Global light controls
+      if (turnOn) {
+        isControlAction = true;
+        home.setDeviceState(DEVICES.LIVING_ROOM, { on: true });
+        home.setDeviceState(DEVICES.BEDROOM, { on: true });
+        home.setDeviceState(DEVICES.KITCHEN, { on: true });
+        for (const dev of home.dynamicDevices) {
+          if (dev.category === 'light') home.setDeviceState(dev.id, { on: true });
         }
-      } else {
-        // Global light controls
-        if (turnOn) {
-          isControlAction = true;
-          home.setDeviceState(DEVICES.LIVING_ROOM, { on: true });
-          home.setDeviceState(DEVICES.BEDROOM, { on: true });
-          home.setDeviceState(DEVICES.KITCHEN, { on: true });
-          // Turn on all dynamic lights as well
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light') {
-              home.setDeviceState(dev.id, { on: true });
-            }
-          }
-          responseText = "Understood. Re-initializing all internal lighting arrays.";
-        } else if (turnOff) {
-          isControlAction = true;
-          home.setDeviceState(DEVICES.LIVING_ROOM, { on: false });
-          home.setDeviceState(DEVICES.BEDROOM, { on: false });
-          home.setDeviceState(DEVICES.KITCHEN, { on: false });
-          // Turn off all dynamic lights as well
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light') {
-              home.setDeviceState(dev.id, { on: false });
-            }
-          }
-          responseText = "Understood. Powering down all lighting grids.";
-        } else if (isColor) {
-          isControlAction = true;
-          let hexColor = null;
-          let colorLabel = "";
-          for (const [name, hex] of Object.entries(colorMap)) {
-            if (cmd.includes(name)) {
-              hexColor = hex;
-              colorLabel = name;
-              break;
-            }
-          }
-          if (!hexColor) {
-            hexColor = "#ffffff";
-            colorLabel = "white";
-          }
-          
-          home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, color: hexColor });
-          home.setDeviceState(DEVICES.BEDROOM, { on: true, color: hexColor });
-          home.setDeviceState(DEVICES.KITCHEN, { on: true, color: hexColor });
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light') {
-              home.setDeviceState(dev.id, { on: true, color: hexColor });
-            }
-          }
-          responseText = `Affirmative. Changing all active light spectrums to ${colorLabel}.`;
-        } else if (isDimming) {
-          isControlAction = true;
-          const numbers = cmd.match(/\d+/);
-          const percentVal = numbers ? parseInt(numbers[0]) : 50;
-          
-          home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, brightness: percentVal });
-          home.setDeviceState(DEVICES.BEDROOM, { on: true, brightness: percentVal });
-          home.setDeviceState(DEVICES.KITCHEN, { on: true, brightness: percentVal });
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light') {
-              home.setDeviceState(dev.id, { on: true, brightness: percentVal });
-            }
-          }
-          responseText = `Acknowledged. Adjusting all active light brightness levels to ${percentVal} percent.`;
-        } else if (cmd.includes('all') || cmd.includes('every') || cmd.includes('entire') || cmd.includes('house') || cmd.includes('toggle') || cmd.includes('switch')) {
-          isControlAction = true;
-          const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
-          const newState = !isAnyOn;
-          home.setDeviceState(DEVICES.LIVING_ROOM, { on: newState });
-          home.setDeviceState(DEVICES.BEDROOM, { on: newState });
-          home.setDeviceState(DEVICES.KITCHEN, { on: newState });
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light') {
-              home.setDeviceState(dev.id, { on: newState });
-            }
-          }
-          responseText = `Toggling all lighting grids ${newState ? 'ON' : 'OFF'}.`;
-        } else {
-          responseText = "Which zone lights would you like me to adjust? Living Room, Bedroom, or Kitchen?";
+        responseText = "Understood. Re-initializing all internal lighting arrays.";
+      } else if (turnOff) {
+        isControlAction = true;
+        home.setDeviceState(DEVICES.LIVING_ROOM, { on: false });
+        home.setDeviceState(DEVICES.BEDROOM, { on: false });
+        home.setDeviceState(DEVICES.KITCHEN, { on: false });
+        for (const dev of home.dynamicDevices) {
+          if (dev.category === 'light') home.setDeviceState(dev.id, { on: false });
         }
-      }
-    }
-    
-    // CLIMATE DIRECTIVES
-    else if (cmd.includes('temp') || cmd.includes('temperature') || cmd.includes('climate') || cmd.includes('thermostat') || cmd.includes('heating') || cmd.includes('cooling') || cmd.includes('warm') || cmd.includes('cold')) {
-      const numbers = cmd.match(/\d+/);
-      
-      if (numbers) {
-        const targetTemp = parseInt(numbers[0]);
-        home.setTargetTemperature(targetTemp);
-        responseText = `Adjusting climate modules. Eco-Thermostat target set to ${targetTemp} degrees Celsius.`;
+        responseText = "Understood. Powering down all lighting grids.";
+      } else if (isColor) {
         isControlAction = true;
-      } else if (cmd.includes('cool')) {
-        home.setClimateMode('cool');
-        responseText = "Configuring eco-thermostat matrix to COOLING cycles.";
-        isControlAction = true;
-      } else if (cmd.includes('heat') || cmd.includes('warm')) {
-        home.setClimateMode('heat');
-        responseText = "Configuring eco-thermostat matrix to HEATING cycles.";
-        isControlAction = true;
-      } else if (cmd.includes('eco') || cmd.includes('green') || cmd.includes('power saving')) {
-        home.setClimateMode('eco');
-        responseText = "Adjusting HVAC to optimal ECO energy conservation thresholds.";
-        isControlAction = true;
-      } else {
-        responseText = `Current indoor sensor reading is ${home.state.climate.indoorTemp}°C, target set to ${home.state.climate.targetTemp}°C in ${home.state.climate.mode} mode.`;
-      }
-    }
-    
-    else if (cmd.includes('lock') || cmd.includes('gate') || cmd.includes('door') || cmd.includes('entrance')) {
-      isControlAction = true;
-      const lockUnlock = cmd.includes('unlock') || cmd.includes('open') || cmd.includes('release') || cmd.includes('deactivate');
-      
-      if (lockUnlock) {
-        home.setDeviceState(DEVICES.OUTDOOR, { locked: false });
-        responseText = "Security locks disengaged. Main entryway is now unlocked.";
-      } else {
-        home.setDeviceState(DEVICES.OUTDOOR, { locked: true });
-        responseText = "Perimeter locks engaged. Main entryway secured.";
-      }
-    }
-    
-    // ROUTINES CONTROL DIRECTIVES
-    else if (cmd.includes('morning') || cmd.includes('wake up') || cmd.includes('sunrise')) {
-      isControlAction = true;
-      triggerRoutineEffect(ROUTINES.MORNING);
-      responseText = "Vocalizing morning sequence. Thermostat and lighting profiles loaded for start of day.";
-    } 
-    else if (cmd.includes('cinema') || cmd.includes('movie') || cmd.includes('theater')) {
-      isControlAction = true;
-      triggerRoutineEffect(ROUTINES.CINEMA);
-      responseText = "Initiating Cinema Mode. Ambient lights dimmed, secondary grids disabled. Enjoy your feature.";
-    } 
-    else if (cmd.includes('eco') || cmd.includes('green') || cmd.includes('saving')) {
-      isControlAction = true;
-      triggerRoutineEffect(ROUTINES.ECO);
-      responseText = "Power saving eco schedules initiated. Reducing carbon signature profiles.";
-    } 
-    else if (cmd.includes('lockdown') || cmd.includes('emergency') || cmd.includes('threat') || cmd.includes('breach') || cmd.includes('danger')) {
-      isControlAction = true;
-      triggerRoutineEffect(ROUTINES.LOCKDOWN);
-      responseText = "WARNING! SECURITY LOCKDOWN ACTIVATED. All portals secured, emergency beacons flashing red.";
-    }
-    
-    // MEDIA DIRECTIVES
-    else if (cmd.includes('music') || cmd.includes('song') || cmd.includes('audio') || cmd.includes('play') || cmd.includes('pause') || cmd.includes('media')) {
-      isControlAction = true;
-      if (cmd.includes('pause') || cmd.includes('stop')) {
-        isPlaying = false;
-        updateMediaPlayButton(false);
-        audioPlayer.pause();
-        responseText = "Ambient audio feeds paused.";
-      } else if (cmd.includes('next') || cmd.includes('forward')) {
-        currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
-        isPlaying = true;
-        updateMediaWidget();
-        playTrack();
-        responseText = `Skipping to next stream: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
-      } else if (cmd.includes('prev') || cmd.includes('back')) {
-        currentTrackIndex = (currentTrackIndex - 1 + playlist.length) % playlist.length;
-        isPlaying = true;
-        updateMediaWidget();
-        playTrack();
-        responseText = `Reverting to previous stream: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
-      } else {
-        // Check if user specifically requested a genre or track name in their command
-        let foundIndex = -1;
-        if (cmd.includes('bollywood') || cmd.includes('hindi') || cmd.includes('desi') || cmd.includes('indian')) {
-          foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('bollywood') || t.title.toLowerCase().includes('ghazal'));
-        } else if (cmd.includes('kannada') || cmd.includes('karnataka') || cmd.includes('bangalore') || cmd.includes('bengaluru')) {
-          foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('kannada'));
-        } else if (cmd.includes('synthwave') || cmd.includes('viper')) {
-          foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('viper'));
-        } else if (cmd.includes('cyberpunk') || cmd.includes('outfoxing')) {
-          foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('outfoxing'));
-        } else if (cmd.includes('ambient') || cmd.includes('horizon')) {
-          foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('ambient'));
+        let hexColor = null;
+        let colorLabel = "";
+        for (const [name, hex] of Object.entries(colorMap)) {
+          if (cmd.includes(name)) {
+            hexColor = hex;
+            colorLabel = name;
+            break;
+          }
+        }
+        if (!hexColor) {
+          hexColor = "#ffffff";
+          colorLabel = "white";
         }
         
-        if (foundIndex !== -1) {
-          currentTrackIndex = foundIndex;
+        home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, color: hexColor });
+        home.setDeviceState(DEVICES.BEDROOM, { on: true, color: hexColor });
+        home.setDeviceState(DEVICES.KITCHEN, { on: true, color: hexColor });
+        for (const dev of home.dynamicDevices) {
+          if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, color: hexColor });
         }
+        responseText = `Affirmative. Changing all active light spectrums to ${colorLabel}.`;
+      } else if (isDimming) {
+        isControlAction = true;
+        const numbers = cmd.match(/\d+/);
+        const percentVal = numbers ? parseInt(numbers[0]) : 50;
         
-        isPlaying = true;
-        updateMediaWidget();
-        playTrack();
-        responseText = `Playing requested stream: "${playlist[currentTrackIndex].title}" using ${activePlatform}.`;
-      }
-    }
-
-    // CCTV / CAMERA DIRECTIVES
-    else if (cmd.includes('cctv') || cmd.includes('camera') || cmd.includes('surveillance') || cmd.includes('feed') || cmd.includes('video') || cmd.includes('cam')) {
-      isControlAction = true;
-      const probeBtn = document.getElementById('cam1ProbeBtn');
-      if (probeBtn) {
-        probeBtn.click();
-        responseText = "Understood. Engaging camera matrix and initiating auto-probe sequence for CAM 01.";
+        home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, brightness: percentVal });
+        home.setDeviceState(DEVICES.BEDROOM, { on: true, brightness: percentVal });
+        home.setDeviceState(DEVICES.KITCHEN, { on: true, brightness: percentVal });
+        for (const dev of home.dynamicDevices) {
+          if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, brightness: percentVal });
+        }
+        responseText = `Acknowledged. Adjusting all active light brightness levels to ${percentVal} percent.`;
+      } else if (cmd.includes('all') || cmd.includes('every') || cmd.includes('entire') || cmd.includes('house') || cmd.includes('toggle') || cmd.includes('switch')) {
+        isControlAction = true;
+        const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
+        const newState = !isAnyOn;
+        home.setDeviceState(DEVICES.LIVING_ROOM, { on: newState });
+        home.setDeviceState(DEVICES.BEDROOM, { on: newState });
+        home.setDeviceState(DEVICES.KITCHEN, { on: newState });
+        for (const dev of home.dynamicDevices) {
+          if (dev.category === 'light') home.setDeviceState(dev.id, { on: newState });
+        }
+        responseText = `Toggling all lighting grids ${newState ? 'ON' : 'OFF'}.`;
       } else {
-        responseText = "Initiating camera feed diagnostics. Loading CAM 01 live video stream.";
+        responseText = "Which zone lights would you like me to adjust? Living Room, Bedroom, or Kitchen?";
       }
     }
-
-    // SYSTEM DIAGNOSTICS DIRECTIVES
-    else if (cmd.includes('status') || cmd.includes('diagnostic') || cmd.includes('health') || cmd.includes('report') || cmd.includes('system')) {
-      responseText = `Diagnostics: CPU Load at ${Math.round(diag.metrics.cpu)}%, Thermals stable at ${diag.metrics.temp.toFixed(1)}°C, Firewall Shield Integrity at ${diag.metrics.security.toFixed(1)}%. Core database is normal.`;
-      diag.logToTerminal("[AI CORE] Performing system diagnostic dump...", "info");
-      setTimeout(() => {
-        diag.logToTerminal(`&gt; CPU: ${diag.metrics.cpu.toFixed(1)}% | RAM: ${diag.metrics.ram.toFixed(1)}% | Core Temp: ${diag.metrics.temp.toFixed(1)}C`, 'info');
-        diag.logToTerminal(`&gt; Storage: 24.8TB Free | Network bandwidth: 1.2Gbps secure`, 'info');
-      }, 350);
-    }
+  }
+  
+  // CLIMATE DIRECTIVES
+  else if (cmd.includes('temp') || cmd.includes('temperature') || cmd.includes('climate') || cmd.includes('thermostat') || cmd.includes('heating') || cmd.includes('cooling') || cmd.includes('warm') || cmd.includes('cold')) {
+    const numbers = cmd.match(/\d+/);
     
-    // GENERAL CHAT GREETINGS
-    else if (/\bhello\b/i.test(cmd) || /\bhi\b/i.test(cmd) || /\bhey\b/i.test(cmd) || cmd.includes('lukas')) {
-      responseText = "System online. Greetings, Commander. Ready for instruction.";
-    } else if (cmd.includes('who are you') || cmd.includes('what is your name')) {
-      responseText = "I am LUKAS, a futuristic home automation and assistant core, specialized in managing your climate, security grids, and energy grids.";
-    } else if (cmd.includes('how are you')) {
-      responseText = "My processor arrays are functioning at optimal temperatures, and network packets are completely secure. Thank you for checking in, Commander.";
-    } else if (cmd.includes('thank') || cmd.includes('great') || cmd.includes('cool')) {
-      responseText = "At your service, Commander. Let me know if you require further neural subroutines.";
+    if (numbers) {
+      const targetTemp = parseInt(numbers[0]);
+      home.setTargetTemperature(targetTemp);
+      responseText = `Adjusting climate modules. Eco-Thermostat target set to ${targetTemp} degrees Celsius.`;
+      isControlAction = true;
+    } else if (cmd.includes('cool')) {
+      home.setClimateMode('cool');
+      responseText = "Configuring eco-thermostat matrix to COOLING cycles.";
+      isControlAction = true;
+    } else if (cmd.includes('heat') || cmd.includes('warm')) {
+      home.setClimateMode('heat');
+      responseText = "Configuring eco-thermostat matrix to HEATING cycles.";
+      isControlAction = true;
+    } else if (cmd.includes('eco') || cmd.includes('green') || cmd.includes('power saving')) {
+      home.setClimateMode('eco');
+      responseText = "Adjusting HVAC to optimal ECO energy conservation thresholds.";
+      isControlAction = true;
+    } else {
+      responseText = `Current indoor sensor reading is ${home.state.climate.indoorTemp}°C, target set to ${home.state.climate.targetTemp}°C in ${home.state.climate.mode} mode.`;
     }
+  }
+  
+  else if (cmd.includes('lock') || cmd.includes('gate') || cmd.includes('door') || cmd.includes('entrance')) {
+    isControlAction = true;
+    const lockUnlock = cmd.includes('unlock') || cmd.includes('open') || cmd.includes('release') || cmd.includes('deactivate');
     
-    // MICROPHONE SLEEP DIRECTIVE (Stop conversation, stop music, return to wake-word listen)
-    else if (cmd === 'stop' || cmd.includes('stop listening') || cmd.includes('go to sleep') || cmd.includes('stand down') || cmd.includes('deactivate voice') || cmd.includes('mute microphone')) {
-      isPassiveListenEnabled = true; // Keep passive wake-word monitoring active!
+    if (lockUnlock) {
+      home.setDeviceState(DEVICES.OUTDOOR, { locked: false });
+      responseText = "Security locks disengaged. Main entryway is now unlocked.";
+    } else {
+      home.setDeviceState(DEVICES.OUTDOOR, { locked: true });
+      responseText = "Perimeter locks engaged. Main entryway secured.";
+    }
+  }
+  
+  // ROUTINES CONTROL DIRECTIVES
+  else if (cmd.includes('morning') || cmd.includes('wake up') || cmd.includes('sunrise')) {
+    isControlAction = true;
+    triggerRoutineEffect(ROUTINES.MORNING);
+    responseText = "Vocalizing morning sequence. Thermostat and lighting profiles loaded for start of day.";
+  } 
+  else if (cmd.includes('cinema') || cmd.includes('movie') || cmd.includes('theater')) {
+    isControlAction = true;
+    triggerRoutineEffect(ROUTINES.CINEMA);
+    responseText = "Initiating Cinema Mode. Ambient lights dimmed, secondary grids disabled. Enjoy your feature.";
+  } 
+  else if (cmd.includes('eco') || cmd.includes('green') || cmd.includes('saving')) {
+    isControlAction = true;
+    triggerRoutineEffect(ROUTINES.ECO);
+    responseText = "Power saving eco schedules initiated. Reducing carbon signature profiles.";
+  } 
+  else if (cmd.includes('lockdown') || cmd.includes('emergency') || cmd.includes('threat') || cmd.includes('breach') || cmd.includes('danger')) {
+    isControlAction = true;
+    triggerRoutineEffect(ROUTINES.LOCKDOWN);
+    responseText = "WARNING! SECURITY LOCKDOWN ACTIVATED. All portals secured, emergency beacons flashing red.";
+  }
+  
+  // MEDIA DIRECTIVES
+  else if (cmd.includes('music') || cmd.includes('song') || cmd.includes('audio') || cmd.includes('play') || cmd.includes('pause') || cmd.includes('media')) {
+    isControlAction = true;
+    if (cmd.includes('pause') || cmd.includes('stop')) {
       isPlaying = false;
-      audioPlayer.pause();
       updateMediaPlayButton(false);
-      
-      if (window.speechSynthesis) window.speechSynthesis.cancel();
-      playShutdownBeep();
-      
-      diag.logToTerminal("[AI CORE] Conversation halted. Entering background standby.", "info");
-      
-      // Manually transition UI to PASSIVE LISTEN and start wake-word monitoring immediately
-      voiceStatusText.textContent = 'PASSIVE LISTEN';
-      voiceStatusText.style.color = 'var(--purple-neon)';
-      
-      setTimeout(() => {
-        voice.startWakeWordListener();
-      }, 1000);
-      
-      handledBySearch = true; // Bypasses handleAssistantResponse
-    }
-    
-    // FALLBACK
-    else {
-      handledBySearch = true;
-      const openaiApiKey = localStorage.getItem('openai_api_key');
-      const geminiApiKey = localStorage.getItem('gemini_api_key');
-      const hasAi = openaiApiKey || geminiApiKey || (window.puter && window.puter.ai);
-
-      if (hasAi) {
-        diag.logToTerminal(`[AI CORE] Querying Conversational AI response for: "${rawCommand}"...`, "info");
-        const chatPromise = openaiApiKey 
-          ? askOpenAIAssistant(rawCommand, openaiApiKey) 
-          : askGeminiAssistant(rawCommand, geminiApiKey);
-          
-        chatPromise.then(response => {
-          if (response) {
-            diag.logToTerminal(`[LUKAS REPLY] "${response}"`, 'info');
-            appendChatBubble(response, 'assistant');
-            voice.stopWakeWordListener();
-            voice.speak(response);
-          } else {
-            runWikipediaSearchFallback(rawCommand);
-          }
-        });
-      } else {
-        runWikipediaSearchFallback(rawCommand);
+      audioPlayer.pause();
+      responseText = "Ambient audio feeds paused.";
+    } else if (cmd.includes('next') || cmd.includes('forward')) {
+      currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
+      isPlaying = true;
+      updateMediaWidget();
+      playTrack();
+      responseText = `Skipping to next stream: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+    } else if (cmd.includes('prev') || cmd.includes('back')) {
+      currentTrackIndex = (currentTrackIndex - 1 + playlist.length) % playlist.length;
+      isPlaying = true;
+      updateMediaWidget();
+      playTrack();
+      responseText = `Reverting to previous stream: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+    } else {
+      let foundIndex = -1;
+      if (cmd.includes('bollywood') || cmd.includes('hindi') || cmd.includes('desi') || cmd.includes('indian')) {
+        foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('bollywood') || t.title.toLowerCase().includes('ghazal'));
+      } else if (cmd.includes('kannada') || cmd.includes('karnataka') || cmd.includes('bangalore') || cmd.includes('bengaluru')) {
+        foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('kannada'));
+      } else if (cmd.includes('synthwave') || cmd.includes('viper')) {
+        foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('viper'));
+      } else if (cmd.includes('cyberpunk') || cmd.includes('outfoxing')) {
+        foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('outfoxing'));
+      } else if (cmd.includes('ambient') || cmd.includes('horizon')) {
+        foundIndex = playlist.findIndex(t => t.title.toLowerCase().includes('ambient'));
       }
+      
+      if (foundIndex !== -1) {
+        currentTrackIndex = foundIndex;
+      }
+      
+      isPlaying = true;
+      updateMediaWidget();
+      playTrack();
+      responseText = `Playing requested stream: "${playlist[currentTrackIndex].title}" using ${activePlatform}.`;
     }
+  }
 
-    if (!handledBySearch) {
-      handleAssistantResponse(responseText, isControlAction);
+  // CCTV / CAMERA DIRECTIVES
+  else if (cmd.includes('cctv') || cmd.includes('camera') || cmd.includes('surveillance') || cmd.includes('feed') || cmd.includes('video') || cmd.includes('cam')) {
+    isControlAction = true;
+    const probeBtn = document.getElementById('cam1ProbeBtn');
+    if (probeBtn) {
+      probeBtn.click();
+      responseText = "Understood. Engaging camera matrix and initiating auto-probe sequence for CAM 01.";
+    } else {
+      responseText = "Initiating camera feed diagnostics. Loading CAM 01 live video stream.";
     }
-  } catch (err) {
-    console.error("Error in processCommand:", err);
-    diag.logToTerminal(`[AI CORE] Error during command execution: ${err.message}`, "error");
-    handleAssistantResponse("Sorry, I encountered an internal system error while executing that request.");
+  }
+
+  // SYSTEM DIAGNOSTICS DIRECTIVES
+  else if (cmd.includes('status') || cmd.includes('diagnostic') || cmd.includes('health') || cmd.includes('report') || cmd.includes('system')) {
+    responseText = `Diagnostics: CPU Load at ${Math.round(diag.metrics.cpu)}%, Thermals stable at ${diag.metrics.temp.toFixed(1)}°C, Firewall Shield Integrity at ${diag.metrics.security.toFixed(1)}%. Core database is normal.`;
+    diag.logToTerminal("[AI CORE] Performing system diagnostic dump...", "info");
+    setTimeout(() => {
+      diag.logToTerminal(`&gt; CPU: ${diag.metrics.cpu.toFixed(1)}% | RAM: ${diag.metrics.ram.toFixed(1)}% | Core Temp: ${diag.metrics.temp.toFixed(1)}C`, 'info');
+      diag.logToTerminal(`&gt; Storage: 24.8TB Free | Network bandwidth: 1.2Gbps secure`, 'info');
+    }, 350);
+  }
+  
+  // GENERAL CHAT GREETINGS
+  else if (/\bhello\b/i.test(cmd) || /\bhi\b/i.test(cmd) || /\bhey\b/i.test(cmd) || cmd.includes('lukas')) {
+    responseText = "System online. Greetings, Commander. Ready for instruction.";
+  } else if (cmd.includes('who are you') || cmd.includes('what is your name')) {
+    responseText = "I am LUKAS, a futuristic home automation and assistant core, specialized in managing your climate, security grids, and energy grids.";
+  } else if (cmd.includes('how are you')) {
+    responseText = "My processor arrays are functioning at optimal temperatures, and network packets are completely secure. Thank you for checking in, Commander.";
+  } else if (cmd.includes('thank') || cmd.includes('great') || cmd.includes('cool')) {
+    responseText = "At your service, Commander. Let me know if you require further neural subroutines.";
+  }
+
+  if (responseText) {
+    handleAssistantResponse(responseText, isControlAction);
   }
 }
 

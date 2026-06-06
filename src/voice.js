@@ -40,6 +40,7 @@ class LukasVoiceController {
     this.onSpeechDetected = null;
     
     this.preferredVoice = null;
+    this.dummyStream = null; // Keeps browser microphone hardware warm on mobile
     
     this.initSpeechSynthesis();
     this.initSpeechRecognition();
@@ -97,6 +98,20 @@ class LukasVoiceController {
         this.isRecognitionActive = false;
         this.isStopping = false;
         
+        // Prevent infinite restart-fail loops on mobile/Safari
+        if (this.consecutiveErrors >= 4) {
+          console.warn("[voice.js] Halting recognition restarts due to consecutive errors limit (consecutiveErrors=" + this.consecutiveErrors + ").");
+          this.isListeningForWakeWord = false;
+          this.isCommandListeningActive = false;
+          this.isLongConversation = false;
+          this.isListening = false;
+          this.pendingStart = false;
+          if (this.onRecognitionStateChange) {
+            this.onRecognitionStateChange('off', 'mic_suspended');
+          }
+          return;
+        }
+
         // If we are transitioning to a new mode, let the transition handle the restart
         if (this.isTransitioning) {
           console.log("[voice.js] Recognition ended during transition — deferring to transition handler.");
@@ -179,13 +194,21 @@ class LukasVoiceController {
             // Trigger speech end animations
             if (this.onSpeechEnd) this.onSpeechEnd();
             
+            // Transition to active command listening instead of wake word
+            this.isListeningForWakeWord = false;
+            this.isCommandListeningActive = true;
+            this.accumulatedSpeechText = "";
+            this.lastSessionTranscript = "";
+            
             // Stop and restart recognition to reset state
             try { this.recognition.stop(); } catch(e) {}
             setTimeout(() => {
               try { this.recognition.start(); } catch(e) {}
+              if (this.onWakeWordDetected) this.onWakeWordDetected(); // Wake up LUKAS UI!
             }, 100);
             return;
           }
+          return; // Ignore other sounds/echoes while LUKAS is speaking
         }
 
         // Keep track of the current session's latest transcript
@@ -402,9 +425,20 @@ class LukasVoiceController {
     }
   }
 
+  async warmUpMic() {
+    if (this.dummyStream) return;
+    try {
+      this.dummyStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      console.log("[voice.js] Microphone stream warmed up successfully.");
+    } catch (e) {
+      console.warn("[voice.js] Failed to warm up microphone:", e);
+    }
+  }
+
   // Continuous background listener for "Lukas" / "Alexa"
   startWakeWordListener() {
     if (!this.recognition) return;
+    this.warmUpMic(); // Keep hardware mic warm
     // Prevent double-start
     if (this.isListeningForWakeWord && this.isRecognitionActive) {
       console.log("[voice.js] Wake word listener already active, skipping.");
@@ -537,6 +571,7 @@ class LukasVoiceController {
     this.lastSessionTranscript = "";
     this.isTransitioning = true;
     this.cancelSpeech();
+    this.warmUpMic(); // Keep hardware mic warm
     
     if (this.isStopping || this.isRecognitionActive) {
       // Stop current recognition and pending-start will restart in command mode
