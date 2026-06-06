@@ -129,6 +129,7 @@ let currentTrackIndex = 0;
 let isPlaying = false;
 let isPassiveListenEnabled = true;
 let isWakingUp = false;
+let isProcessingCommand = false;
 let currentWeatherCity = "";
 let activeFollowUp = null;
 let conversationActive = false;   // TRUE while we keep mic hot after a voice exchange
@@ -582,6 +583,16 @@ function initializeDashboard() {
     renderDynamicDevices();
   }
 
+  // Auto-register LUKAS 4D Projector if missing
+  const hasProjector = home.dynamicDevices.some(d =>
+    d.category === 'projector'
+  );
+  if (!hasProjector) {
+    home.addDevice("LUKAS 4D Projector", "Living Room", "projector", "WiFi", "192.168.1.18", "demo");
+    diag.logToTerminal("[SYSTEM] Auto-registered LUKAS 4D Projector to registry.", "info");
+    renderDynamicDevices();
+  }
+
   // Wire User Interface events
   bindUIEvents();
 
@@ -684,30 +695,320 @@ function initParticleCanvas() {
   resize();
   window.addEventListener('resize', resize);
 
-  const particles = Array.from({ length: 70 }, () => ({
-    x: Math.random() * canvas.width,
-    y: Math.random() * canvas.height,
-    r: Math.random() * 1.2 + 0.3,
-    dx: (Math.random() - 0.5) * 0.25,
-    dy: (Math.random() - 0.5) * 0.25,
-    alpha: Math.random() * 0.5 + 0.1,
-    hue: Math.random() > 0.6 ? 180 : 270 // cyan or purple
+  const particles = Array.from({ length: 90 }, () => {
+    const x = Math.random() * canvas.width;
+    const y = Math.random() * canvas.height;
+    return {
+      x: x,
+      y: y,
+      baseY: y,
+      waveOffset: Math.random() * Math.PI * 2,
+      waveAmplitude: Math.random() * 40 + 10,
+      r: Math.random() * 1.5 + 0.4,
+      dx: (Math.random() - 0.5) * 0.4,
+      dy: (Math.random() - 0.5) * 0.4,
+      alpha: Math.random() * 0.6 + 0.1,
+      hue: Math.random() > 0.6 ? 180 : 270 // cyan or purple
+    };
+  });
+
+  const ripples = [];
+  const telemetryBlocks = Array.from({ length: 5 }, () => ({
+    x: Math.random() * 200 - 100,
+    y: Math.random() * 200 - 100,
+    text: '',
+    ticks: 0,
+    maxTicks: Math.floor(Math.random() * 100) + 50
   }));
+
+  const telemetryLabels = [
+    'SYS_GRID: ON', 'LNK_STABLE: 94%', '4D_PROJ: ACTIVE', 'BANDWIDTH: 100Gbps', 
+    'SYS_BOOT: 100%', 'TEMP_CORE: 22.4C', 'SHIELD: ARMED', 'VOLT_STABLE: 1.2V',
+    'FPS: 60', 'RESOL_CORE: 4K', 'AUDIO: ACTIVE', 'CMD: IDLE', 'LOCKS: SECURE'
+  ];
 
   function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    particles.forEach(p => {
-      p.x += p.dx;
-      p.y += p.dy;
+
+    // Calculate dynamic core center point based on actual visual position
+    const coreBtn = document.getElementById('lukasCoreBtn');
+    let coreX = canvas.width * 0.15; // default fallback (approx center of left panel)
+    let coreY = canvas.height * 0.25;
+
+    if (coreBtn) {
+      const rect = coreBtn.getBoundingClientRect();
+      coreX = rect.left + rect.width / 2;
+      coreY = rect.top + rect.height / 2;
+    }
+
+    // Identify current active mode states
+    const isWaking = coreBtn ? coreBtn.classList.contains('waking') : false;
+    const isListening = coreBtn ? coreBtn.classList.contains('listening') : false;
+    const isProcessing = coreBtn ? coreBtn.classList.contains('processing') : false;
+    const isSpeaking = document.getElementById('coreCenterNode')?.classList.contains('speaking') || false;
+    
+    const isAlexaMode = document.body.classList.contains('alexa-mode') || 
+                        localStorage.getItem('lukas_assistant_persona') === 'alexa';
+
+    const isLockdown = home && home.state && home.state.activeRoutine === 'lockdown';
+
+    // Check smart home projector state
+    const projectorDev = home && home.dynamicDevices ? home.dynamicDevices.find(d => d.category === 'projector') : null;
+    const projectorOn = projectorDev ? projectorDev.on : false;
+    const projectionMode = projectorDev ? (projectorDev.mode || 'Jarvis HUD') : (isAlexaMode ? 'Alexa Ripple' : 'Jarvis HUD');
+    const projectionBrightness = projectorDev ? (projectorDev.brightness || 80) / 100 : 0.8;
+
+    // We render the projector visual effects if the projector device is ON, OR if the assistant is actively interacting (listening/speaking/processing)
+    const assistantActive = isWaking || isListening || isProcessing || isSpeaking;
+    const projectorActive = projectorOn || assistantActive;
+
+    // Modulate visual speed and amplitude based on voice assistant state
+    let speedMultiplier = 1.0;
+    let beamIntensity = 1.0;
+    if (isWaking) { speedMultiplier = 3.5; beamIntensity = 2.0; }
+    else if (isListening) { speedMultiplier = 2.0; beamIntensity = 1.5; }
+    else if (isProcessing) { speedMultiplier = 4.0; beamIntensity = 1.8; }
+    else if (isSpeaking) { speedMultiplier = 1.5; beamIntensity = 1.4 + Math.random() * 0.3; } // flicker effect
+
+    const timeSec = Date.now() * 0.001;
+
+    // 1. Draw Projector Beam Cone (Translucent sweeping gradient)
+    if (projectorActive) {
+      const alphaVal = 0.07 * beamIntensity * projectionBrightness;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(coreX, coreY);
+      
+      // Calculate slow sweep angles
+      const angleCenter = Math.sin(timeSec * 0.3) * 0.12; 
+      const angleSpread = 0.35 + Math.sin(timeSec * 2.5) * 0.04;
+      
+      const startAngle = angleCenter - angleSpread;
+      const endAngle = angleCenter + angleSpread;
+      
+      ctx.lineTo(canvas.width, coreY + Math.tan(startAngle) * (canvas.width - coreX));
+      ctx.lineTo(canvas.width, coreY + Math.tan(endAngle) * (canvas.width - coreX));
+      ctx.closePath();
+      
+      const gradient = ctx.createRadialGradient(coreX, coreY, 40, coreX + (canvas.width - coreX) * 0.4, coreY, canvas.width - coreX);
+      if (isLockdown) {
+        gradient.addColorStop(0, `rgba(239, 68, 68, ${alphaVal * 1.6})`);
+        gradient.addColorStop(0.3, `rgba(239, 68, 68, ${alphaVal})`);
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      } else if (projectionMode === 'Alexa Ripple') {
+        gradient.addColorStop(0, `rgba(59, 130, 246, ${alphaVal * 1.6})`);
+        gradient.addColorStop(0.3, `rgba(6, 182, 212, ${alphaVal})`);
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      } else {
+        // Jarvis HUD or fallback
+        gradient.addColorStop(0, `rgba(168, 85, 247, ${alphaVal * 1.6})`);
+        gradient.addColorStop(0.3, `rgba(6, 182, 212, ${alphaVal})`);
+        gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+      }
+      
+      ctx.fillStyle = gradient;
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // 2. Render warning grids if in LOCKDOWN
+    if (isLockdown) {
+      ctx.strokeStyle = `rgba(239, 68, 68, ${0.1 * projectionBrightness})`;
+      ctx.lineWidth = 1;
+      
+      // Horizontal alert lines
+      for (let y = 100; y < canvas.height; y += 150) {
+        ctx.beginPath();
+        ctx.moveTo(0, y + Math.sin(timeSec * 2 + y) * 10);
+        ctx.lineTo(canvas.width, y + Math.sin(timeSec * 2 + y) * 10);
+        ctx.stroke();
+      }
+
+      // Drawing alert circles
+      ctx.save();
+      ctx.strokeStyle = `rgba(239, 68, 68, ${(0.2 + Math.abs(Math.sin(timeSec * 5)) * 0.3) * projectionBrightness})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(coreX, coreY, 110 + Math.sin(timeSec * 5) * 10, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.font = 'bold 0.65rem var(--font-mono)';
+      ctx.fillStyle = `rgba(239, 68, 68, ${0.6 * projectionBrightness})`;
+      ctx.fillText("WARNING // EMER GRID SECURED", coreX - 85, coreY - 140);
+      ctx.restore();
+    }
+
+    // 3. Render ALEXA mode (Ripples, Sine Waves, Wave Flowing Particles)
+    else if (projectionMode === 'Alexa Ripple') {
+      // Fluid Bezier Wave Streams (Dynamic Soundwaves)
+      ctx.save();
+      const waveColors = [
+        `rgba(59, 130, 246, ${0.12 * projectionBrightness})`,
+        `rgba(37, 99, 235, ${0.08 * projectionBrightness})`,
+        `rgba(6, 182, 212, ${0.05 * projectionBrightness})`
+      ];
+      const waveHeight = isSpeaking ? 50 : (isListening ? 35 : 12);
+      for (let w = 0; w < 3; w++) {
+        ctx.beginPath();
+        ctx.strokeStyle = waveColors[w];
+        ctx.lineWidth = 2.5 - w * 0.7;
+        for (let x = 0; x < canvas.width; x += 15) {
+          const phase = timeSec * (1.2 + w * 0.25) + x * 0.004;
+          const y = canvas.height * 0.75 + Math.sin(phase) * waveHeight * Math.cos(x * 0.0008);
+          if (x === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Expanding ripples
+      ripples.forEach((rip, rIdx) => {
+        rip.radius += rip.speed * speedMultiplier;
+        rip.alpha -= rip.decay;
+        if (rip.alpha <= 0) {
+          ripples.splice(rIdx, 1);
+        } else {
+          ctx.strokeStyle = `rgba(6, 182, 212, ${rip.alpha * projectionBrightness})`;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(coreX, coreY, rip.radius, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      });
+
+      // Spawn ripple on state triggers or speak pulse
+      if (isSpeaking && Math.random() < 0.07) {
+        ripples.push({ radius: 30, alpha: 0.75, speed: 2.5, decay: 0.015 });
+      } else if (isListening && Math.random() < 0.04) {
+        ripples.push({ radius: 30, alpha: 0.45, speed: 1.4, decay: 0.01 });
+      }
+    }
+
+    // 4. Render JARVIS mode (HUD concentric rings, Scanning Sonar, Data plexus)
+    else {
+      ctx.save();
+      // Holographic concentric rings
+      ctx.strokeStyle = `rgba(6, 182, 212, ${0.08 * projectionBrightness})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(coreX, coreY, 110, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Rotating dashed ring
+      ctx.save();
+      ctx.translate(coreX, coreY);
+      ctx.rotate(timeSec * 0.08 * speedMultiplier);
+      ctx.strokeStyle = `rgba(168, 85, 247, ${0.1 * projectionBrightness})`;
+      ctx.setLineDash([8, 18]);
+      ctx.beginPath();
+      ctx.arc(0, 0, 135, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+
+      // Rotating short ticks ring
+      ctx.save();
+      ctx.translate(coreX, coreY);
+      ctx.rotate(-timeSec * 0.04 * speedMultiplier);
+      ctx.strokeStyle = `rgba(6, 182, 212, ${0.12 * projectionBrightness})`;
+      ctx.lineWidth = 1;
+      for (let a = 0; a < Math.PI * 2; a += Math.PI / 12) {
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * 88, Math.sin(a) * 88);
+        ctx.lineTo(Math.cos(a) * 94, Math.sin(a) * 94);
+        ctx.stroke();
+      }
+      ctx.restore();
+
+      // Sweeping radar sonar sweep
+      if (projectorActive) {
+        ctx.save();
+        ctx.translate(coreX, coreY);
+        const radarAngle = (timeSec * 1.2 * speedMultiplier) % (Math.PI * 2);
+        ctx.beginPath();
+        ctx.moveTo(0, 0);
+        ctx.lineTo(Math.cos(radarAngle) * 155, Math.sin(radarAngle) * 155);
+        ctx.strokeStyle = `rgba(6, 182, 212, ${0.14 * projectionBrightness})`;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Draw drifting digital hex text values around the core
+      if (projectorActive) {
+        ctx.font = '0.55rem var(--font-mono)';
+        ctx.fillStyle = `rgba(6, 182, 212, ${0.45 * projectionBrightness})`;
+        
+        telemetryBlocks.forEach(tb => {
+          tb.ticks++;
+          if (tb.ticks >= tb.maxTicks || tb.text === '') {
+            tb.ticks = 0;
+            tb.x = (Math.random() * 240 - 120);
+            tb.y = (Math.random() * 240 - 120);
+            // Don't draw too close to core center
+            if (Math.hypot(tb.x, tb.y) < 40) {
+              tb.x += (tb.x > 0 ? 50 : -50);
+              tb.y += (tb.y > 0 ? 50 : -50);
+            }
+            tb.text = telemetryLabels[Math.floor(Math.random() * telemetryLabels.length)];
+          }
+          const fadeAlpha = Math.sin((tb.ticks / tb.maxTicks) * Math.PI);
+          ctx.fillStyle = `rgba(6, 182, 212, ${fadeAlpha * 0.3 * projectionBrightness})`;
+          ctx.fillText(tb.text, coreX + tb.x, coreY + tb.y);
+        });
+      }
+      ctx.restore();
+    }
+
+    // 5. Draw and animate particles
+    particles.forEach((p, idx) => {
+      // Animate particle coordinates
+      if (projectionMode === 'Alexa Ripple' && !isLockdown) {
+        // Alexa wavy particle flow
+        p.x += p.dx * speedMultiplier * 1.5;
+        p.y = p.baseY + Math.sin(p.x * 0.005 + p.waveOffset) * p.waveAmplitude * (isSpeaking ? 1.8 : 1.0);
+      } else {
+        // Jarvis grid/free movement
+        p.x += p.dx * speedMultiplier;
+        p.y += p.dy * speedMultiplier;
+      }
+
+      // Wrap-around bounds check
       if (p.x < 0) p.x = canvas.width;
       if (p.x > canvas.width) p.x = 0;
-      if (p.y < 0) p.y = canvas.height;
-      if (p.y > canvas.height) p.y = 0;
+      if (p.y < 0) { p.y = canvas.height; p.baseY = canvas.height; }
+      if (p.y > canvas.height) { p.y = 0; p.baseY = 0; }
+
+      // Draw particle circle
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-      ctx.fillStyle = `hsla(${p.hue}, 100%, 70%, ${p.alpha})`;
+      
+      let fillHue = p.hue;
+      if (isLockdown) {
+        fillHue = 0; // crimson alert red
+      } else if (projectionMode === 'Alexa Ripple') {
+        fillHue = p.hue > 200 ? 210 : 190; // royal blue/cyan shades
+      }
+      ctx.fillStyle = `hsla(${fillHue}, 100%, 70%, ${p.alpha * projectionBrightness})`;
       ctx.fill();
+
+      // Jarvis plexus line connectors
+      if (projectionMode === 'Jarvis HUD' && !isLockdown) {
+        for (let j = idx + 1; j < particles.length; j++) {
+          const p2 = particles[j];
+          const dist = Math.hypot(p.x - p2.x, p.y - p2.y);
+          if (dist < 100) {
+            const lineAlpha = (1 - dist / 100) * 0.12 * projectionBrightness;
+            ctx.strokeStyle = `rgba(6, 182, 212, ${lineAlpha})`;
+            ctx.lineWidth = 0.55;
+            ctx.beginPath();
+            ctx.moveTo(p.x, p.y);
+            ctx.lineTo(p2.x, p2.y);
+            ctx.stroke();
+          }
+        }
+      }
     });
+
     requestAnimationFrame(draw);
   }
   draw();
@@ -800,35 +1101,54 @@ function bindUIEvents() {
       }
     } else if (state === 'wakeword') {
       micBtn.classList.remove('active');
-      voiceStatusText.textContent = `PASSIVE LISTEN (${activeLang})`;
-      voiceStatusText.style.color = 'var(--purple-neon)';
-      if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
-      if (coreBtn) {
-        coreBtn.classList.remove('listening');
-        coreBtn.classList.remove('processing');
+      
+      if (isProcessingCommand) {
+        voiceStatusText.textContent = 'PROCESSING...';
+        voiceStatusText.style.color = isAlexa ? 'var(--cyan-neon)' : 'var(--purple-neon)';
+        if (coreBtn) {
+          coreBtn.classList.remove('listening');
+          coreBtn.classList.add('processing');
+        }
+      } else {
+        voiceStatusText.textContent = `PASSIVE LISTEN (${activeLang})`;
+        voiceStatusText.style.color = 'var(--purple-neon)';
+        if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
+        if (coreBtn) {
+          coreBtn.classList.remove('listening');
+          coreBtn.classList.remove('processing');
+        }
       }
     } else if (state === 'off') {
       micBtn.classList.remove('active');
       
-      if (coreBtn && !window.speechSynthesis.speaking && !voice.isLongConversation && !voice.isListeningForWakeWord) {
-        coreBtn.classList.remove('listening');
-        coreBtn.classList.remove('processing');
-        coreBtn.classList.remove('waking');
-      }
-
-      if (voice.isListeningForWakeWord) {
-        voiceStatusText.textContent = `PASSIVE LISTEN (${activeLang})`;
-        voiceStatusText.style.color = 'var(--purple-neon)';
-        if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
+      if (isProcessingCommand) {
+        voiceStatusText.textContent = 'PROCESSING...';
+        voiceStatusText.style.color = isAlexa ? 'var(--cyan-neon)' : 'var(--purple-neon)';
+        if (coreBtn) {
+          coreBtn.classList.remove('listening');
+          coreBtn.classList.add('processing');
+        }
       } else {
-        if (!isPassiveListenEnabled) {
-          voiceStatusText.textContent = 'STANDBY';
-          voiceStatusText.style.color = 'var(--rose-neon)';
+        if (coreBtn && !window.speechSynthesis.speaking && !voice.isLongConversation && !voice.isListeningForWakeWord) {
+          coreBtn.classList.remove('listening');
+          coreBtn.classList.remove('processing');
+          coreBtn.classList.remove('waking');
+        }
+
+        if (voice.isListeningForWakeWord) {
+          voiceStatusText.textContent = `PASSIVE LISTEN (${activeLang})`;
+          voiceStatusText.style.color = 'var(--purple-neon)';
           if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
         } else {
-          voiceStatusText.textContent = 'IDLE';
-          voiceStatusText.style.color = 'var(--cyan-neon)';
-          if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
+          if (!isPassiveListenEnabled) {
+            voiceStatusText.textContent = 'STANDBY';
+            voiceStatusText.style.color = 'var(--rose-neon)';
+            if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
+          } else {
+            voiceStatusText.textContent = 'IDLE';
+            voiceStatusText.style.color = 'var(--cyan-neon)';
+            if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
+          }
         }
       }
 
@@ -957,6 +1277,7 @@ function bindUIEvents() {
   };
 
   voice.onSpeechStart = () => {
+    isProcessingCommand = false;
     coreCenterNode.classList.add('speaking');
     audioWaveform.classList.add('speaking');
     audioPlayer.volume = 0.08; // Duck music while speaking
@@ -966,6 +1287,8 @@ function bindUIEvents() {
     coreCenterNode.classList.remove('speaking');
     audioWaveform.classList.remove('speaking');
     audioPlayer.volume = 0.35; // Restore music volume
+    
+    isProcessingCommand = false;
     
     const coreBtn = document.getElementById('lukasCoreBtn');
 
@@ -3547,6 +3870,7 @@ function executeConversationalAction(act) {
 
 async function processCommand(rawCommand, source) {
   try {
+    isProcessingCommand = true;
     lastCommandSource = source || 'user';
     // Clear any active voice capturing timeouts immediately
     if (typeof noCommandTimeout !== 'undefined' && noCommandTimeout) {
@@ -3565,6 +3889,7 @@ async function processCommand(rawCommand, source) {
     // ── Deactivation / Standby / Offline Trigger ──
     const stopWords = ['stop', 'go to sleep', 'deactivate voice', 'mute microphone', 'stand down'];
     if (stopWords.includes(cmd) || cmd.includes('offline mode')) {
+      isProcessingCommand = false;
       diag.logToTerminal(`[AI CORE] Deactivation command detected: "${rawCommand}". Entering standby mode...`, "warn");
       lastCommandSource = 'standby';
       isPassiveListenEnabled = true;
@@ -3616,6 +3941,7 @@ async function processCommand(rawCommand, source) {
     // 1. Precheck using Reasoning Engine
     const precheckResult = lukasReasoning.precheck(rawCommand);
     if (!precheckResult.valid) {
+      isProcessingCommand = false;
       handleAssistantResponse(`Failed pre-check: ${precheckResult.reason}`);
       return;
     }
@@ -3636,6 +3962,7 @@ async function processCommand(rawCommand, source) {
     if (tempFastMatch && (cmd.includes('temp') || cmd.includes('thermostat') || cmd.includes('heat') || cmd.includes('cool') || cmd.includes('ac') || cmd.includes('climate') || cmd.includes('degree') || cmd.includes('celsius'))) {
       const val = parseInt(tempFastMatch[1]);
       if (!isNaN(val) && val >= 16 && val <= 35) {
+        isProcessingCommand = false;
         diag.logToTerminal(`[FAST PATH] Temperature command detected. Setting thermostat to ${val}°C`, 'info');
         home.setTargetTemperature(val);
         handleAssistantResponse(`Acknowledged, Commander. Eco-Thermostat target adjusted to ${val} degrees Celsius.`, true);
@@ -3647,6 +3974,7 @@ async function processCommand(rawCommand, source) {
     if (climateModeFast && !tempFastMatch) {
       const modeRaw = (climateModeFast[1] || '').toLowerCase();
       const mode = modeRaw.startsWith('cool') ? 'cool' : modeRaw.startsWith('heat') ? 'heat' : 'eco';
+      isProcessingCommand = false;
       diag.logToTerminal(`[FAST PATH] Climate mode command detected: ${mode.toUpperCase()}`, 'info');
       home.setClimateMode(mode);
       handleAssistantResponse(`Climate matrix switching to ${mode.toUpperCase()} mode.`, true);
@@ -3714,6 +4042,11 @@ async function processCommand(rawCommand, source) {
 
   } catch (err) {
     console.error("Error in processCommand:", err);
+    isProcessingCommand = false;
+    const coreBtn = document.getElementById('lukasCoreBtn');
+    if (coreBtn) {
+      coreBtn.classList.remove('processing');
+    }
     diag.logToTerminal(`[AI CORE] Error during command execution: ${err.message}`, "error");
     handleAssistantResponse("Sorry, I encountered an internal system error while executing that request.");
   }
@@ -3783,6 +4116,11 @@ async function handleResearchIntent(rawCommand, apiKey, apiProvider, source = 'u
     
     const displayAnswer = `${result.answer}\n\n*Sources: ${result.sources.join(', ') || 'Web Search'}*`;
     appendChatBubble(displayAnswer, 'assistant');
+    isProcessingCommand = false;
+    const coreBtn = document.getElementById('lukasCoreBtn');
+    if (coreBtn) {
+      coreBtn.classList.remove('processing');
+    }
     voice.stopWakeWordListener();
     voice.speak(result.answer);
     
@@ -4797,6 +5135,7 @@ function runWikipediaSearchFallback(rawCommand) {
 
 // 6. Speak and display response bubbles
 function handleAssistantResponse(text, isSmartHomeAction = false) {
+  isProcessingCommand = false;
   const coreBtn = document.getElementById('lukasCoreBtn');
   if (coreBtn) {
     coreBtn.classList.remove('processing');
@@ -5394,6 +5733,45 @@ function renderDashboardCustomDevices() {
           <span class="node-status-indicator status-value normal" style="font-size:0.55rem; padding: 2px 6px; border-radius:3px; background:rgba(0,240,255,0.08); border:1px solid rgba(0,240,255,0.15); color:var(--cyan-neon);">ONLINE</span>
         </div>
       `;
+    } else if (dev.category === 'projector') {
+      const isChecked = dev.on ? 'checked' : '';
+      const sourceVal = dev.source || 'Hologram';
+      const modeVal = dev.mode || 'Jarvis HUD';
+      const brightnessVal = dev.brightness || 80;
+      controlHtml = `
+        <div class="control-row">
+          <span class="control-label">Power State</span>
+          <label class="toggle-switch">
+            <input type="checkbox" class="custom-dash-toggle" ${isChecked} />
+            <span class="slider-knob" style="--zone-color: var(--purple-neon)"></span>
+          </label>
+        </div>
+        <div class="projector-controls" style="display: ${dev.on ? 'block' : 'none'}; margin-top: 0.5rem;">
+          <div class="control-row" style="margin-bottom: 0.4rem; justify-content: space-between; display: flex; align-items: center;">
+            <span class="control-label">Source Input</span>
+            <select class="node-select-custom custom-dash-select" data-prop="source" style="background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); color: #fff; border-radius: 4px; padding: 0.25rem; font-size: 0.65rem; outline: none; font-family: var(--font-mono); width: 100px;">
+              <option value="Hologram" ${sourceVal === 'Hologram' ? 'selected' : ''}>Hologram</option>
+              <option value="HDMI 1" ${sourceVal === 'HDMI 1' ? 'selected' : ''}>HDMI 1</option>
+              <option value="Apple TV" ${sourceVal === 'Apple TV' ? 'selected' : ''}>Apple TV</option>
+              <option value="Chromecast" ${sourceVal === 'Chromecast' ? 'selected' : ''}>Chromecast</option>
+            </select>
+          </div>
+          <div class="control-row" style="margin-bottom: 0.4rem; justify-content: space-between; display: flex; align-items: center;">
+            <span class="control-label">Projection Mode</span>
+            <select class="node-select-custom custom-dash-select" data-prop="mode" style="background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); color: #fff; border-radius: 4px; padding: 0.25rem; font-size: 0.65rem; outline: none; font-family: var(--font-mono); width: 100px;">
+              <option value="Jarvis HUD" ${modeVal === 'Jarvis HUD' ? 'selected' : ''}>Jarvis HUD</option>
+              <option value="Alexa Ripple" ${modeVal === 'Alexa Ripple' ? 'selected' : ''}>Alexa Ripple</option>
+              <option value="Cinema Stream" ${modeVal === 'Cinema Stream' ? 'selected' : ''}>Cinema Stream</option>
+            </select>
+          </div>
+          <div class="control-row" style="display: flex; flex-direction: column; align-items: stretch; gap: 0.2rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+              <span class="control-label">Projection Intensity</span>
+            </div>
+            <input type="range" class="range-slider custom-dash-dimmer" min="10" max="100" value="${brightnessVal}" />
+          </div>
+        </div>
+      `;
     } else {
       const isChecked = dev.on ? 'checked' : '';
       controlHtml = `
@@ -5507,6 +5885,9 @@ function renderDashboardCustomDevices() {
           const colorRow = card.querySelector('.custom-color-row');
           if (brightnessRow) brightnessRow.style.display = checked ? 'flex' : 'none';
           if (colorRow) colorRow.style.display = checked ? 'flex' : 'none';
+        } else if (dev.category === 'projector') {
+          const projControls = card.querySelector('.projector-controls');
+          if (projControls) projControls.style.display = checked ? 'block' : 'none';
         }
 
         // Update lock label
@@ -5541,6 +5922,19 @@ function renderDashboardCustomDevices() {
         if (knob) knob.style.setProperty('--zone-color', val);
       });
     }
+
+    // Bind projector selectors
+    const selects = card.querySelectorAll('.custom-dash-select');
+    selects.forEach(select => {
+      select.addEventListener('change', (e) => {
+        const prop = e.target.getAttribute('data-prop');
+        const val = e.target.value;
+        const updates = {};
+        updates[prop] = val;
+        home.setDeviceState(dev.id, updates);
+        diag.logToTerminal(`[PROJECTOR] Changed ${prop} to: ${val}`, 'info');
+      });
+    });
 
     container.appendChild(card);
   });
@@ -5634,6 +6028,24 @@ function syncDashboardCustomDeviceStates() {
         lockLabel.textContent = dev.locked ? 'LOCKED' : 'UNLOCKED';
         lockLabel.style.color = dev.locked ? 'var(--rose-neon)' : 'var(--emerald-neon)';
       }
+    }
+
+    if (dev.category === 'projector') {
+      const projControls = card.querySelector('.projector-controls');
+      if (projControls) projControls.style.display = dev.on ? 'block' : 'none';
+
+      const dimmer = card.querySelector('.custom-dash-dimmer');
+      if (dimmer && parseInt(dimmer.value) !== dev.brightness) {
+        dimmer.value = dev.brightness;
+      }
+
+      const selects = card.querySelectorAll('.custom-dash-select');
+      selects.forEach(select => {
+        const prop = select.getAttribute('data-prop');
+        if (select.value !== dev[prop]) {
+          select.value = dev[prop];
+        }
+      });
     }
   });
 }

@@ -172,6 +172,11 @@ class LukasAutomationHub {
       newDevice.color = "#ffffff";
     } else if (category === 'security' || category === 'lock') {
       newDevice.locked = true;
+    } else if (category === 'projector') {
+      newDevice.on = false;
+      newDevice.brightness = 80;
+      newDevice.source = 'Hologram';
+      newDevice.mode = 'Jarvis HUD';
     } else {
       newDevice.on = false;
     }
@@ -262,6 +267,11 @@ class LukasAutomationHub {
         if (bed) { bed.on = true; bed.brightness = 40; bed.color = '#ff9f3b'; }
         if (kitchen) { kitchen.on = true; kitchen.brightness = 85; kitchen.color = '#ffffff'; }
         if (outdoor) { outdoor.locked = false; outdoor.floodlights = false; }
+        
+        // Turn off all projectors in morning
+        this.dynamicDevices.forEach(d => {
+          if (d.category === 'projector') d.on = false;
+        });
 
         logs = [
           "Routine 'Morning' Activated.",
@@ -281,9 +291,18 @@ class LukasAutomationHub {
         if (kitchen) kitchen.on = false;
         if (outdoor) outdoor.locked = true;
 
+        // Turn on all projectors and set to Cinema Stream mode
+        this.dynamicDevices.forEach(d => {
+          if (d.category === 'projector') {
+            d.on = true;
+            d.mode = 'Cinema Stream';
+          }
+        });
+
         logs = [
           "Routine 'Cinema Mode' Activated.",
           "Living room lighting dimmed to deep indigo (20%).",
+          "Home Cinema Projector activated in stream mode.",
           "Secondary zone lights deactivated.",
           "Main locks secured. Climate adjusted to cool 21°C."
         ];
@@ -297,6 +316,11 @@ class LukasAutomationHub {
         if (bed) bed.on = false;
         if (kitchen) kitchen.on = false;
         if (outdoor) outdoor.locked = true;
+
+        // Turn off all projectors in Eco mode
+        this.dynamicDevices.forEach(d => {
+          if (d.category === 'projector') d.on = false;
+        });
 
         logs = [
           "Routine 'Eco Energy Saver' Activated.",
