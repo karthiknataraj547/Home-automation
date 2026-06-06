@@ -11,6 +11,16 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.7/dist/hls.min.js"></script>
   </head>
   <body>
+    <!-- Mic Permission Warning Banner (Hidden by default) -->
+    <div id="micBlockedBanner" style="display: none; align-items: center; justify-content: space-between; gap: 1rem; background: rgba(244, 63, 94, 0.2); border-bottom: 1px solid rgba(244, 63, 94, 0.4); padding: 0.6rem 1.25rem; font-family: var(--font-mono); font-size: 0.7rem; color: var(--rose-neon); z-index: 10000; position: relative;">
+      <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <i class="fa-solid fa-microphone-slash" style="animation: pulse 1s infinite alternate;"></i>
+        <span><strong>MICROPHONE BLOCKED:</strong> LUKAS cannot hear your voice. Please set Microphone to "Allow" in your browser site settings.</span>
+      </div>
+      <button id="requestMicPermBtn" class="btn-routine" style="padding: 0.25rem 0.6rem; font-size: 0.58rem; border-color: var(--rose-neon); color: var(--rose-neon); height: auto; cursor: pointer; white-space: nowrap;">
+        <i class="fa-solid fa-key"></i> RE-TRIGGER PERMISSION
+      </button>
+    </div>
   <!-- Holographic particle canvas -->
   <canvas id="jarvisParticleCanvas"></canvas>
   <!-- HUD Corner Brackets -->

@@ -40,6 +40,7 @@ class LukasVoiceController {
     this.onRecognitionStateChange = null;
     this.onWakeWordDetected = null;
     this.onSpeechDetected = null;
+    this.onMicPermissionBlocked = null;
     
     this.preferredVoice = null;
     this.dummyStream = null; // Keeps browser microphone hardware warm on mobile
@@ -170,6 +171,12 @@ class LukasVoiceController {
       this.recognition.onerror = (event) => {
         console.error("Speech recognition error:", event.error);
         this.lastError = event.error;
+        
+        if (event.error === 'not-allowed') {
+          if (this.onMicPermissionBlocked) {
+            this.onMicPermissionBlocked();
+          }
+        }
         
         // Ignore noise/no-speech errors to avoid breaking loops
         if (event.error === 'no-speech' && (this.isListeningForWakeWord || this.isLongConversation || this.isCommandListeningActive)) {
@@ -478,6 +485,11 @@ class LukasVoiceController {
       console.log("[voice.js] Microphone stream warmed up successfully.");
     } catch (e) {
       console.warn("[voice.js] Failed to warm up microphone:", e);
+      if (e.name === 'NotAllowedError' || e.name === 'PermissionDeniedError' || e.message?.includes('Permission denied') || e.message?.includes('Permission dismissed')) {
+        if (this.onMicPermissionBlocked) {
+          this.onMicPermissionBlocked();
+        }
+      }
     }
   }
 

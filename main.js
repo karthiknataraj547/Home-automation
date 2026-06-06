@@ -794,6 +794,35 @@ function bindUIEvents() {
     handleVoiceInput(transcript, true);
   };
 
+  // Handle blocked microphone permissions
+  voice.onMicPermissionBlocked = () => {
+    const banner = document.getElementById('micBlockedBanner');
+    if (banner) {
+      banner.style.display = 'flex';
+    }
+    diag.logToTerminal("[SECURITY ALERT] Microphone access is blocked. Please allow mic permissions to speak.", "error");
+  };
+
+  const reTriggerBtn = document.getElementById('requestMicPermBtn');
+  if (reTriggerBtn) {
+    reTriggerBtn.addEventListener('click', () => {
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then(stream => {
+          // Hide banner
+          const banner = document.getElementById('micBlockedBanner');
+          if (banner) banner.style.display = 'none';
+          stream.getTracks().forEach(track => track.stop()); // close temp stream
+          diag.logToTerminal("[SYSTEM] Microphone access granted. Reloading system interface...", "info");
+          setTimeout(() => location.reload(), 1000);
+        })
+        .catch(err => {
+          console.error("Microphone permission denied again:", err);
+          diag.logToTerminal("[SECURITY] Permission request denied again. Set site permissions manually.", "error");
+          alert("Microphone permission was denied. Please click the lock or settings icon in your browser address bar next to the URL and set Microphone to 'Allow'.");
+        });
+    });
+  }
+
   voice.onWakeWordDetected = () => {
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
     if (isAlexa) {
