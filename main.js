@@ -29,6 +29,8 @@ let isPassiveListenEnabled = true;
 let isWakingUp = false;
 let currentWeatherCity = "";
 let activeFollowUp = null;
+let conversationActive = false;   // TRUE while we keep mic hot after a voice exchange
+let conversationTimer = null;     // Timer to revert to passive after conversation window
 let activePlatform = "Spotify";
 let tuyaConfigured = false;
 
@@ -537,6 +539,7 @@ function bindUIEvents() {
     
     if (voice.isListening) {
       isPassiveListenEnabled = false;
+      endConversation();
       voice.stopListeningForCommand();
       if (isAlexa) {
         playAlexaErrorChime();
@@ -633,14 +636,37 @@ function bindUIEvents() {
     }
   }
 
+  // Keep mic active for follow-up commands after a voice exchange (8 second window)
+  function keepConversationAlive(durationMs = 8000) {
+    conversationActive = true;
+    if (conversationTimer) clearTimeout(conversationTimer);
+    conversationTimer = setTimeout(() => {
+      conversationActive = false;
+      conversationTimer = null;
+      // Only drop to passive if we're not already in an active state
+      if (!voice.isCommandListeningActive && !voice.isLongConversation && !voice.isListeningForWakeWord) {
+        if (isPassiveListenEnabled) {
+          diag.logToTerminal("[AI CORE] Conversation window closed. Returning to passive wake-word mode.", "info");
+          voice.startWakeWordListener();
+        }
+      }
+    }, durationMs);
+  }
+
+  function endConversation() {
+    conversationActive = false;
+    if (conversationTimer) { clearTimeout(conversationTimer); conversationTimer = null; }
+  }
+
   function startSilenceTimeout() {
     clearSilenceTimeout();
     if (proceedTimeout) clearTimeout(proceedTimeout);
     accumulatedTranscript = "";
 
     noCommandTimeout = setTimeout(() => {
-      diag.logToTerminal("[AI CORE] 5 seconds of silence. No command detected.", "warn");
+      diag.logToTerminal("[AI CORE] 8 seconds of silence. No command detected.", "warn");
       voice.stopListeningForCommand();
+      endConversation();
       
       const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
       if (isAlexa) {
@@ -649,14 +675,16 @@ function bindUIEvents() {
         playShutdownBeep();
       }
       
-      voice.speak("I didn't get any command");
+      if (isPassiveListenEnabled) {
+        setTimeout(() => voice.startWakeWordListener(), 500);
+      }
       
       const coreBtn = document.getElementById('lukasCoreBtn');
       if (coreBtn) {
         coreBtn.classList.remove('listening');
         coreBtn.classList.remove('processing');
       }
-    }, 5000);
+    }, 8000);
   }
 
   function handleVoiceInput(transcript) {
@@ -677,6 +705,8 @@ function bindUIEvents() {
       if (accumulatedTranscript.trim()) {
         diag.logToTerminal(`[AI CORE] Speech finalized. Proceeding with command: "${accumulatedTranscript}"`, "info");
         voice.stopListeningForCommand();
+        // Mark conversation as active so the mic stays open for follow-up after the AI responds
+        keepConversationAlive(10000);
         processCommand(accumulatedTranscript, 'voice');
         accumulatedTranscript = "";
         // Hide live transcript
@@ -751,12 +781,15 @@ function bindUIEvents() {
       return;
     }
 
-    // Check if the last response was a question or if there's an active follow-up
+    if (voice.isLongConversation) return; // Long convo manages itself
+
+    // After ANY voice response, keep the mic active for follow-up commands (8s window)
+    // This allows the user to continue the conversation without saying the wake word again
     const lastReplyText = voice.lastSpokenText || "";
     const isQuestion = lastReplyText.trim().endsWith('?') || lastReplyText.includes('?');
 
-    if (isQuestion || activeFollowUp) {
-      diag.logToTerminal("[AI CORE] Assistant asked a question. Keeping microphone active for follow-up...", "info");
+    if (isQuestion || activeFollowUp || conversationActive) {
+      diag.logToTerminal("[AI CORE] Staying active for follow-up commands (conversation window open)...", "info");
       
       if (coreBtn) {
         coreBtn.classList.remove('waking');
@@ -769,20 +802,18 @@ function bindUIEvents() {
       return;
     }
 
-    if (coreBtn && !voice.isLongConversation && !voice.isListeningForWakeWord) {
+    if (coreBtn) {
       coreBtn.classList.remove('listening');
       coreBtn.classList.remove('processing');
       coreBtn.classList.remove('waking');
     }
 
-    // In continuous mode, SpeechRecognition will restart automatically due to voice.js onend handler.
-    // If continuous mode was disabled (e.g. user said stop), we go back to wake word or standby.
-    if (!voice.isLongConversation) {
-      if (isPassiveListenEnabled) {
-        voice.startWakeWordListener();
-      } else {
-        diag.logToTerminal("Lukas core capturing arrays offline. Standing standby.", "warn");
-      }
+    // Return to passive wake-word listening
+    if (isPassiveListenEnabled) {
+      diag.logToTerminal("[AI CORE] Returning to passive wake-word mode.", "info");
+      setTimeout(() => voice.startWakeWordListener(), 300);
+    } else {
+      diag.logToTerminal("Lukas core offline. Standing standby.", "warn");
     }
   };
 

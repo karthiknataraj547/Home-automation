@@ -25,6 +25,7 @@ class LukasVoiceController {
     this.consecutiveErrors = 0;
     this.lastStartTime = 0;
     this.retryStartTimeout = null;
+    this.isTransitioning = false;  // Prevents rapid mode-switch loops on mobile
     
     // Robust command listening variables
     this.isCommandListeningActive = false;
@@ -96,9 +97,15 @@ class LukasVoiceController {
         this.isRecognitionActive = false;
         this.isStopping = false;
         
+        // If we are transitioning to a new mode, let the transition handle the restart
+        if (this.isTransitioning) {
+          console.log("[voice.js] Recognition ended during transition — deferring to transition handler.");
+          return;
+        }
+
         // Dynamically increase delay if we are hitting consecutive errors or aborts
-        const delay = this.consecutiveErrors > 3 ? 2000 : 150;
-        if (this.consecutiveErrors > 3) {
+        const delay = this.consecutiveErrors > 3 ? 2500 : (this.consecutiveErrors > 1 ? 1000 : 200);
+        if (this.consecutiveErrors > 1) {
           console.warn(`[voice.js] Backing off recognition restart delay to ${delay}ms due to consecutive errors (${this.consecutiveErrors}).`);
         }
         
@@ -353,15 +360,16 @@ class LukasVoiceController {
     if (this.synth && this.synth.speaking) {
       console.log("[voice.js] Delaying speech recognition start because synthesis is active.");
       if (this.retryStartTimeout) clearTimeout(this.retryStartTimeout);
-      this.retryStartTimeout = setTimeout(() => this.startRecognitionInternal(), 500);
+      this.retryStartTimeout = setTimeout(() => this.startRecognitionInternal(), 600);
       return;
     }
 
     // Prevent hot-looping if started too recently (throttling)
     const now = Date.now();
     const timeSinceLastStart = now - (this.lastStartTime || 0);
-    if (timeSinceLastStart < 800) {
-      const waitTime = 800 - timeSinceLastStart;
+    const minInterval = 600; // Minimum 600ms between starts (reduced for responsiveness)
+    if (timeSinceLastStart < minInterval) {
+      const waitTime = minInterval - timeSinceLastStart;
       console.log(`[voice.js] Throttling speech recognition start, waiting ${waitTime}ms...`);
       if (this.retryStartTimeout) clearTimeout(this.retryStartTimeout);
       this.retryStartTimeout = setTimeout(() => this.startRecognitionInternal(), waitTime);
@@ -372,8 +380,10 @@ class LukasVoiceController {
       this.recognition.start();
       this.isRecognitionActive = true;
       this.lastStartTime = Date.now();
+      this.isTransitioning = false; // Clear transition lock on successful start
     } catch (e) {
       console.warn("Failed to start speech recognition:", e);
+      this.isTransitioning = false;
     }
   }
 
@@ -395,11 +405,21 @@ class LukasVoiceController {
   // Continuous background listener for "Lukas" / "Alexa"
   startWakeWordListener() {
     if (!this.recognition) return;
+    // Prevent double-start
+    if (this.isListeningForWakeWord && this.isRecognitionActive) {
+      console.log("[voice.js] Wake word listener already active, skipping.");
+      return;
+    }
+    this.isTransitioning = true;
     this.isListeningForWakeWord = true;
+    this.isCommandListeningActive = false;
     this.cancelSpeech();
     
-    if (this.isStopping) {
+    if (this.isStopping || this.isRecognitionActive) {
       this.pendingStart = true;
+      if (this.isRecognitionActive) {
+        this.stopRecognitionInternal();
+      }
     } else {
       this.startRecognitionInternal();
     }
@@ -515,12 +535,11 @@ class LukasVoiceController {
     this.isCommandListeningActive = true;
     this.accumulatedSpeechText = "";
     this.lastSessionTranscript = "";
+    this.isTransitioning = true;
     this.cancelSpeech();
     
-    if (this.isStopping) {
-      this.pendingStart = true;
-    } else if (this.isRecognitionActive) {
-      // Stop first to force resetting the results array of the previous session
+    if (this.isStopping || this.isRecognitionActive) {
+      // Stop current recognition and pending-start will restart in command mode
       this.stopRecognitionInternal();
       this.pendingStart = true;
     } else {
