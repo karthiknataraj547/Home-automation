@@ -1179,6 +1179,23 @@ class LukasMultiTaskEngine {
       console.warn("Task engine is already running!");
       return;
     }
+
+    // Assign unique IDs and dependency array to actions
+    actions.forEach((act, idx) => {
+      act.id = idx + 1;
+      act.dependsOn = [];
+    });
+
+    // Build dependency graph: Actions targeting the same device/zone chain sequentially
+    const lastTargetMap = {};
+    actions.forEach((act) => {
+      const targetId = (act.targetDeviceName || act.targetZone || 'global').toLowerCase();
+      if (lastTargetMap[targetId] !== undefined) {
+        act.dependsOn = [lastTargetMap[targetId]];
+      }
+      lastTargetMap[targetId] = act.id;
+    });
+
     this.currentActions = actions;
     this.isRunning = true;
     this.currentIndex = 0;
@@ -1206,40 +1223,73 @@ class LukasMultiTaskEngine {
     let ambiguousHalt = false;
     let ambiguousMessage = "";
 
-    for (let i = 0; i < actions.length; i++) {
-      this.currentIndex = i;
-      this.statusMap[i] = 'running';
-      this._updateQueueUI();
-      
-      await new Promise(resolve => setTimeout(resolve, 800));
+    const pendingSet = [...actions];
+    const completedSet = [];
 
-      const action = actions[i];
-      try {
-        const result = await this._executeSingleAction(action);
-        if (result.status === 'ambiguous') {
-          this.statusMap[i] = 'ambiguous';
-          this.detailsMap[i] = `Ambiguous device: ${result.message}`;
-          this._updateQueueUI();
-          
-          ambiguousHalt = true;
-          ambiguousMessage = `Wait, I found multiple matches for "${action.targetDeviceName}": ${result.matches.map(m => m.name).join(', ')}. Which one did you mean?`;
-          break;
-        } else if (result.status === 'failed') {
-          this.statusMap[i] = 'failed';
-          this.detailsMap[i] = result.message;
-          this._updateQueueUI();
-        } else {
-          this.statusMap[i] = 'completed';
-          this.detailsMap[i] = result.message;
+    const runAvailableActions = async () => {
+      if (ambiguousHalt) return;
+
+      // Find actions with no pending dependencies
+      const readyActions = pendingSet.filter(act => {
+        return act.dependsOn.every(depId => completedSet.some(c => c.id === depId));
+      });
+
+      if (readyActions.length === 0 && pendingSet.length > 0) {
+        // Fallback for circular dependencies or deadlocks: process the first pending item
+        const forced = pendingSet.shift();
+        readyActions.push(forced);
+      }
+
+      if (readyActions.length === 0) return;
+
+      // Remove ready actions from the pending set
+      readyActions.forEach(act => {
+        const idx = pendingSet.indexOf(act);
+        if (idx !== -1) pendingSet.splice(idx, 1);
+      });
+
+      // Execute ready actions in parallel
+      const promises = readyActions.map(async (action) => {
+        const actionIdx = actions.indexOf(action);
+        this.statusMap[actionIdx] = 'running';
+        this._updateQueueUI();
+
+        // 800ms delay to make execution look human/cinematic
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        try {
+          const result = await this._executeSingleAction(action);
+          if (result.status === 'ambiguous') {
+            this.statusMap[actionIdx] = 'ambiguous';
+            this.detailsMap[actionIdx] = `Ambiguous device: ${result.message}`;
+            this._updateQueueUI();
+            ambiguousHalt = true;
+            ambiguousMessage = `Wait, I found multiple matches for "${action.targetDeviceName}": ${result.matches.map(m => m.name).join(', ')}. Which one did you mean?`;
+          } else if (result.status === 'failed') {
+            this.statusMap[actionIdx] = 'failed';
+            this.detailsMap[actionIdx] = result.message;
+            this._updateQueueUI();
+          } else {
+            this.statusMap[actionIdx] = 'completed';
+            this.detailsMap[actionIdx] = result.message;
+            this._updateQueueUI();
+            completedSet.push(action);
+          }
+        } catch (err) {
+          console.error(err);
+          this.statusMap[actionIdx] = 'failed';
+          this.detailsMap[actionIdx] = `Error: ${err.message}`;
           this._updateQueueUI();
         }
-      } catch (err) {
-        console.error(err);
-        this.statusMap[i] = 'failed';
-        this.detailsMap[i] = `Error: ${err.message}`;
-        this._updateQueueUI();
-      }
-    }
+
+        // Trigger next level of graph steps recursively
+        await runAvailableActions();
+      });
+
+      await Promise.all(promises);
+    };
+
+    await runAvailableActions();
 
     this.isRunning = false;
 
@@ -5847,6 +5897,97 @@ async function processCommand(rawCommand, source) {
       return;
     }
 
+    // ── Execution Memory Interceptors ──
+    const activeTasksKeywords = ['what tasks are running', 'show active tasks', 'are there any tasks running', 'current tasks', 'what are you doing'];
+    const recentTasksKeywords = ['what did you just do', 'show recent tasks', 'last task details', 'history of tasks', 'what did you do'];
+    const resumeTaskKeywords = ['resume previous task', 'resume task', 'retry last task', 'resume'];
+
+    if (activeTasksKeywords.includes(cmd)) {
+      isProcessingCommand = false;
+      const history = LukasTaskRunner.history || [];
+      const active = history.filter(h => h.status === 'running');
+      if (active.length === 0) {
+        handleAssistantResponse("There are currently no active background tasks running.");
+      } else {
+        const lines = ["**[ACTIVE BACKGROUND TASKS]**"];
+        active.forEach(h => {
+          const runningSteps = h.steps.filter(s => s.status === 'active');
+          const pendingSteps = h.steps.filter(s => s.status === 'pending');
+          lines.push(`• **Plan:** ${h.planTitle}`);
+          if (runningSteps.length > 0) {
+            lines.push(`  - *Running:* ${runningSteps.map(s => s.title).join(', ')}`);
+          }
+          if (pendingSteps.length > 0) {
+            lines.push(`  - *Pending:* ${pendingSteps.length} more step(s)`);
+          }
+        });
+        handleAssistantResponse(lines.join('\n'));
+      }
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+
+    if (recentTasksKeywords.includes(cmd)) {
+      isProcessingCommand = false;
+      const history = LukasTaskRunner.history || [];
+      if (history.length === 0) {
+        handleAssistantResponse("No plans have been executed in this session yet.");
+      } else {
+        const last = history[history.length - 1];
+        const lines = [
+          `**[LAST PLAN: ${last.planTitle.toUpperCase()}]**`,
+          `Status: ${last.status.toUpperCase()}`,
+          `Started: ${new Date(last.timestamp).toLocaleTimeString()}`,
+          "\n**Steps Executed:**"
+        ];
+        last.steps.forEach(s => {
+          const icon = s.status === 'completed' ? '✅' : (s.status === 'failed' ? '❌' : '⏳');
+          lines.push(`${icon} **${s.title}** - *${s.status}*`);
+        });
+        handleAssistantResponse(lines.join('\n'));
+      }
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+
+    if (resumeTaskKeywords.includes(cmd)) {
+      isProcessingCommand = false;
+      const history = LukasTaskRunner.history || [];
+      const lastFailed = [...history].reverse().find(h => h.status === 'failed');
+      if (!lastFailed) {
+        handleAssistantResponse("I couldn't find any recently failed tasks to resume.");
+      } else {
+        handleAssistantResponse(`Resuming execution plan: "${lastFailed.planTitle}". Filtered steps will re-initialize.`);
+        
+        const oKey = lukasMemory.getPreference('openai_api_key', '') || localStorage.getItem('openai_api_key');
+        const gKey = lukasMemory.getPreference('gemini_api_key', '') || localStorage.getItem('gemini_api_key');
+        const provider = oKey ? 'openai' : (gKey ? 'gemini' : 'puter');
+        const key = oKey || gKey || null;
+
+        const planToResume = {
+          ...lastFailed,
+          steps: lastFailed.steps.filter(s => s.status === 'failed' || s.status === 'pending')
+        };
+        
+        const context = {
+          memory: lukasMemory,
+          apiKey: key,
+          apiProvider: provider,
+          research: lukasResearch
+        };
+        
+        setTimeout(async () => {
+          try {
+            await lukasTask.executePlan(planToResume, context);
+          } catch (e) {
+            console.error('[Resume Plan] Failed:', e.message);
+          }
+        }, 100);
+      }
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+
     // ── CRUD Profile Commands ──
     if (cmd === 'view profile' || cmd === 'show profile' || cmd === 'show my profile' || cmd === 'view my profile') {
       isProcessingCommand = false;
@@ -6759,6 +6900,13 @@ async function parseMultiHomeCommand(rawCommand, apiKey, apiProvider) {
     const systemPrompt = `You are LUKAS's smart home multi-command parser. 
 Decompose the user's natural language directive(s) into an array of individual, structured JSON actions.
 Analyze pronouns ("it", "them", "those", "here", "there") contextually using the conversation history and previous actions.
+
+Do not just process literal words — process high-level objectives (Goal-First Thinking). 
+If the user expresses a comfort goal (e.g. "make my room comfortable for watching a movie" or "prepare the bedroom for sleeping"), infer the correct device actions to accomplish it. For example, watching a movie in the living room should:
+1. Turn off or dim living room lights to low brightness (e.g. 10% or 20%)
+2. Change the living room light color to a warm or movie-friendly tone (like orange, red, or warm white)
+3. Activate projector/media mode if applicable.
+Return the complete array of actions required to meet the goal.
 
 Return ONLY a JSON array containing objects matching this schema:
 {

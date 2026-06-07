@@ -18,6 +18,13 @@ class LukasResearchAgent {
    * @param {{ apiKey?: string, apiProvider?: string, memory?: object }} opts
    */
   async research(query, { apiKey = null, apiProvider = 'openai', memory = null } = {}) {
+    const isDeepQuery = /\b(deep research|research this|research company|analyze company|detailed research|full report|intelligence report)\b/i.test(query)
+      || (query.toLowerCase().trim().startsWith('research ') && query.split(' ').length <= 4);
+
+    if (isDeepQuery) {
+      return await this.deepResearch(query, { apiKey, apiProvider, memory });
+    }
+
     console.log(`[Research Agent] Researching: "${query}"`);
 
     const results = await this._gatherSources(query);
@@ -44,6 +51,134 @@ class LukasResearchAgent {
       confidence: best?.confidence || 0.5,
       raw: results,
     };
+  }
+
+  async deepResearch(query, { apiKey = null, apiProvider = 'openai', memory = null } = {}) {
+    console.log(`[Research Agent] Initiating deep research pipeline for: "${query}"`);
+
+    let cleanQuery = query.trim();
+    const cleanMatch = query.match(/(?:deep research|research company|research|about|tell me about|info on)\s+(.+)/i);
+    if (cleanMatch && cleanMatch[1]) {
+      cleanQuery = cleanMatch[1].trim();
+    }
+
+    const subQueries = [
+      { q: cleanQuery, type: 'Core Overview' },
+      { q: `${cleanQuery} about us company history team leadership`, type: 'Background & Team' },
+      { q: `${cleanQuery} products services features technology`, type: 'Products & Technology' },
+      { q: `${cleanQuery} pricing subscription cost plans tiers`, type: 'Pricing & Business Model' },
+      { q: `${cleanQuery} reviews reputation rating customer feedback`, type: 'Reputation & Feedback' }
+    ];
+
+    if (typeof window !== 'undefined' && window.__lukasDiag) {
+      window.__lukasDiag.logToTerminal(`[DEEP RESEARCH] Decomposing into ${subQueries.length} parallel target queries.`, 'info');
+    }
+
+    const searchPromises = subQueries.map(async (item) => {
+      try {
+        console.log(`[Deep Research] Querying: "${item.q}"`);
+        const searchRes = await this._gatherSources(item.q);
+        return {
+          type: item.type,
+          sources: searchRes.found ? searchRes.sources : [],
+          success: searchRes.found
+        };
+      } catch (e) {
+        console.warn(`[Deep Research] Sub-query "${item.q}" failed:`, e.message);
+        return { type: item.type, sources: [], success: false };
+      }
+    });
+
+    const gatheredResults = await Promise.all(searchPromises);
+
+    const allExcerpts = [];
+    const allLinks = new Set();
+    const sourceTypes = [];
+
+    gatheredResults.forEach(r => {
+      if (r.success && r.sources.length > 0) {
+        sourceTypes.push(r.type);
+        r.sources.slice(0, 3).forEach(src => {
+          allExcerpts.push(`[${r.type} Source - ${src.source}]\n${src.text || src.excerpt}`);
+          if (src.url) allLinks.add(src.url);
+        });
+      }
+    });
+
+    if (allExcerpts.length === 0) {
+      return {
+        answer: `I attempted a deep research analysis on "${cleanQuery}" but could not retrieve high-confidence sources.`,
+        sources: [],
+        confidence: 0
+      };
+    }
+
+    if (typeof window !== 'undefined' && window.__lukasDiag) {
+      window.__lukasDiag.logToTerminal(`[DEEP RESEARCH] Merged data from ${sourceTypes.join(', ')}. Synthesizing intelligence report...`, 'info');
+    }
+
+    const combinedContent = allExcerpts.join('\n\n---\n\n');
+    const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
+
+    const systemPrompt = `You are LUKAS, an advanced AI Operating System with deep research capabilities.
+Current date/time: ${now} IST
+
+You have been given a comprehensive set of real-time search results spanning several categories (Overview, History/Team, Products, Pricing, and Reviews).
+Your job is to synthesize these sources into a premium, professional executive intelligence report about the requested topic/company.
+
+The report MUST be structured using these Markdown headers:
+# Executive Intelligence Report: [Name]
+
+## 1. Executive Summary & Overview
+Provide a concise overview of what the company/topic is, their core mission, and their position in the market.
+
+## 2. Background & Leadership
+Detail their corporate history, founders, key team members, and timeline.
+
+## 3. Core Products & Technology
+Describe what they offer, their primary technology stack, features, and key differentiators.
+
+## 4. Pricing & Business Model
+Summarize their pricing plans, tiers, customer segments, and monetization strategy.
+
+## 5. Reputation & Market Feedback
+Detail customer reviews, common compliments/complaints, and overall market feedback.
+
+## 6. Synthesis & Knowledge Graph Map
+Summarize key entities (partners, competitors, technologies) and your final assessment.
+
+Rules:
+- Present information cleanly and professionally
+- State facts directly, referencing multiple points from the sources
+- If information is missing from the sources for a specific section (e.g. no pricing data found), state that clearly rather than guessing or hallucinating.
+- Never mention "According to Source X" — integrate details naturally.`;
+
+    const userPrompt = `Synthesize this raw intelligence feed about "${cleanQuery}":\n\n${combinedContent}`;
+
+    try {
+      const report = await generateConversationalResponse({
+        userMessage: userPrompt,
+        memory: null,
+        apiKey,
+        apiProvider,
+        systemPrompt,
+        temperature: 0.25,
+        maxTokens: 1500,
+      });
+
+      return {
+        answer: report,
+        sources: Array.from(allLinks).slice(0, 5),
+        confidence: 0.95
+      };
+    } catch (e) {
+      console.error('[Deep Research] Synthesis failed:', e.message);
+      return {
+        answer: `Here is the aggregated research data on ${cleanQuery}:\n\n` + combinedContent.slice(0, 1000) + '...',
+        sources: Array.from(allLinks).slice(0, 5),
+        confidence: 0.6
+      };
+    }
   }
 
   // ─── Source Gathering ─────────────────────────────────────────────────────
