@@ -19,6 +19,7 @@ export const INTENT = {
   MATH:            'math',            // Calculations
   CONVERSATION:    'conversation',    // General chat, questions, discussions
   SYSTEM:          'system',          // LUKAS settings, diagnostics
+  GAME:            'game',            // Interactive games portal
   UNKNOWN:         'unknown',
 };
 
@@ -75,6 +76,16 @@ class LukasOrchestrator {
   _classifyByRules(input) {
     const text = input.toLowerCase();
 
+    // Games, play, bored patterns
+    const gamePatterns = [
+      /\b(play|start|launch)\s+(a\s+)?(game|quiz|trivia|chess|sudoku|hangman|tic tac toe|snake|2048|memory challenge|word chain|guess the song|guess the movie|number challenge|rapid fire)\b/i,
+      /\b(game|games|quiz|trivia|sudoku|hangman|tic tac toe|2048|word chain|memory challenge)\b/i,
+      /\b(i'm bored|i am bored|feeling bored|boredom|bored)\b/i
+    ];
+    if (gamePatterns.some(re => re.test(text))) {
+      return { intent: INTENT.GAME, confidence: 0.95, subtasks: ['play_game'] };
+    }
+
     // Memory and previous context queries
     const memoryPatterns = [
       /do you remember/i,
@@ -90,14 +101,13 @@ class LukasOrchestrator {
       return { intent: INTENT.MEMORY_QUERY, confidence: 0.95, subtasks: ['recall_context'] };
     }
 
-    // Weather
-    const weatherPattern = /\b(weather|forecast|rain|humidity|wind|feels like|how (hot|cold)|what'?s the (temp|weather)|raining|snowing|sunny|cloudy)\b/i;
-    const weatherTempPattern = /\b(temperature|temp)\b/i.test(text) && 
-      (/\b(in|at|for|of|outside|today|tomorrow|current|right now|forecast)\b/i.test(text) || 
-       /\b(delhi|mumbai|bangalore|bengaluru|kolkata|chennai|hyderabad|london|paris|tokyo|new york|nyc|la|chicago|san francisco|seattle|boston|austin|denver|miami)\b/i.test(text));
+    // Weather and outdoor conditions
+    const isControlCommand = /\b(set|adjust|change|make|put|increase|decrease|raise|lower|turn|switch|up|down|thermostat|ac|aircon|heater|fan)\b/i.test(text);
+    const hasWeatherKeywords = /\b(weather|forecast|rain|raining|snow|snowing|wind|humidity|climate|precipitation|shower|cloudy|sunny|clear|outside|meteorological|atmosphere)\b/i.test(text);
+    const hasTempKeywords = /\b(temperature|temp|degrees)\b/i.test(text);
 
-    if (weatherPattern.test(text) || weatherTempPattern) {
-      return { intent: INTENT.WEATHER, confidence: 0.92, subtasks: ['fetch_weather'] };
+    if (hasWeatherKeywords || (hasTempKeywords && !isControlCommand)) {
+      return { intent: INTENT.WEATHER, confidence: 0.95, subtasks: ['fetch_weather'] };
     }
 
     // Home control — very high signal words
@@ -263,6 +273,7 @@ Example output:
       [INTENT.CONVERSATION]:   'conversation',
       [INTENT.MEMORY_QUERY]:   'memory',
       [INTENT.SYSTEM]:         'system',
+      [INTENT.GAME]:           'game',
     };
     return map[intent] || 'conversation';
   }

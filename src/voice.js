@@ -675,6 +675,11 @@ class LukasVoiceController {
       clearTimeout(this.activeTimeout);
       this.activeTimeout = null;
     }
+    if (this.speechWatchdogInterval) {
+      clearInterval(this.speechWatchdogInterval);
+      this.speechWatchdogInterval = null;
+    }
+    this._hideSpeechProgressBar();
     if (this.activeUtterance) {
       this.activeUtterance.onstart = null;
       this.activeUtterance.onend = null;
@@ -685,6 +690,67 @@ class LukasVoiceController {
     if (this.synth) {
       this.synth.cancel();
     }
+  }
+
+  _updateSpeechProgressBar() {
+    const container = document.getElementById('speechProgressBarContainer');
+    const bar = document.getElementById('speechProgressBar');
+    if (container && bar && this.speechQueue.length > 0) {
+      container.style.display = 'block';
+      const pct = Math.min(100, Math.round((this.currentSegmentIndex / this.speechQueue.length) * 100));
+      bar.style.width = `${pct}%`;
+    }
+  }
+
+  _hideSpeechProgressBar() {
+    const container = document.getElementById('speechProgressBarContainer');
+    const bar = document.getElementById('speechProgressBar');
+    if (container && bar) {
+      bar.style.width = '100%';
+      setTimeout(() => {
+        if (!this.synth.speaking && this.currentSegmentIndex >= this.speechQueue.length) {
+          container.style.display = 'none';
+          bar.style.width = '0%';
+        }
+      }, 800);
+    }
+  }
+
+  startSpeechContinuationWatchdog() {
+    if (this.speechWatchdogInterval) clearInterval(this.speechWatchdogInterval);
+    this.lastSpeechActivityTime = Date.now();
+    this.lastSpeechSegmentIndex = -1;
+
+    this.speechWatchdogInterval = setInterval(() => {
+      if (this.speechQueue.length === 0 || this.currentSegmentIndex >= this.speechQueue.length) {
+        clearInterval(this.speechWatchdogInterval);
+        this.speechWatchdogInterval = null;
+        return;
+      }
+
+      const now = Date.now();
+      
+      // If we are actively playing a segment
+      if (this.synth.speaking) {
+        if (this.currentSegmentIndex !== this.lastSpeechSegmentIndex) {
+          this.lastSpeechSegmentIndex = this.currentSegmentIndex;
+          this.lastSpeechActivityTime = now;
+        } else if (now - this.lastSpeechActivityTime > 12000) {
+          // Stuck on the same segment for more than 12s
+          console.warn("[Voice Watchdog] Speech segment stuck. Canceling and resuming next segment...");
+          this.synth.cancel();
+          this.lastSpeechActivityTime = now;
+          this._processNextSpeechSegment();
+        }
+      } else if (!this.synth.paused) {
+        // Not speaking, not paused, but queue is not empty - it must have been interrupted!
+        if (now - this.lastSpeechActivityTime > 1500) {
+          console.warn("[Voice Watchdog] Speech synthesis interrupted. Resuming playback queue...");
+          this.lastSpeechActivityTime = now;
+          this._processNextSpeechSegment();
+        }
+      }
+    }, 1000);
   }
 
   stop() {
@@ -897,18 +963,31 @@ class LukasVoiceController {
       this.onSpeechStart();
     }
 
+    this._updateSpeechProgressBar();
+    this.startSpeechContinuationWatchdog();
     this._processNextSpeechSegment();
   }
 
   _processNextSpeechSegment() {
+    this._updateSpeechProgressBar();
     if (this.currentSegmentIndex >= this.speechQueue.length) {
       this.speakingText = '';
+      this._hideSpeechProgressBar();
+      if (this.speechWatchdogInterval) {
+        clearInterval(this.speechWatchdogInterval);
+        this.speechWatchdogInterval = null;
+      }
       if (this.onSpeechEnd) this.onSpeechEnd();
       return;
     }
 
     const seg = this.speechQueue[this.currentSegmentIndex];
     this.currentSegmentIndex++;
+
+    if (this.gameState) {
+      this.gameState.lastSpeechActivityTime = Date.now();
+    }
+    this.lastSpeechActivityTime = Date.now();
 
     if (seg.type === 'emotion') {
       this.currentSpeechEmotion = seg.value.toLowerCase();

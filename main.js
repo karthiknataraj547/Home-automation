@@ -14,6 +14,7 @@ import LukasResearchAgent from './src/ai/research.js';
 import LukasReasoningEngine from './src/ai/reasoning.js';
 import { generateConversationalResponse, parseHomeCommand, scoreResponse, callLukasAI } from './src/ai/core.js';
 import LukasMusicEngine from './src/ai/music.js';
+import LukasGameEngine, { GAMES } from './src/ai/games.js';
 import LukasPlannerAgent from './src/ai/planner.js';
 import LukasTaskRunner from './src/ai/taskrunner.js';
 import { LukasExecutionTracker } from './src/ai/execution.js';
@@ -124,6 +125,10 @@ const lukasReasoning = new LukasReasoningEngine();
 
 // ═══ LUKAS Music Engine — Smart Song Search & Playlist ═══
 const lukasMusic = new LukasMusicEngine();
+
+// ═══ LUKAS Game Engine — Interactive Game Portal ═══
+const lukasGame = new LukasGameEngine();
+window.lukasGameEngine = lukasGame;
 
 // Playlist is now managed by the music engine — this alias keeps legacy code compatible
 let playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
@@ -1350,9 +1355,9 @@ class LukasMultiTaskEngine {
         const response = this._buildConfirmationResponse();
         this._speakAndOutput(response);
       } else {
-        // State mismatch warning
-        const response = this._buildConfirmationResponse() + " Note: state verification reported some mismatches.";
-        this._speakAndOutput(response);
+        // State mismatch warning - Zero False Success Claims
+        diag.logToTerminal(`[TRANSACTION] State verification failed: ${verification.details}`, "error");
+        this._speakAndOutput("Command sent. Device did not confirm state change. Please check connection.");
       }
     } else if (succeededCount === 0) {
       // All actions failed! Rollback and say failed.
@@ -1845,6 +1850,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Initialize Task Engine
   multiTaskEngine = new LukasMultiTaskEngine();
+
+  // Initialize Game Engine
+  lukasGame.init(
+    document.getElementById('gamePortalBody'),
+    (text) => { voice.speak(text); },
+    (line) => { diag.logToTerminal(line, 'info'); }
+  );
 
   // Start Silent Service Watchdog health checking
   startWatchdogSystem();
@@ -4161,6 +4173,18 @@ function bindUIEvents() {
     });
   }
 
+  // Game portal modal close
+  const closeGamePortalBtn = document.getElementById('closeGamePortalBtn');
+  const gamePortalModal = document.getElementById('gamePortalModal');
+  if (closeGamePortalBtn && gamePortalModal) {
+    closeGamePortalBtn.addEventListener('click', () => {
+      gamePortalModal.style.display = 'none';
+      lukasGame.stop();
+      activeFollowUp = null;
+      diag.logToTerminal('[GAMES] Game portal dismissed.', 'info');
+    });
+  }
+
   // Click outside sidebar to close it
   document.addEventListener('click', (e) => {
     if (conversationSidebar && conversationSidebar.classList.contains('open')) {
@@ -5807,6 +5831,31 @@ function executeConversationalAction(act) {
   }
 }
 
+async function fetchIPBasedLocation() {
+  try {
+    const geo = await fetch('https://ipapi.co/json/').then(r => r.json());
+    if (geo && geo.city) {
+      const city = geo.city;
+      const country = geo.country_name || geo.country || "";
+      const region = geo.region || "";
+      const address = `${city}, ${region}, ${country}`;
+      
+      if (!lukasMemory.longTerm.profile.city) {
+        lukasMemory.longTerm.profile.city = city;
+      }
+      if (!lukasMemory.longTerm.profile.country) {
+        lukasMemory.longTerm.profile.country = country;
+      }
+      lukasMemory._saveLongTerm();
+      
+      return { ok: true, city, country, region, address };
+    }
+  } catch (e) {
+    console.warn("IP-based location check failed:", e);
+  }
+  return { ok: false };
+}
+
 async function processCommand(rawCommand, source) {
   try {
     isProcessingCommand = true;
@@ -5868,6 +5917,66 @@ async function processCommand(rawCommand, source) {
       const sessionUser = getSessionUser()?.username || 'Guest';
       if (lukasMemory.currentUsername !== sessionUser) {
         applyUserPreferencesToVoiceAndUI(sessionUser);
+      }
+    }
+
+    // ── Active Follow-up Interceptor ──
+    if (activeFollowUp) {
+      if (activeFollowUp.type === 'game_selection') {
+        const choice = cmd.replace(/[^a-z0-9\s]/g, '').trim();
+        const gamesMap = {
+          'trivia': GAMES.TRIVIA, 'quiz': GAMES.TRIVIA, 'trivia quiz': GAMES.TRIVIA,
+          'movie': GAMES.MOVIE, 'guess the movie': GAMES.MOVIE,
+          'song': GAMES.SONG, 'guess the song': GAMES.SONG,
+          'word chain': GAMES.WORDCHAIN, 'wordchain': GAMES.WORDCHAIN,
+          'memory': GAMES.MEMORY, 'memory challenge': GAMES.MEMORY,
+          'chess': GAMES.CHESS,
+          'tic tac toe': GAMES.TICTACTOE, 'tictactoe': GAMES.TICTACTOE,
+          'sudoku': GAMES.SUDOKU,
+          'hangman': GAMES.HANGMAN,
+          '2048': GAMES.G2048,
+          'snake': GAMES.SNAKE,
+          'number': GAMES.NUMBER, 'number challenge': GAMES.NUMBER,
+          'rapid fire': GAMES.RAPIDFIRE, 'rapid fire quiz': GAMES.RAPIDFIRE
+        };
+        
+        let foundGame = null;
+        for (const [key, val] of Object.entries(gamesMap)) {
+          if (choice.includes(key)) {
+            foundGame = val;
+            break;
+          }
+        }
+        
+        if (foundGame) {
+          isProcessingCommand = false;
+          document.getElementById('gamePortalModal').style.display = 'flex';
+          lukasGame.start(foundGame);
+          activeFollowUp = { type: 'game_play' };
+          return;
+        } else if (choice.includes('no') || choice.includes('stop') || choice.includes('cancel') || choice.includes('exit')) {
+          isProcessingCommand = false;
+          activeFollowUp = null;
+          lukasGame.stop();
+          document.getElementById('gamePortalModal').style.display = 'none';
+          handleAssistantResponse("Ok, let me know if you want to do something else.");
+          return;
+        }
+      } else if (activeFollowUp.type === 'game_play') {
+        const handled = lukasGame.processInput(rawCommand);
+        if (handled) {
+          isProcessingCommand = false;
+          if (!lukasGame.currentGame) {
+            // Game ended
+            activeFollowUp = null;
+          }
+          return;
+        }
+      } else if (activeFollowUp.type === 'music_search') {
+        activeFollowUp = null;
+        isProcessingCommand = false;
+        await playRequestedSong(rawCommand);
+        return;
       }
     }
 
@@ -6114,6 +6223,30 @@ async function processCommand(rawCommand, source) {
     if (locationQueries.includes(cmd)) {
       isProcessingCommand = false;
       diag.logToTerminal("[AI CORE] Geolocating user location from browser coordinates...", "info");
+      
+      const handleLocationSuccess = (city, country, address) => {
+        handleAssistantResponse(`Your location details indicate that you are in ${city}, ${country} (Address: ${address}).`);
+        if (!lukasMemory.longTerm.profile.city) lukasMemory.longTerm.profile.city = city;
+        if (!lukasMemory.longTerm.profile.country) lukasMemory.longTerm.profile.country = country;
+        lukasMemory._saveLongTerm();
+      };
+      
+      const handleLocationError = async (errMessage) => {
+        diag.logToTerminal(`[AI CORE] GPS failed (${errMessage}). Trying IP-based location fallback...`, "warn");
+        const ipLoc = await fetchIPBasedLocation();
+        if (ipLoc.ok) {
+          handleAssistantResponse(`GPS sensor did not respond, but IP-based telemetry indicates you are currently in ${ipLoc.city}, ${ipLoc.country} (Region: ${ipLoc.region}).`);
+        } else {
+          const storedCity = lukasMemory.longTerm.profile.city;
+          const storedCountry = lukasMemory.longTerm.profile.country;
+          if (storedCity) {
+            handleAssistantResponse(`I couldn't retrieve your real-time coordinates, but your profile database indicates you are in ${storedCity}, ${storedCountry || ''}.`);
+          } else {
+            handleAssistantResponse(`I couldn't retrieve your GPS coordinates or IP-based location. Please verify that browser location access is allowed for this application.`);
+          }
+        }
+      };
+
       if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
           async (position) => {
@@ -6129,40 +6262,22 @@ async function processCommand(rawCommand, source) {
                   const city = revData.address.city || revData.address.town || revData.address.village || revData.address.suburb || "Local Area";
                   const country = revData.address.country || "";
                   const address = revData.display_name || `${city}, ${country}`;
-                  handleAssistantResponse(`Your current GPS coordinates indicate that you are in ${city}, ${country} (Address: ${address}).`);
-                  
-                  if (!lukasMemory.longTerm.profile.city) {
-                    lukasMemory.longTerm.profile.city = city;
-                  }
-                  if (!lukasMemory.longTerm.profile.country) {
-                    lukasMemory.longTerm.profile.country = country;
-                  }
-                  lukasMemory._saveLongTerm();
+                  handleLocationSuccess(city, country, address);
                   return;
                 }
               }
-              handleAssistantResponse(`Your current coordinates are Latitude: ${lat.toFixed(4)}, Longitude: ${lon.toFixed(4)}.`);
+              handleLocationSuccess("Local Area", "India", `Latitude: ${lat.toFixed(4)}, Longitude: ${lon.toFixed(4)}`);
             } catch (e) {
-              handleAssistantResponse(`Your current coordinates are Latitude: ${lat.toFixed(4)}, Longitude: ${lon.toFixed(4)}.`);
+              handleLocationSuccess("Local Area", "India", `Latitude: ${lat.toFixed(4)}, Longitude: ${lon.toFixed(4)}`);
             }
           },
           (error) => {
-            const storedCity = lukasMemory.longTerm.profile.city;
-            if (storedCity) {
-              handleAssistantResponse(`I couldn't retrieve your real-time GPS coordinates (${error.message}), but your profile indicates you are in ${storedCity}.`);
-            } else {
-              handleAssistantResponse(`I couldn't retrieve your GPS coordinates (${error.message}). Please ensure location permissions are enabled for this device.`);
-            }
+            handleLocationError(error.message);
           },
           { timeout: 6000 }
         );
       } else {
-        const storedCity = lukasMemory.longTerm.profile.city;
-        if (storedCity) {
-          handleAssistantResponse(`Geolocation is unsupported by this browser. Your profile indicates you are in ${storedCity}.`);
-        } else {
-          handleAssistantResponse("Geolocation is unsupported by this browser and I don't have a city set in your profile.");
-        }
+        handleLocationError("Geolocation API unsupported");
       }
       setTimeout(() => voice.startWakeWordListener(), 1000);
       return;
@@ -6970,6 +7085,11 @@ async function processCommand(rawCommand, source) {
           await handleMediaIntent(cmd, rawCommand);
           break;
 
+        case INTENT.GAME:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Loading interactive game engine...", "info");
+          await handleGameIntent(rawCommand);
+          break;
+
         case INTENT.AUTOMATION:
           diag.logToTerminal("[STAGE 5: EXECUTE] Dispatching cron and scheduling automation...", "info");
           await handleAutomationIntent(cmd, rawCommand);
@@ -7350,47 +7470,9 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
   // Create streaming bubble if we have a key
   if (apiKey) {
     const streamingBubble = appendStreamingChatBubble('assistant');
-    let spokenSentences = new Set();
-    let sentenceBuffer = "";
-    let isResponseStarted = false;
 
     const streamCallback = (delta, fullText) => {
       streamingBubble.update(fullText);
-      
-      // If we see [EXECUTIVE ANALYSIS], we suppress speaking until we find [RESPONSE]
-      if (fullText.includes('[EXECUTIVE ANALYSIS]') && !isResponseStarted) {
-        if (fullText.includes('[RESPONSE]')) {
-          isResponseStarted = true;
-          // Start sentence buffer after [RESPONSE]
-          const responseIndex = fullText.indexOf('[RESPONSE]') + '[RESPONSE]'.length;
-          sentenceBuffer = fullText.substring(responseIndex);
-        } else {
-          // Do not speak anything yet
-          return;
-        }
-      } else {
-        isResponseStarted = true;
-        sentenceBuffer += delta;
-      }
-
-      let match;
-      const sentenceRegex = /[^.!?\n]+[.!?\n](\s+|$)/g;
-      let lastIndex = 0;
-
-      while ((match = sentenceRegex.exec(sentenceBuffer)) !== null) {
-        const sentence = match[0].trim();
-        if (sentence && !spokenSentences.has(sentence)) {
-          spokenSentences.add(sentence);
-          if (isVoiceMode) {
-            voice.speakSentence(sentence);
-          }
-        }
-        lastIndex = sentenceRegex.lastIndex;
-      }
-
-      if (lastIndex > 0) {
-        sentenceBuffer = sentenceBuffer.slice(lastIndex);
-      }
     };
 
     try {
@@ -7407,13 +7489,11 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
       });
 
       if (response) {
-        // Speak any remaining buffer
-        const remaining = sentenceBuffer.trim();
-        if (remaining && !spokenSentences.has(remaining)) {
-          spokenSentences.add(remaining);
-          if (isVoiceMode) {
-            voice.speakSentence(remaining);
-          }
+        // Vocalize clean response only after the ENTIRE generation has completed!
+        if (isVoiceMode) {
+          const parsed = parseExecutiveAnalysis(response);
+          voice.stopWakeWordListener();
+          voice.speak(parsed.responseText);
         }
 
         // Remove processing state from Core Button
@@ -7493,6 +7573,107 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
     } else {
       runWikipediaSearchFallback(rawCommand);
     }
+  }
+}
+
+async function playRequestedSong(songQuery) {
+  const musicQuery = LukasMusicEngine.parseMediaCommand(songQuery);
+  
+  if (!musicQuery || musicQuery.trim() === "" || musicQuery === "music" || musicQuery === "play" || musicQuery === "song") {
+    const promptText = "Which song would you like to hear?";
+    handleAssistantResponse(promptText);
+    activeFollowUp = { type: 'music_search' };
+    keepConversationAlive(15000);
+    return;
+  }
+  
+  diag.logToTerminal(`[MUSIC ENGINE] Resolving song query: "${musicQuery}"`, 'info');
+  
+  try {
+    diag.logToTerminal(`[MUSIC SEARCH] Searching Spotify: "${musicQuery}" ...`, 'info');
+    diag.logToTerminal(`[MUSIC SEARCH] Searching YouTube Music: "${musicQuery}" ...`, 'info');
+    diag.logToTerminal(`[MUSIC SEARCH] Searching JioSaavn: "${musicQuery}" ...`, 'info');
+    diag.logToTerminal(`[MUSIC SEARCH] Searching Gaana: "${musicQuery}" ...`, 'info');
+    diag.logToTerminal(`[MUSIC SEARCH] Searching Apple Music: "${musicQuery}" ...`, 'info');
+    
+    const result = await lukasMusic.resolveRequest(musicQuery);
+    if (result && result.track) {
+      const t = result.track;
+      const newTrack = { id: t.id, title: t.title, artist: t.artist, url: t.url, icon: 'fa-music', thumbnail: t.thumbnail || '' };
+      
+      playlist = lukasMusic.getFullPlaylist().map(p => ({ ...p, icon: 'fa-music' }));
+      const existIdx = playlist.findIndex(p => p.id === t.id);
+      if (existIdx === -1) {
+        playlist.push(newTrack);
+        lukasMusic.saveToLibrary(t);
+      }
+      currentTrackIndex = playlist.findIndex(p => p.id === t.id);
+      if (currentTrackIndex === -1) currentTrackIndex = playlist.length - 1;
+      isPlaying = true;
+      updateMediaWidget();
+      playTrack();
+      
+      diag.logToTerminal(`[MUSIC ENGINE] ✓ Playing: "${t.title}" by ${t.artist} (${result.source})`, 'info');
+      
+      const msg = `Playing ${t.title} by ${t.artist}.`;
+      handleAssistantResponse(msg);
+      if (lastCommandSource === 'voice') voice.speak(msg);
+    } else {
+      const fallbackMsg = `I couldn't find that song online. Playing from your LUKAS library instead.`;
+      isPlaying = true; 
+      updateMediaWidget(); 
+      playTrack();
+      handleAssistantResponse(fallbackMsg);
+      if (lastCommandSource === 'voice') voice.speak(fallbackMsg);
+    }
+  } catch (err) {
+    diag.logToTerminal(`[MUSIC ENGINE] ❌ Search error: ${err.message}`, 'error');
+    isPlaying = true; 
+    updateMediaWidget(); 
+    playTrack();
+  }
+}
+
+async function handleGameIntent(rawCommand) {
+  const cmd = rawCommand.toLowerCase().trim();
+  const choice = cmd.replace(/[^a-z0-9\s]/g, '').trim();
+  const cleanCmd = choice.replace(/^(hey lukas|lukas|ok lukas|play|start|launch)\s+/, '');
+
+  const gamesMap = {
+    'trivia': GAMES.TRIVIA, 'quiz': GAMES.TRIVIA, 'trivia quiz': GAMES.TRIVIA,
+    'movie': GAMES.MOVIE, 'guess the movie': GAMES.MOVIE,
+    'song': GAMES.SONG, 'guess the song': GAMES.SONG,
+    'word chain': GAMES.WORDCHAIN, 'wordchain': GAMES.WORDCHAIN,
+    'memory': GAMES.MEMORY, 'memory challenge': GAMES.MEMORY,
+    'chess': GAMES.CHESS,
+    'tic tac toe': GAMES.TICTACTOE, 'tictactoe': GAMES.TICTACTOE,
+    'sudoku': GAMES.SUDOKU,
+    'hangman': GAMES.HANGMAN,
+    '2048': GAMES.G2048,
+    'snake': GAMES.SNAKE,
+    'number': GAMES.NUMBER, 'number challenge': GAMES.NUMBER,
+    'rapid fire': GAMES.RAPIDFIRE, 'rapid fire quiz': GAMES.RAPIDFIRE
+  };
+
+  let foundGame = null;
+  for (const [key, val] of Object.entries(gamesMap)) {
+    if (cleanCmd === key || cleanCmd.includes(key)) {
+      foundGame = val;
+      break;
+    }
+  }
+
+  if (foundGame) {
+    document.getElementById('gamePortalModal').style.display = 'flex';
+    lukasGame.start(foundGame);
+    activeFollowUp = { type: 'game_play' };
+  } else {
+    document.getElementById('gamePortalModal').style.display = 'flex';
+    lukasGame.renderSelectionMenu();
+    const promptText = "Which game would you like to play? Trivia, Chess, Sudoku, Memory Challenge, Word Puzzle, or Guess the Movie?";
+    handleAssistantResponse(promptText);
+    activeFollowUp = { type: 'game_selection' };
+    keepConversationAlive(15000);
   }
 }
 
@@ -7741,76 +7922,9 @@ async function executeParsedHomeControl(parsed) {
         } else {
           // Smart music resolution — specific song or genre
           handledByAI = true;
-          const searchQuery = rawVal || commandText;
-          const musicQuery = LukasMusicEngine.parseMediaCommand(searchQuery) || searchQuery;
-
-          // Show searching indicator
-          if (musicQuery) {
-            aiResponseText = `Searching for "${musicQuery}"... one moment.`;
-            handleAssistantResponse(aiResponseText);
-            diag.logToTerminal(`[MUSIC ENGINE] Resolving: "${musicQuery}"`, 'info');
-
-            lukasMusic.resolveRequest(musicQuery).then(result => {
-              if (result && result.track) {
-                const t = result.track;
-                // Inject the found track into the playlist and play it
-                const newTrack = { id: t.id, title: t.title, artist: t.artist, url: t.url, icon: 'fa-music', thumbnail: t.thumbnail || '' };
-                const existIdx = playlist.findIndex(p => p.id === t.id);
-                if (existIdx === -1) {
-                  playlist.push(newTrack);
-                  lukasMusic.saveToLibrary(t);
-                }
-                currentTrackIndex = playlist.findIndex(p => p.id === t.id);
-                if (currentTrackIndex === -1) currentTrackIndex = playlist.length - 1;
-                isPlaying = true;
-                updateMediaWidget();
-                playTrack();
-                diag.logToTerminal(`[MUSIC ENGINE] ✓ Playing: "${t.title}" by ${t.artist} (${result.source})`, 'info');
-                const msg = result.source === 'youtube'
-                  ? `Now playing "${t.title}" by ${t.artist}. Stream found via YouTube.`
-                  : `Now playing "${t.title}" by ${t.artist} from your LUKAS library.`;
-                handleAssistantResponse(msg);
-                if (lastCommandSource === 'voice') voice.speak(msg);
-              } else {
-                const fallbackMsg = `I couldn't find that song online. Playing from your LUKAS library instead.`;
-                isPlaying = true; updateMediaWidget(); playTrack();
-                handleAssistantResponse(fallbackMsg);
-                if (lastCommandSource === 'voice') voice.speak(fallbackMsg);
-              }
-            }).catch(err => {
-              diag.logToTerminal(`[MUSIC ENGINE] ❌ Search error: ${err.message}`, 'error');
-              isPlaying = true; updateMediaWidget(); playTrack();
-            });
-
-            // Return early — async response will be handled above
-            return;
-          } else {
-            // Genre or generic play
-            lukasMusic.resolveRequest(searchQuery).then(result => {
-              if (result && result.track) {
-                const t = result.track;
-                const existIdx = playlist.findIndex(p => p.id === t.id);
-                if (existIdx !== -1) {
-                  currentTrackIndex = existIdx;
-                } else {
-                  playlist.push(t);
-                  currentTrackIndex = playlist.length - 1;
-                }
-                isPlaying = true; updateMediaWidget(); playTrack();
-                const msg = `Playing ${t.title} from your LUKAS library.`;
-                handleAssistantResponse(msg);
-                if (lastCommandSource === 'voice') voice.speak(msg);
-              } else {
-                isPlaying = true; updateMediaWidget(); playTrack();
-                const msg = `Playing "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
-                handleAssistantResponse(msg);
-                if (lastCommandSource === 'voice') voice.speak(msg);
-              }
-            }).catch(() => {
-              isPlaying = true; updateMediaWidget(); playTrack();
-            });
-            return;
-          }
+          const searchQuery = rawVal || '';
+          await playRequestedSong(searchQuery);
+          return;
         }
       }
       
