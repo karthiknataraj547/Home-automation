@@ -363,6 +363,7 @@ class LukasVoiceController {
     this.isRecognitionActive = false;
     this.isStopping = false;
     this.lastStopTime = 0;
+    this.lastSpeechEndTime = 0;
     this.pendingStart = false;
     this.consecutiveErrors = 0;
     this.lastError = null;
@@ -516,6 +517,17 @@ class LukasVoiceController {
   }
 
   handleSpeechResult(fullTranscript, isFinal) {
+    if (this.isStopping) {
+      console.log(`[SpeechRecognition] Ignoring result "${fullTranscript}" because engine is stopping.`);
+      return;
+    }
+
+    const timeSinceSpeechEnd = Date.now() - (this.lastSpeechEndTime || 0);
+    if (timeSinceSpeechEnd < 800) {
+      console.log(`[SpeechRecognition] Ignoring result "${fullTranscript}" during post-speech cooldown (${timeSinceSpeechEnd}ms).`);
+      return;
+    }
+
     const state = this.recognitionManager.state;
     const cmd = fullTranscript.toLowerCase().trim();
 
@@ -612,6 +624,10 @@ class LukasVoiceController {
       let matchedWakeWord = this._detectWakeWord(lowerText, displayTranscript);
       
       if (matchedWakeWord) {
+        if (this._isWordInSpokenText(matchedWakeWord, this.spokenTextAccumulated)) {
+          console.log(`[PASSIVE] Ignoring wake word "${matchedWakeWord}" because it was spoken by LUKAS.`);
+          return;
+        }
         const wakeWordIndex = lowerText.indexOf(matchedWakeWord);
         const commandAfterWakeWord = lowerText.substring(wakeWordIndex + matchedWakeWord.length).trim();
         const isJustWakeWord = commandAfterWakeWord.length === 0;
@@ -750,6 +766,11 @@ class LukasVoiceController {
     const cleanWord = word.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
     const cleanSpoken = spokenText.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
     
+    // Check if the entire cleanWord phrase exists in the spoken text
+    if (cleanSpoken.includes(cleanWord)) {
+      return true;
+    }
+    
     const words = cleanSpoken.split(/\s+/);
     return words.some(w => w === cleanWord || w.startsWith(cleanWord) || cleanWord.startsWith(w));
   }
@@ -773,6 +794,7 @@ class LukasVoiceController {
       this.activeUtterance = null;
     }
     this.queuedUtterances = [];
+    this.lastSpeechEndTime = Date.now();
     if (this.synth) {
       this.synth.cancel();
     }
@@ -1063,6 +1085,7 @@ class LukasVoiceController {
         clearInterval(this.speechWatchdogInterval);
         this.speechWatchdogInterval = null;
       }
+      this.lastSpeechEndTime = Date.now();
       if (this.onSpeechEnd) this.onSpeechEnd();
       return;
     }
