@@ -10,6 +10,7 @@ class SpeechRecognitionManager {
     this.recognition = null;
     this.recognitionRunning = false;
     this.isStartingNative = false;
+    this.pendingStart = false;
     this.watchdogInterval = null;
     this.init();
     this.startWatchdog();
@@ -22,29 +23,66 @@ class SpeechRecognitionManager {
     }, 4000);
   }
 
+  forceReset() {
+    console.warn("[SpeechRecognitionManager] Force resetting SpeechRecognition engine...");
+    if (this.recognition) {
+      try {
+        this.recognition.onstart = null;
+        this.recognition.onend = null;
+        this.recognition.onerror = null;
+        this.recognition.onresult = null;
+        this.recognition.abort();
+      } catch (e) {
+        console.warn("[SpeechRecognitionManager] Error while cleaning up old engine:", e);
+      }
+    }
+    
+    // Clear all status flags
+    this.recognitionRunning = false;
+    this.isStartingNative = false;
+    this.controller.isStopping = false;
+    this.controller.isRecognitionActive = false;
+    this.pendingStart = false;
+    
+    // Re-initialize
+    this.init();
+    
+    // Start if we should be running
+    const shouldBeRunning = ['PASSIVE_LISTENING', 'ACTIVE_LISTENING', 'RESPONDING'].includes(this.state);
+    if (shouldBeRunning) {
+      this.start();
+    }
+  }
+
   checkWatchdog() {
     if (!this.recognition) return;
     
     const now = Date.now();
     const lastStart = this.controller.lastStartTime || 0;
+    const lastStop = this.controller.lastStopTime || 0;
     
     // 1. Detect native start freeze (stuck in starting state for too long)
     if (this.isStartingNative && (now - lastStart > 5000)) {
-      console.warn("[Watchdog] SpeechRecognition startup freeze detected. Aborting and resetting native engine...");
-      this.isStartingNative = false;
-      this.recognitionRunning = false;
-      this.restart();
+      console.warn("[Watchdog] SpeechRecognition startup freeze detected. Force resetting native engine...");
+      this.forceReset();
       return;
     }
 
-    // 2. Auto-reset if in a running state but recognition is actually dead
+    // 2. Detect native stop freeze (stuck in stopping state for too long)
+    if (this.controller.isStopping && (now - lastStop > 5000)) {
+      console.warn("[Watchdog] SpeechRecognition stopping freeze detected. Force resetting native engine...");
+      this.forceReset();
+      return;
+    }
+
+    // 3. Auto-reset if in a running state but recognition is actually dead
     const shouldBeRunning = ['PASSIVE_LISTENING', 'ACTIVE_LISTENING', 'RESPONDING'].includes(this.state);
     if (shouldBeRunning && !this.recognitionRunning && !this.isStartingNative && !this.controller.isStopping) {
       console.warn(`[Watchdog] Recognition died while in state ${this.state}. Restarting...`);
       this.start();
     }
     
-    // 3. Prevent execution lockup (e.g. stuck in PROCESSING or EXECUTING state beyond 20 seconds)
+    // 4. Prevent execution lockup (e.g. stuck in PROCESSING or EXECUTING state beyond 20 seconds)
     if ((this.state === 'PROCESSING' || this.state === 'EXECUTING') && (now - (this.controller.lastStateTransitionTime || now) > 20000)) {
       console.warn(`[Watchdog] Stuck in ${this.state} state for too long. Reverting to PASSIVE_LISTENING.`);
       this.transitionTo('PASSIVE_LISTENING');
@@ -67,7 +105,7 @@ class SpeechRecognitionManager {
       this.controller.isRecognitionActive = true;
       this.controller.consecutiveErrors = 0;
       this.controller.lastStartTime = Date.now();
-      console.log(`[SpeechRecognitionManager] Recognition started (State: ${this.state})`);
+      console.log(`[SpeechRecognitionManager] Native onstart fired (State: ${this.state})`);
       if (this.controller.onRecognitionStateChange) {
         this.controller.onRecognitionStateChange(this.state.toLowerCase());
       }
@@ -78,14 +116,25 @@ class SpeechRecognitionManager {
       this.isStartingNative = false;
       this.controller.isRecognitionActive = false;
       this.controller.isStopping = false;
-      console.log(`[SpeechRecognitionManager] Recognition ended (State: ${this.state})`);
+      console.log(`[SpeechRecognitionManager] Native onend fired (State: ${this.state}, pendingStart: ${this.pendingStart})`);
+
+      if (this.pendingStart) {
+        this.pendingStart = false;
+        console.log("[SpeechRecognitionManager] Executing pending start after native onend...");
+        this.start();
+        return;
+      }
 
       // Recovery restart or active listening restart logic
       if (this.state === 'PASSIVE_LISTENING' || this.state === 'ACTIVE_LISTENING' || this.state === 'RESPONDING') {
         const delay = this.controller.consecutiveErrors > 3 ? 2000 : 200;
         setTimeout(() => {
           if (this.state === 'PASSIVE_LISTENING' || this.state === 'ACTIVE_LISTENING' || this.state === 'RESPONDING') {
-            this.start();
+            // Check if another transition occurred or isStopping became true
+            if (!this.controller.isStopping && !this.recognitionRunning && !this.isStartingNative) {
+              console.log("[SpeechRecognitionManager] Auto-restarting recognition after normal native onend.");
+              this.start();
+            }
           }
         }, delay);
       } else {
@@ -97,7 +146,7 @@ class SpeechRecognitionManager {
 
     this.recognition.onerror = (event) => {
       this.isStartingNative = false;
-      console.error(`[SpeechRecognitionManager] Error: ${event.error}`);
+      console.error(`[SpeechRecognitionManager] Native onerror fired: ${event.error} (State: ${this.state})`);
       this.controller.lastError = event.error;
 
       if (event.error === 'not-allowed') {
@@ -144,11 +193,21 @@ class SpeechRecognitionManager {
       this.controller.isListeningForWakeWord = true;
       this.controller.isCommandListeningActive = false;
       this.controller.isLongConversation = false;
-      this.start();
+      if (oldState === 'RESPONDING') {
+        console.log("[SpeechRecognitionManager] Transitioned from RESPONDING to PASSIVE_LISTENING. Restarting recognition engine for a clean session.");
+        this.restart();
+      } else {
+        this.start();
+      }
     } else if (newState === 'ACTIVE_LISTENING') {
       this.controller.isListeningForWakeWord = false;
       this.controller.isCommandListeningActive = true;
-      this.start();
+      if (oldState === 'RESPONDING') {
+        console.log("[SpeechRecognitionManager] Transitioned from RESPONDING to ACTIVE_LISTENING. Restarting recognition engine for a clean session.");
+        this.restart();
+      } else {
+        this.start();
+      }
       this.controller.resetActiveListeningTimer();
     } else if (newState === 'PROCESSING') {
       this.controller.isListeningForWakeWord = false;
@@ -191,53 +250,79 @@ class SpeechRecognitionManager {
   start() {
     if (!this.recognition) return;
     if (this.recognitionRunning || this.isStartingNative) {
-      console.log("[SpeechRecognitionManager] Start ignored: recognition is already running or starting.");
+      console.log(`[SpeechRecognitionManager] Start ignored: recognitionRunning=${this.recognitionRunning}, isStartingNative=${this.isStartingNative}`);
+      return;
+    }
+
+    if (this.controller.isStopping) {
+      console.log("[SpeechRecognitionManager] Start deferred: engine is currently stopping. Setting pendingStart = true.");
+      this.pendingStart = true;
       return;
     }
     
     // Prevent starting too fast
     const timeSinceLastStart = Date.now() - (this.controller.lastStartTime || 0);
     if (timeSinceLastStart < 600) {
+      console.log(`[SpeechRecognitionManager] Start throttled (only ${timeSinceLastStart}ms since last start). Retrying in ${600 - timeSinceLastStart}ms.`);
       setTimeout(() => this.start(), 600 - timeSinceLastStart);
       return;
     }
 
     try {
+      console.log(`[SpeechRecognitionManager] Calling native recognition.start() (State: ${this.state})`);
       this.isStartingNative = true;
       this.recognition.start();
       this.controller.lastStartTime = Date.now();
     } catch (e) {
       this.isStartingNative = false;
-      console.warn("[SpeechRecognitionManager] Start error:", e.message);
+      this.pendingStart = false;
+      console.warn("[SpeechRecognitionManager] Native recognition.start() threw error:", e.message);
+      if (e.message && (e.message.includes('already started') || e.message.includes('started'))) {
+        console.log("[SpeechRecognitionManager] Engine was already started. Syncing state variables.");
+        this.recognitionRunning = true;
+      }
     }
   }
 
   stop() {
     if (!this.recognition) return;
-    if (!this.recognitionRunning && !this.isStartingNative) return;
+    console.log(`[SpeechRecognitionManager] Stop called. recognitionRunning=${this.recognitionRunning}, isStartingNative=${this.isStartingNative}, isStopping=${this.controller.isStopping}`);
+    this.pendingStart = false; // Cancel any pending start
+    if (!this.recognitionRunning && !this.isStartingNative) {
+      console.log("[SpeechRecognitionManager] Stop ignored: recognition is not running or starting.");
+      return;
+    }
     try {
+      console.log("[SpeechRecognitionManager] Calling native recognition.stop()");
       this.recognition.stop();
       this.isStartingNative = false;
       this.controller.isStopping = true;
+      this.controller.lastStopTime = Date.now();
     } catch (e) {
-      console.warn("[SpeechRecognitionManager] Stop error:", e.message);
+      console.warn("[SpeechRecognitionManager] Native recognition.stop() threw error:", e.message);
     }
   }
 
   abort() {
     if (!this.recognition) return;
+    console.log(`[SpeechRecognitionManager] Abort called. recognitionRunning=${this.recognitionRunning}, isStartingNative=${this.isStartingNative}`);
+    this.pendingStart = false; // Cancel any pending start
     try {
+      console.log("[SpeechRecognitionManager] Calling native recognition.abort()");
       this.recognition.abort();
       this.isStartingNative = false;
       this.recognitionRunning = false;
+      this.controller.isStopping = true; // Abort also stops the engine asynchronously, we need to wait for onend
+      this.controller.lastStopTime = Date.now();
     } catch (e) {
-      console.warn("[SpeechRecognitionManager] Abort error:", e.message);
+      console.warn("[SpeechRecognitionManager] Native recognition.abort() threw error:", e.message);
     }
   }
 
   restart() {
+    console.log("[SpeechRecognitionManager] Restart requested.");
+    this.pendingStart = true;
     this.abort();
-    setTimeout(() => this.start(), 150);
   }
 }
 
@@ -277,6 +362,7 @@ class LukasVoiceController {
     // safe start/stop state machine variables
     this.isRecognitionActive = false;
     this.isStopping = false;
+    this.lastStopTime = 0;
     this.pendingStart = false;
     this.consecutiveErrors = 0;
     this.lastError = null;
