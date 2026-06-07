@@ -5,12 +5,50 @@ import LukasVoiceprintAnalyzer from './ai/voiceprint.js';
 class SpeechRecognitionManager {
   constructor(controller) {
     this.controller = controller;
-    this.state = 'STANDBY'; // IDLE, STANDBY, LISTENING, PROCESSING, SPEAKING
+    this.state = 'IDLE'; // IDLE, PASSIVE_LISTENING, WAKE_DETECTED, ACTIVE_LISTENING, PROCESSING, EXECUTING, RESPONDING, SLEEPING
     this.SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     this.recognition = null;
     this.recognitionRunning = false;
     this.isStartingNative = false;
+    this.watchdogInterval = null;
     this.init();
+    this.startWatchdog();
+  }
+
+  startWatchdog() {
+    if (this.watchdogInterval) clearInterval(this.watchdogInterval);
+    this.watchdogInterval = setInterval(() => {
+      this.checkWatchdog();
+    }, 4000);
+  }
+
+  checkWatchdog() {
+    if (!this.recognition) return;
+    
+    const now = Date.now();
+    const lastStart = this.controller.lastStartTime || 0;
+    
+    // 1. Detect native start freeze (stuck in starting state for too long)
+    if (this.isStartingNative && (now - lastStart > 5000)) {
+      console.warn("[Watchdog] SpeechRecognition startup freeze detected. Aborting and resetting native engine...");
+      this.isStartingNative = false;
+      this.recognitionRunning = false;
+      this.restart();
+      return;
+    }
+
+    // 2. Auto-reset if in a running state but recognition is actually dead
+    const shouldBeRunning = ['PASSIVE_LISTENING', 'ACTIVE_LISTENING', 'RESPONDING'].includes(this.state);
+    if (shouldBeRunning && !this.recognitionRunning && !this.isStartingNative && !this.controller.isStopping) {
+      console.warn(`[Watchdog] Recognition died while in state ${this.state}. Restarting...`);
+      this.start();
+    }
+    
+    // 3. Prevent execution lockup (e.g. stuck in PROCESSING or EXECUTING state beyond 20 seconds)
+    if ((this.state === 'PROCESSING' || this.state === 'EXECUTING') && (now - (this.controller.lastStateTransitionTime || now) > 20000)) {
+      console.warn(`[Watchdog] Stuck in ${this.state} state for too long. Reverting to PASSIVE_LISTENING.`);
+      this.transitionTo('PASSIVE_LISTENING');
+    }
   }
 
   init() {
@@ -42,11 +80,11 @@ class SpeechRecognitionManager {
       this.controller.isStopping = false;
       console.log(`[SpeechRecognitionManager] Recognition ended (State: ${this.state})`);
 
-      // Recovery restart or standby restart logic
-      if (this.state === 'STANDBY' || this.state === 'LISTENING') {
+      // Recovery restart or active listening restart logic
+      if (this.state === 'PASSIVE_LISTENING' || this.state === 'ACTIVE_LISTENING' || this.state === 'RESPONDING') {
         const delay = this.controller.consecutiveErrors > 3 ? 2000 : 200;
         setTimeout(() => {
-          if (this.state === 'STANDBY' || this.state === 'LISTENING') {
+          if (this.state === 'PASSIVE_LISTENING' || this.state === 'ACTIVE_LISTENING' || this.state === 'RESPONDING') {
             this.start();
           }
         }, delay);
@@ -99,26 +137,45 @@ class SpeechRecognitionManager {
     if (this.state === newState) return;
     const oldState = this.state;
     this.state = newState;
+    this.controller.lastStateTransitionTime = Date.now();
     console.log(`[SpeechRecognitionManager] Transition: ${oldState} -> ${newState}`);
 
-    if (newState === 'STANDBY') {
+    if (newState === 'PASSIVE_LISTENING') {
       this.controller.isListeningForWakeWord = true;
       this.controller.isCommandListeningActive = false;
       this.controller.isLongConversation = false;
       this.start();
-    } else if (newState === 'LISTENING') {
+    } else if (newState === 'ACTIVE_LISTENING') {
       this.controller.isListeningForWakeWord = false;
       this.controller.isCommandListeningActive = true;
       this.start();
+      this.controller.resetActiveListeningTimer();
     } else if (newState === 'PROCESSING') {
       this.controller.isListeningForWakeWord = false;
       this.controller.isCommandListeningActive = false;
       this.stop();
-    } else if (newState === 'SPEAKING') {
+    } else if (newState === 'EXECUTING') {
+      this.controller.isListeningForWakeWord = false;
+      this.controller.isCommandListeningActive = false;
+      this.stop();
+    } else if (newState === 'RESPONDING') {
       this.controller.isListeningForWakeWord = false;
       this.controller.isCommandListeningActive = false;
       // Restart speech recognition to clear old transcript context and allow fresh speech interruption
       this.restart();
+    } else if (newState === 'WAKE_DETECTED') {
+      this.controller.isListeningForWakeWord = false;
+      this.controller.isCommandListeningActive = false;
+      this.stop();
+    } else if (newState === 'SLEEPING') {
+      this.controller.isListeningForWakeWord = false;
+      this.controller.isCommandListeningActive = false;
+      this.stop();
+      setTimeout(() => {
+        if (this.state === 'SLEEPING') {
+          this.transitionTo('PASSIVE_LISTENING');
+        }
+      }, 1000);
     } else if (newState === 'IDLE') {
       this.controller.isListeningForWakeWord = false;
       this.controller.isCommandListeningActive = false;
@@ -184,6 +241,7 @@ class SpeechRecognitionManager {
   }
 }
 
+
 class LukasVoiceController {
   constructor() {
     this.biometrics = new LukasVoiceprintAnalyzer();
@@ -240,6 +298,16 @@ class LukasVoiceController {
     this.onMicPermissionBlocked = null;
     this.onPreWarm = null;  // NEW: fires as soon as wake word detected, before user finishes speaking
     
+    // Web Audio Pipeline
+    this.audioContext = null;
+    this.audioSource = null;
+    this.highPassFilter = null;
+    this.compressor = null;
+    this.gainNode = null;
+    this.analyser = null;
+    this.activeListeningTimer = null;
+    this.lastStateTransitionTime = Date.now();
+
     // Latency tracker — records timestamps at each pipeline stage
     this.latency = {
       wakeDetectedAt: 0,
@@ -273,7 +341,7 @@ class LukasVoiceController {
   }
 
   get isListening() {
-    return this.recognitionManager ? this.recognitionManager.state === 'LISTENING' : false;
+    return this.recognitionManager ? this.recognitionManager.state === 'ACTIVE_LISTENING' : false;
   }
 
   getVoiceForLanguage(langCode) {
@@ -366,7 +434,7 @@ class LukasVoiceController {
     const cmd = fullTranscript.toLowerCase().trim();
 
     // ── INTERRUPTION CHECK ──
-    if (state === 'SPEAKING' || (this.synth && this.synth.speaking)) {
+    if (state === 'RESPONDING' || (this.synth && this.synth.speaking)) {
       const userSpeech = fullTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
       
       const stopWords = ['stop', 'cancel', 'shut up', 'quiet', 'stop talking', 'stop listening', 'stand down', 'go to sleep'];
@@ -414,7 +482,7 @@ class LukasVoiceController {
         // INTERRUPTION FLOW: Cancel TTS -> wait 100ms -> release audio focus -> enable recognition -> listen
         this.recognitionManager.abort();
         setTimeout(() => {
-          this.recognitionManager.transitionTo('LISTENING');
+          this.recognitionManager.transitionTo('ACTIVE_LISTENING');
           if (this.onWakeWordDetected) this.onWakeWordDetected();
         }, 100);
         return;
@@ -427,14 +495,14 @@ class LukasVoiceController {
     this.lastSessionTranscript = fullTranscript;
 
     let displayTranscript = fullTranscript;
-    if (state === 'LISTENING' && this.accumulatedSpeechText) {
+    if (state === 'ACTIVE_LISTENING' && this.accumulatedSpeechText) {
       displayTranscript = (this.accumulatedSpeechText + " " + fullTranscript).trim();
     }
 
     // Trigger real-time interim speech detection callback
     if (this.onSpeechDetected) {
       let textToDisplay = displayTranscript;
-      if (state === 'STANDBY') {
+      if (state === 'PASSIVE_LISTENING') {
         const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
         let matchedWakeWord = this._detectWakeWord(lowerText, displayTranscript);
         if (matchedWakeWord) {
@@ -452,8 +520,8 @@ class LukasVoiceController {
       }
     }
 
-    // ── STANDBY STATE: WAKE WORD DETECTION ──
-    if (state === 'STANDBY' && !this.isWakeLocked) {
+    // ── PASSIVE_LISTENING STATE: WAKE WORD DETECTION ──
+    if (state === 'PASSIVE_LISTENING' && !this.isWakeLocked) {
       const lowerText = displayTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
       let matchedWakeWord = this._detectWakeWord(lowerText, displayTranscript);
       
@@ -475,7 +543,7 @@ class LukasVoiceController {
         this.recognitionManager.abort();
         
         setTimeout(() => {
-          this.recognitionManager.transitionTo('LISTENING');
+          this.recognitionManager.transitionTo('ACTIVE_LISTENING');
           if (this.onWakeWordDetected) this.onWakeWordDetected();
 
           if (!isJustWakeWord) {
@@ -505,11 +573,14 @@ class LukasVoiceController {
         }
         return;
       }
+      return; // Ignore all other speech in passive listening
     }
 
-    // ── LISTENING STATE: FINAL COMMAND CAPTURING ──
-    if (state === 'LISTENING') {
+    // ── ACTIVE_LISTENING STATE: FINAL COMMAND CAPTURING ──
+    if (state === 'ACTIVE_LISTENING') {
+      this.resetActiveListeningTimer();
       if (isFinal) {
+        if (this.activeListeningTimer) clearTimeout(this.activeListeningTimer);
         console.log(`Speech recognized (final command): "${displayTranscript}"`);
         this.recognitionManager.transitionTo('PROCESSING');
         this.accumulatedSpeechText = "";
@@ -552,23 +623,20 @@ class LukasVoiceController {
 
   _detectWakeWord(text, rawText) {
     const rawLower = (rawText || '').toLowerCase();
-    if (rawLower.includes('alexa') || rawLower.includes('locus') || rawLower.includes('lucky')) {
-      return null;
-    }
-    if (/\b(lukas|lucas|luke-us)\s*\?/i.test(rawLower)) {
+    
+    // Ignore alexa, lucky, or other explicit rejections
+    if (rawLower.includes('alexa') || rawLower.includes('lucky')) {
       return null;
     }
 
     const words = text.split(/\s+/).filter(Boolean);
     const wakePhrases = [
-      'lukas', 'lucas', 'luke-us',
-      'hey lukas', 'hey lucas', 'hey luke-us',
-      'ok lukas', 'ok lucas', 'ok luke-us',
-      'okay lukas', 'okay lucas', 'okay luke-us',
-      'hi lukas', 'hi lucas', 'hi luke-us',
-      'dear lukas', 'dear lucas', 'dear luke-us',
-      'hello lukas', 'hello lucas', 'hello luke-us',
-      'wake up lukas', 'wake up lucas', 'wake up luke-us',
+      'lukas', 'lucas', 'lukus', 'locus', 'luke-us',
+      'hey lukas', 'hey lucas', 'hey lukus', 'hey locus',
+      'ok lukas', 'ok lucas', 'ok lukus', 'ok locus',
+      'hi lukas', 'hi lucas', 'hi lukus', 'hi locus',
+      'hello lukas', 'hello lucas', 'hello lukus', 'hello locus',
+      'wake up lukas', 'wake up lucas', 'wake up lukus', 'wake up locus',
       'wake up'
     ];
 
@@ -623,7 +691,7 @@ class LukasVoiceController {
     this.cancelSpeech();
     if (this.recognitionManager) {
       this.recognitionManager.abort();
-      this.recognitionManager.transitionTo('STANDBY');
+      this.recognitionManager.transitionTo('PASSIVE_LISTENING');
     }
     this.speakingText = '';
     this.spokenTextAccumulated = '';
@@ -632,8 +700,8 @@ class LukasVoiceController {
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
     const statusText = document.getElementById('voiceStatusText');
     if (statusText) {
-      statusText.textContent = 'STANDBY — Say LUKAS to wake';
-      statusText.style.color = 'var(--rose-neon)';
+      statusText.textContent = 'PASSIVE LISTEN';
+      statusText.style.color = 'var(--purple-neon)';
     }
     const coreBtn = document.getElementById('lukasCoreBtn');
     if (coreBtn) {
@@ -657,11 +725,66 @@ class LukasVoiceController {
     }
   }
 
+  initWebAudioPipeline(stream) {
+    try {
+      if (this.audioContext) {
+        this.audioContext.close();
+      }
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      if (!AudioContextClass) return;
+      
+      this.audioContext = new AudioContextClass();
+      this.audioSource = this.audioContext.createMediaStreamSource(stream);
+      
+      // BiquadFilterNode - High-pass filter at 150Hz to suppress ambient rumble
+      this.highPassFilter = this.audioContext.createBiquadFilter();
+      this.highPassFilter.type = 'highpass';
+      this.highPassFilter.frequency.value = 150;
+      
+      // DynamicsCompressorNode - Automatic gain control to boost quiet voices
+      this.compressor = this.audioContext.createDynamicsCompressor();
+      this.compressor.threshold.value = -30;
+      this.compressor.knee.value = 10;
+      this.compressor.ratio.value = 12;
+      this.compressor.attack.value = 0.003;
+      this.compressor.release.value = 0.25;
+      
+      // GainNode for mobile gain calibration
+      this.gainNode = this.audioContext.createGain();
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      this.gainNode.gain.value = isMobile ? 2.5 : 1.0;
+      
+      // Connect nodes
+      this.audioSource.connect(this.highPassFilter);
+      this.highPassFilter.connect(this.compressor);
+      this.compressor.connect(this.gainNode);
+      
+      // AnalyserNode for voice visualizer or voiceprint/watchdog
+      this.analyser = this.audioContext.createAnalyser();
+      this.analyser.fftSize = 256;
+      this.gainNode.connect(this.analyser);
+      
+      console.log(`[voice.js] Web Audio Pipeline initialized. Mobile calibration applied: ${isMobile}. Gain set to ${this.gainNode.gain.value}`);
+    } catch (e) {
+      console.error("[voice.js] Web Audio Pipeline initialization failed:", e);
+    }
+  }
+
   async warmUpMic() {
     if (this.dummyStream) return;
     try {
-      this.dummyStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const constraints = {
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      };
+      this.dummyStream = await navigator.mediaDevices.getUserMedia(constraints);
       console.log("[voice.js] Microphone stream warmed up successfully.");
+      
+      this.initWebAudioPipeline(this.dummyStream);
+      
       if (this.isCommandListeningActive && this.biometrics) {
         this.biometrics.startAnalysis(this.dummyStream);
       }
@@ -679,25 +802,8 @@ class LukasVoiceController {
   startWakeWordListener() {
     if (!this.recognition) return;
     this.warmUpMic(); // Keep hardware mic warm
-    
-    this.isListeningForWakeWord = true;
-    this.isCommandListeningActive = false;
-    
-    if (this.isRecognitionActive) {
-      this.isTransitioning = false;
-      if (this.onRecognitionStateChange) {
-        this.onRecognitionStateChange('wakeword');
-      }
-      return;
-    }
-    
-    this.isTransitioning = true;
-    this.cancelSpeech();
-    
-    if (this.isStopping) {
-      this.pendingStart = true;
-    } else {
-      this.startRecognitionInternal();
+    if (this.recognitionManager) {
+      this.recognitionManager.transitionTo('PASSIVE_LISTENING');
     }
   }
 
@@ -922,7 +1028,7 @@ class LukasVoiceController {
     this.speakingText = cleanedText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
 
     if (this.recognitionManager) {
-      this.recognitionManager.transitionTo('SPEAKING');
+      this.recognitionManager.transitionTo('RESPONDING');
     }
 
     utterance.onend = () => {
@@ -1076,16 +1182,28 @@ class LukasVoiceController {
     localStorage.setItem('lukas_voice_emotional_tone', toneMode);
   }
 
+  resetActiveListeningTimer() {
+    if (this.activeListeningTimer) {
+      clearTimeout(this.activeListeningTimer);
+    }
+    this.activeListeningTimer = setTimeout(() => {
+      if (this.recognitionManager.state === 'ACTIVE_LISTENING') {
+        console.log("[voice.js] 10-second active listening silence timeout. Returning to PASSIVE_LISTENING.");
+        this.recognitionManager.transitionTo('PASSIVE_LISTENING');
+      }
+    }, 10000);
+  }
+
   startListeningForCommand() {
     this.warmUpMic(); // Keep hardware mic warm
     if (this.recognitionManager) {
-      this.recognitionManager.transitionTo('LISTENING');
+      this.recognitionManager.transitionTo('ACTIVE_LISTENING');
     }
   }
 
   stopListeningForCommand() {
     if (this.recognitionManager) {
-      this.recognitionManager.transitionTo('STANDBY');
+      this.recognitionManager.transitionTo('PASSIVE_LISTENING');
     }
     if (this.biometrics) {
       const voiceprint = this.biometrics.stopAnalysis();
@@ -1107,7 +1225,7 @@ class LukasVoiceController {
 
     if (this.recognitionManager) {
       this.recognitionManager.restart();
-      this.recognitionManager.transitionTo('LISTENING');
+      this.recognitionManager.transitionTo('ACTIVE_LISTENING');
     }
   }
 }

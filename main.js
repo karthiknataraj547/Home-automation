@@ -16,6 +16,7 @@ import { generateConversationalResponse, parseHomeCommand, scoreResponse, callLu
 import LukasMusicEngine from './src/ai/music.js';
 import LukasPlannerAgent from './src/ai/planner.js';
 import LukasTaskRunner from './src/ai/taskrunner.js';
+import { LukasExecutionTracker } from './src/ai/execution.js';
 
 // ── Puter Quiet Mode (Silence WebSocket warnings in console) ───────────
 if (window.puter) {
@@ -113,6 +114,7 @@ let voice = new LukasVoiceController();
 const home = new LukasAutomationHub();
 const cctv = new LukasCCTVManager();
 const diag = new LukasDiagnosticsHub();
+const executionTracker = new LukasExecutionTracker({ voice, home, diag });
 
 // ═══════ LUKAS Intelligence System ═══════
 let lukasMemory = new LukasMemory();
@@ -855,7 +857,7 @@ function resolveDevice(targetName, category, targetZone) {
   
   const searchName = targetName.toLowerCase().trim();
   
-  // 1. Determine zoneFilter
+  // 1. Determine zone/room filter
   let zoneFilter = null;
   if (targetZone) {
     zoneFilter = targetZone;
@@ -870,40 +872,50 @@ function resolveDevice(targetName, category, targetZone) {
   }
   
   let matches = [];
+  
+  // Step A: If room/zone specified or inferred, get all devices in that room
   if (zoneFilter) {
-    matches = home.dynamicDevices.filter(d => {
-      const matchZone = d.zone.toLowerCase() === zoneFilter.toLowerCase();
-      // Also match category if specified
-      if (category && ['light', 'climate', 'security', 'media', 'lock'].includes(category)) {
-        return matchZone && d.category === category;
-      }
-      return matchZone;
-    });
+    matches = home.dynamicDevices.filter(d => d.zone.toLowerCase() === zoneFilter.toLowerCase());
+  } else {
+    matches = [...home.dynamicDevices];
   }
   
-  // If we didn't find any zone-specific match or zoneFilter wasn't determined, fall back to general name-based search
-  if (matches.length === 0) {
-    matches = home.dynamicDevices.filter(d => {
-      const devName = d.name.toLowerCase();
-      const nameMatch = devName.includes(searchName) || searchName.includes(devName);
-      if (category && ['light', 'climate', 'security', 'media', 'lock'].includes(category)) {
-        return nameMatch && d.category === category;
-      }
-      return nameMatch;
-    });
+  // Step B: Filter by category/type if provided
+  if (category && ['light', 'climate', 'security', 'media', 'lock'].includes(category)) {
+    const categoryMatches = matches.filter(d => d.category === category);
+    if (categoryMatches.length > 0) {
+      matches = categoryMatches;
+    }
+  }
+  
+  // Step C: Match by targetName (either exact name match or exact ID match)
+  let cleanSearch = searchName;
+  if (zoneFilter) {
+    cleanSearch = searchName.replace(zoneFilter.toLowerCase(), '').trim();
+  }
+  
+  let finalMatches = matches.filter(d => {
+    const devName = d.name.toLowerCase();
+    const devId = d.id.toLowerCase();
+    return devName.includes(cleanSearch) || cleanSearch.includes(devName) || devId === cleanSearch;
+  });
+  
+  // If no final matches, do NOT guess/substitute, just return empty
+  if (finalMatches.length === 0) {
+    return { device: null, ambiguous: false, matches: [] };
   }
   
   // Exact match takes precedence
-  const exactMatch = matches.find(d => d.name.toLowerCase() === searchName);
+  const exactMatch = finalMatches.find(d => d.name.toLowerCase() === cleanSearch || d.id.toLowerCase() === cleanSearch);
   if (exactMatch) {
     return { device: exactMatch, ambiguous: false, matches: [exactMatch] };
   }
   
-  if (matches.length > 1) {
-    return { device: null, ambiguous: true, matches: matches };
+  if (finalMatches.length > 1) {
+    return { device: null, ambiguous: true, matches: finalMatches };
   }
   
-  return { device: matches[0] || null, ambiguous: false, matches: matches };
+  return { device: finalMatches[0], ambiguous: false, matches: finalMatches };
 }
 
 async function setDeviceStateWithFeedback(deviceId, updates) {
@@ -1767,18 +1779,19 @@ function startWatchdogSystem() {
       if (!voice || typeof voice.speak !== 'function' || typeof voice.cancelSpeech !== 'function') {
         console.error("[WATCHDOG] Voice Engine crashed! Re-initializing voice controller...");
         voice = new LukasVoiceController();
+        executionTracker.setContext({ voice });
       }
       
       // 2. Check Wake Engine / Speech Recognition Manager State Machine
       if (voice && voice.recognitionManager) {
         if (lastCommandSource === 'standby' || !conversationActive) {
-          if (voice.recognitionManager.state !== 'STANDBY' && voice.recognitionManager.state !== 'LISTENING' && !isVoiceSpeaking && !isProcessingCommand) {
-            console.warn(`[WATCHDOG] Wake Engine state mismatch (${voice.recognitionManager.state}). Transitioning to STANDBY...`);
-            voice.recognitionManager.transitionTo('STANDBY');
+          if (voice.recognitionManager.state !== 'PASSIVE_LISTENING' && voice.recognitionManager.state !== 'ACTIVE_LISTENING' && !isVoiceSpeaking && !isProcessingCommand) {
+            console.warn(`[WATCHDOG] Wake Engine state mismatch (${voice.recognitionManager.state}). Transitioning to PASSIVE_LISTENING...`);
+            voice.recognitionManager.transitionTo('PASSIVE_LISTENING');
           }
         }
         
-        if ((voice.recognitionManager.state === 'STANDBY' || voice.recognitionManager.state === 'LISTENING' || voice.recognitionManager.state === 'SPEAKING') && 
+        if ((voice.recognitionManager.state === 'PASSIVE_LISTENING' || voice.recognitionManager.state === 'ACTIVE_LISTENING' || voice.recognitionManager.state === 'RESPONDING') && 
             !voice.isRecognitionActive && !voice.isStopping && !isVoiceSpeaking) {
           console.warn(`[WATCHDOG] Speech recognition inactive during state ${voice.recognitionManager.state}. Restarting...`);
           voice.recognitionManager.start();
@@ -2307,86 +2320,92 @@ function bindUIEvents() {
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
     const activeLang = voice.speechLang || 'en-IN';
     
-    // Normalize new SpeechRecognitionManager states to legacy status strings
-    let statusState = state;
-    if (state === 'listening') {
-      statusState = 'command';
-    } else if (state === 'standby') {
-      statusState = 'wakeword';
-    } else if (state === 'idle' || state === 'processing' || state === 'speaking') {
-      statusState = 'off';
-    }
+    console.log(`[voice.onRecognitionStateChange] UI State change: ${state}`);
     
-    if (statusState === 'command') {
+    if (state === 'active_listening') {
       micBtn.classList.add('active');
       voiceStatusText.textContent = (isAlexa ? 'ALEXA ACTIVE' : 'LUKAS ACTIVE') + ` (${activeLang})`;
       voiceStatusText.style.color = isAlexa ? 'var(--cyan-neon)' : 'var(--purple-neon)';
-      diag.logToTerminal(isAlexa ? `Alexa voice link active (${activeLang})...` : `Lukas voice link active (${activeLang})...`, "info");
+      diag.logToTerminal(isAlexa ? `Alexa active listening (${activeLang})...` : `Lukas active listening (${activeLang})...`, "info");
       audioPlayer.volume = 0.08; // Duck music during mic capture
       if (coreBtn) {
         coreBtn.classList.add('listening');
         coreBtn.classList.remove('processing');
+        coreBtn.classList.remove('waking');
       }
-    } else if (state === 'wakeword') {
+    } else if (state === 'passive_listening') {
       micBtn.classList.remove('active');
-      
-      if (isProcessingCommand) {
-        voiceStatusText.textContent = 'PROCESSING...';
-        voiceStatusText.style.color = isAlexa ? 'var(--cyan-neon)' : 'var(--purple-neon)';
-        if (coreBtn) {
-          coreBtn.classList.remove('listening');
-          coreBtn.classList.add('processing');
-        }
-      } else {
-        voiceStatusText.textContent = `PASSIVE LISTEN (${activeLang})`;
-        voiceStatusText.style.color = 'var(--purple-neon)';
-        if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
-        if (coreBtn) {
-          coreBtn.classList.remove('listening');
-          coreBtn.classList.remove('processing');
-        }
+      voiceStatusText.textContent = `PASSIVE LISTEN (${activeLang})`;
+      voiceStatusText.style.color = 'var(--purple-neon)';
+      if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
+      if (coreBtn) {
+        coreBtn.classList.remove('listening');
+        coreBtn.classList.remove('processing');
+        coreBtn.classList.remove('waking');
       }
-    } else if (state === 'off') {
+    } else if (state === 'wake_detected') {
       micBtn.classList.remove('active');
-      
-      if (isProcessingCommand) {
-        voiceStatusText.textContent = 'PROCESSING...';
-        voiceStatusText.style.color = isAlexa ? 'var(--cyan-neon)' : 'var(--purple-neon)';
-        if (coreBtn) {
-          coreBtn.classList.remove('listening');
-          coreBtn.classList.add('processing');
-        }
-      } else {
-        if (coreBtn && !window.speechSynthesis.speaking && !voice.isLongConversation && !voice.isListeningForWakeWord) {
-          coreBtn.classList.remove('listening');
-          coreBtn.classList.remove('processing');
-          coreBtn.classList.remove('waking');
-        }
-
-        if (voice.isListeningForWakeWord) {
-          voiceStatusText.textContent = `PASSIVE LISTEN (${activeLang})`;
-          voiceStatusText.style.color = 'var(--purple-neon)';
-          if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
-        } else {
-          if (!isPassiveListenEnabled) {
-            voiceStatusText.textContent = 'STANDBY';
-            voiceStatusText.style.color = 'var(--rose-neon)';
-            if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
-          } else {
-            voiceStatusText.textContent = 'IDLE';
-            voiceStatusText.style.color = 'var(--cyan-neon)';
-            if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
-          }
-        }
+      voiceStatusText.textContent = isAlexa ? 'ALEXA AWAKE' : 'LUKAS AWAKE';
+      voiceStatusText.style.color = 'var(--cyan-neon)';
+      if (coreBtn) {
+        coreBtn.classList.add('waking');
+        coreBtn.classList.remove('listening');
+        coreBtn.classList.remove('processing');
       }
-
-      if (error) {
-        if (error !== 'no-speech') {
-          diag.logToTerminal(`Voice link suspended: ${error}`, "warn");
-        }
-      } else {
-        diag.logToTerminal("Voice link closed.", "info");
+    } else if (state === 'processing') {
+      micBtn.classList.remove('active');
+      voiceStatusText.textContent = 'PROCESSING...';
+      voiceStatusText.style.color = isAlexa ? 'var(--cyan-neon)' : 'var(--purple-neon)';
+      if (coreBtn) {
+        coreBtn.classList.remove('listening');
+        coreBtn.classList.add('processing');
+        coreBtn.classList.remove('waking');
       }
+    } else if (state === 'executing') {
+      micBtn.classList.remove('active');
+      voiceStatusText.textContent = 'EXECUTING...';
+      voiceStatusText.style.color = 'var(--yellow-neon, #ffd700)';
+      if (coreBtn) {
+        coreBtn.classList.remove('listening');
+        coreBtn.classList.add('processing');
+        coreBtn.classList.remove('waking');
+      }
+    } else if (state === 'responding') {
+      micBtn.classList.remove('active');
+      voiceStatusText.textContent = 'RESPONDING...';
+      voiceStatusText.style.color = 'var(--green-neon, #39ff14)';
+      if (coreBtn) {
+        coreBtn.classList.remove('listening');
+        coreBtn.classList.add('processing');
+        coreBtn.classList.remove('waking');
+      }
+    } else if (state === 'sleeping') {
+      micBtn.classList.remove('active');
+      voiceStatusText.textContent = 'SLEEPING';
+      voiceStatusText.style.color = 'var(--rose-neon)';
+      if (coreBtn) {
+        coreBtn.classList.remove('listening');
+        coreBtn.classList.remove('processing');
+        coreBtn.classList.remove('waking');
+      }
+    } else if (state === 'idle') {
+      micBtn.classList.remove('active');
+      voiceStatusText.textContent = 'IDLE';
+      voiceStatusText.style.color = 'var(--cyan-neon)';
+      if (!window.speechSynthesis.speaking) audioPlayer.volume = 0.35; // Restore volume
+      if (coreBtn) {
+        coreBtn.classList.remove('listening');
+        coreBtn.classList.remove('processing');
+        coreBtn.classList.remove('waking');
+      }
+    }
+
+    if (error) {
+      if (error !== 'no-speech') {
+        diag.logToTerminal(`Voice link suspended: ${error}`, "warn");
+      }
+    } else if (state === 'idle' || state === 'sleeping') {
+      diag.logToTerminal("Voice link closed.", "info");
     }
   };
 
@@ -6760,160 +6779,164 @@ async function processCommand(rawCommand, source) {
 
     // ── STAGE 5: AUTONOMOUS EXECUTION ──
     diag.logToTerminal("[STAGE 5: EXECUTE] Initiating background execution...", "info");
-    if (isPlanExecution) {
-      diag.logToTerminal("[PLANNER AGENT] Generating structured executive plan...", "info");
-      
-      const plan = await lukasPlan.createPlan(rawCommand, lukasMemory, activeKey, activeProvider);
-      
-      // Render plan as text in console chat
-      const planText = lukasPlan.formatPlanAsText(plan);
-      appendChatBubble(planText, 'assistant');
-      
-      // Speak objective
-      voice.stopWakeWordListener();
-      voice.speak(`I have formulated a roadmap to ${plan.objective}. Commencing execution.`);
-      
-      // Show bottom plan panel UI
-      showPlanExecutionPanel(plan);
-      
-      // Render the chat checklist bubble UI
-      const chatChecklistUI = appendChecklistBubble(plan.steps.map(s => ({ task: s.description, agent: s.type })));
-      
-      // Set task runner event hooks
-      lukasTask.onStepStarted = (idx, step) => {
-        updatePlanPanelStepStatus(idx, 'active');
-        chatChecklistUI.updateStep(idx, 'running');
-        diag.logToTerminal(`[PLANNER] Executing Step ${idx+1}: ${step.title}`, 'info');
-      };
-      
-      lukasTask.onStepCompleted = (idx, result) => {
-        updatePlanPanelStepStatus(idx, 'completed');
-        chatChecklistUI.updateStep(idx, 'completed');
-        diag.logToTerminal(`[PLANNER] Step ${idx+1} Completed successfully.`, 'info');
-      };
-      
-      lukasTask.onStepFailed = (idx, error) => {
-        updatePlanPanelStepStatus(idx, 'failed');
-        chatChecklistUI.updateStep(idx, 'failed');
-        diag.logToTerminal(`[PLANNER] Step ${idx+1} Failed: ${error.error || error.message}`, 'error');
-      };
-      
-      lukasTask.onProgress = (percent, message) => {
-        diag.logToTerminal(`[PLANNER PROGRESS] ${percent}% - ${message}`, 'info');
-      };
-
-      // Run plan execution
-      const context = {
-        memory: lukasMemory,
-        apiKey: activeKey,
-        apiProvider: activeProvider,
-        research: lukasResearch
-      };
-      
-      const results = await lukasTask.executePlan(plan, context);
-      const summary = lukasTask.summarizeResults(plan, results);
-      
-      // Synthesize cohesive Jarvis response
-      const compiledText = results.map((r, idx) => `Step ${idx+1} (${r.title}): ${r.status === 'completed' ? r.output : 'Failed - ' + r.error}`).join('\n');
-      const synthesisPrompt = `You are LUKAS, a Jarvis-style executive assistant.
-You have just executed a multi-step plan for the user: "${rawCommand}".
-Here are the steps and their execution outcomes:
-${compiledText}
-
-Please synthesize a single, cohesive, premium Jarvis-style response summary explaining exactly what actions were taken and the results. Keep it polished and direct.`;
-
-      // ── STAGE 6 & 7: ACCURACY CHECK & VALIDATION ──
-      diag.logToTerminal("[STAGE 6 & 7: ACCURACY & VALIDATE] Compiling plan results and scoring synthesizer compliance...", "info");
-      const finalResponse = await callLukasAI({
-        systemPrompt: "You are LUKAS, an advanced AI Operating System.",
-        userMessage: synthesisPrompt,
-        memory: lukasMemory,
-        apiKey: activeKey,
-        apiProvider: activeProvider,
-        temperature: 0.65,
-        maxTokens: 1000
-      });
-      
-      isProcessingCommand = false;
-      const coreBtn = document.getElementById('lukasCoreBtn');
-      if (coreBtn) coreBtn.classList.remove('processing');
-      
-      if (finalResponse) {
-        const validation = lukasReasoning.validate(rawCommand, finalResponse, lukasMemory);
-        appendChatBubble(finalResponse, 'assistant', null, validation.score);
+    voice.recognitionManager.transitionTo('executing');
+    
+    await executionTracker.trackExecution(rawCommand, async () => {
+      if (isPlanExecution) {
+        diag.logToTerminal("[PLANNER AGENT] Generating structured executive plan...", "info");
         
+        const plan = await lukasPlan.createPlan(rawCommand, lukasMemory, activeKey, activeProvider);
+        
+        // Render plan as text in console chat
+        const planText = lukasPlan.formatPlanAsText(plan);
+        appendChatBubble(planText, 'assistant');
+        
+        // Speak objective
         voice.stopWakeWordListener();
-        const cleanResponse = parseExecutiveAnalysis(finalResponse).responseText;
-        voice.speak(cleanResponse);
+        voice.speak(`I have formulated a roadmap to ${plan.objective}. Commencing execution.`);
         
-        lukasMemory.addMessage('assistant', finalResponse, 'planning');
-      } else {
-        appendChatBubble(summary, 'assistant');
-        voice.speak("Plan execution complete.");
+        // Show bottom plan panel UI
+        showPlanExecutionPanel(plan);
+        
+        // Render the chat checklist bubble UI
+        const chatChecklistUI = appendChecklistBubble(plan.steps.map(s => ({ task: s.description, agent: s.type })));
+        
+        // Set task runner event hooks
+        lukasTask.onStepStarted = (idx, step) => {
+          updatePlanPanelStepStatus(idx, 'active');
+          chatChecklistUI.updateStep(idx, 'running');
+          diag.logToTerminal(`[PLANNER] Executing Step ${idx+1}: ${step.title}`, 'info');
+        };
+        
+        lukasTask.onStepCompleted = (idx, result) => {
+          updatePlanPanelStepStatus(idx, 'completed');
+          chatChecklistUI.updateStep(idx, 'completed');
+          diag.logToTerminal(`[PLANNER] Step ${idx+1} Completed successfully.`, 'info');
+        };
+        
+        lukasTask.onStepFailed = (idx, error) => {
+          updatePlanPanelStepStatus(idx, 'failed');
+          chatChecklistUI.updateStep(idx, 'failed');
+          diag.logToTerminal(`[PLANNER] Step ${idx+1} Failed: ${error.error || error.message}`, 'error');
+        };
+        
+        lukasTask.onProgress = (percent, message) => {
+          diag.logToTerminal(`[PLANNER PROGRESS] ${percent}% - ${message}`, 'info');
+        };
+
+        // Run plan execution
+        const context = {
+          memory: lukasMemory,
+          apiKey: activeKey,
+          apiProvider: activeProvider,
+          research: lukasResearch
+        };
+        
+        const results = await lukasTask.executePlan(plan, context);
+        const summary = lukasTask.summarizeResults(plan, results);
+        
+        // Synthesize cohesive Jarvis response
+        const compiledText = results.map((r, idx) => `Step ${idx+1} (${r.title}): ${r.status === 'completed' ? r.output : 'Failed - ' + r.error}`).join('\n');
+        const synthesisPrompt = `You are LUKAS, a Jarvis-style executive assistant.
+  You have just executed a multi-step plan for the user: "${rawCommand}".
+  Here are the steps and their execution outcomes:
+  ${compiledText}
+  
+  Please synthesize a single, cohesive, premium Jarvis-style response summary explaining exactly what actions were taken and the results. Keep it polished and direct.`;
+
+        // ── STAGE 6 & 7: ACCURACY CHECK & VALIDATION ──
+        diag.logToTerminal("[STAGE 6 & 7: ACCURACY & VALIDATE] Compiling plan results and scoring synthesizer compliance...", "info");
+        const finalResponse = await callLukasAI({
+          systemPrompt: "You are LUKAS, an advanced AI Operating System.",
+          userMessage: synthesisPrompt,
+          memory: lukasMemory,
+          apiKey: activeKey,
+          apiProvider: activeProvider,
+          temperature: 0.65,
+          maxTokens: 1000
+        });
+        
+        isProcessingCommand = false;
+        const coreBtn = document.getElementById('lukasCoreBtn');
+        if (coreBtn) coreBtn.classList.remove('processing');
+        
+        if (finalResponse) {
+          const validation = lukasReasoning.validate(rawCommand, finalResponse, lukasMemory);
+          appendChatBubble(finalResponse, 'assistant', null, validation.score);
+          
+          voice.stopWakeWordListener();
+          const cleanResponse = parseExecutiveAnalysis(finalResponse).responseText;
+          voice.speak(cleanResponse);
+          
+          lukasMemory.addMessage('assistant', finalResponse, 'planning');
+        } else {
+          appendChatBubble(summary, 'assistant');
+          voice.speak("Plan execution complete.");
+        }
+        
+        // Hide bottom panel after 6s delay
+        setTimeout(() => {
+          const panel = document.getElementById('planExecutionPanel');
+          if (panel) panel.classList.remove('active');
+        }, 6000);
+        
+        keepConversationAlive(15000);
+        updateMemoryPanel();
+        return;
       }
-      
-      // Hide bottom panel after 6s delay
-      setTimeout(() => {
-        const panel = document.getElementById('planExecutionPanel');
-        if (panel) panel.classList.remove('active');
-      }, 6000);
-      
-      keepConversationAlive(15000);
-      updateMemoryPanel();
-      return;
-    }
 
-    // Single Step execution routes
-    switch (routing.intent) {
-      case INTENT.HOME_CONTROL:
-        diag.logToTerminal("[STAGE 5: EXECUTE] Processing smart home command...", "info");
-        await handleHomeControlIntent(rawCommand, activeKey, activeProvider);
-        break;
+      // Single Step execution routes
+      switch (routing.intent) {
+        case INTENT.HOME_CONTROL:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Processing smart home command...", "info");
+          await handleHomeControlIntent(rawCommand, activeKey, activeProvider);
+          break;
 
-      case INTENT.RESEARCH:
-        diag.logToTerminal("[STAGE 5: EXECUTE] Initiating web search queries...", "info");
-        await handleResearchIntent(rawCommand, activeKey, activeProvider, source);
-        break;
+        case INTENT.RESEARCH:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Initiating web search queries...", "info");
+          await handleResearchIntent(rawCommand, activeKey, activeProvider, source);
+          break;
 
-      case INTENT.MEMORY_QUERY:
-        diag.logToTerminal("[STAGE 5: EXECUTE] Accessing memory indexing database...", "info");
-        await handleMemoryQueryIntent(rawCommand, activeKey, activeProvider);
-        break;
+        case INTENT.MEMORY_QUERY:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Accessing memory indexing database...", "info");
+          await handleMemoryQueryIntent(rawCommand, activeKey, activeProvider);
+          break;
 
-      case INTENT.WEATHER:
-        diag.logToTerminal("[STAGE 5: EXECUTE] Fetching meteorological data feed...", "info");
-        await handleWeatherIntent(rawCommand);
-        break;
+        case INTENT.WEATHER:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Fetching meteorological data feed...", "info");
+          await handleWeatherIntent(rawCommand);
+          break;
 
-      case INTENT.MEDIA:
-        diag.logToTerminal("[STAGE 5: EXECUTE] Triggering client media driver...", "info");
-        await handleMediaIntent(cmd, rawCommand);
-        break;
+        case INTENT.MEDIA:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Triggering client media driver...", "info");
+          await handleMediaIntent(cmd, rawCommand);
+          break;
 
-      case INTENT.AUTOMATION:
-        diag.logToTerminal("[STAGE 5: EXECUTE] Dispatching cron and scheduling automation...", "info");
-        await handleAutomationIntent(cmd, rawCommand);
-        break;
+        case INTENT.AUTOMATION:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Dispatching cron and scheduling automation...", "info");
+          await handleAutomationIntent(cmd, rawCommand);
+          break;
 
-      case INTENT.MATH:
-        diag.logToTerminal("[STAGE 5: EXECUTE] Running numerical calculation subroutines...", "info");
-        await handleMathIntent(rawCommand, activeKey, activeProvider);
-        break;
+        case INTENT.MATH:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Running numerical calculation subroutines...", "info");
+          await handleMathIntent(rawCommand, activeKey, activeProvider);
+          break;
 
-      case INTENT.SYSTEM:
-        diag.logToTerminal("[STAGE 5: EXECUTE] Accessing local system hardware layer...", "info");
-        await handleSystemIntent(cmd);
-        break;
+        case INTENT.SYSTEM:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Accessing local system hardware layer...", "info");
+          await handleSystemIntent(cmd);
+          break;
 
-      case INTENT.CONVERSATION:
-      case INTENT.TASK_EXECUTION:
-      case INTENT.PLANNING:
-      case INTENT.ANALYSIS:
-      default:
-        diag.logToTerminal("[STAGE 5: EXECUTE] Querying Conversational AI synthesis model...", "info");
-        await handleConversationalIntent(rawCommand, routing.intent, activeKey, activeProvider, source);
-        break;
-    }
+        case INTENT.CONVERSATION:
+        case INTENT.TASK_EXECUTION:
+        case INTENT.PLANNING:
+        case INTENT.ANALYSIS:
+        default:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Querying Conversational AI synthesis model...", "info");
+          await handleConversationalIntent(rawCommand, routing.intent, activeKey, activeProvider, source);
+          break;
+      }
+    });
     
     // Auto-update memory drawer
     updateMemoryPanel();

@@ -189,7 +189,34 @@ Rules:
 
     const backendResults = await this._searchBackend(query);
     if (backendResults && backendResults.length > 0) {
-      for (const s of backendResults.slice(0, 4)) {
+      const topResults = backendResults.slice(0, 3);
+      
+      const scrapePromises = topResults.map(async (resItem) => {
+        if (resItem.url && (resItem.url.startsWith('http://') || resItem.url.startsWith('https://'))) {
+          try {
+            console.log(`[Research Agent] Scrape page content for URL: ${resItem.url}`);
+            const fetchRes = await fetch('/api/fetch-url', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ url: resItem.url })
+            });
+            if (fetchRes.ok) {
+              const fetchJson = await fetchRes.json();
+              if (fetchJson.success && fetchJson.text) {
+                resItem.text = fetchJson.text.slice(0, 3000); // Take first 3000 characters of page text
+                console.log(`[Research Agent] Scrape success for ${resItem.url} (${resItem.text.length} chars)`);
+              }
+            }
+          } catch (e) {
+            console.warn(`[Research Agent] Failed to scrape ${resItem.url}:`, e.message);
+          }
+        }
+        return resItem;
+      });
+
+      const processedResults = await Promise.all(scrapePromises);
+      
+      for (const s of processedResults) {
         if (s && s.text && s.text.trim().length > 20) {
           sources.push(s);
           confidence = Math.max(confidence, s.confidence || 0.5);

@@ -1363,9 +1363,9 @@ input:checked + .slider-knob:before {
   color: #f8fafc;
 }
 
-/* System Console Log Terminal */
 .terminal-console {
-  flex: 1;
+  height: 400px;
+  max-height: 400px;
   background: #020617;
   border: 1px solid var(--glass-border);
   border-radius: 8px;

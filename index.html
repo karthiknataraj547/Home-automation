@@ -594,6 +594,19 @@
             </div>
           </div>
 
+          <!-- Terminal control panel for filtering and export -->
+          <div class="terminal-controls" style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; justify-content: flex-end;">
+            <select id="terminalFilter" class="terminal-select" style="background: rgba(2, 6, 23, 0.6); border: 1px solid var(--purple-neon); color: #fff; border-radius: 4px; padding: 2px 6px; font-size: 0.65rem; font-family: var(--font-mono); outline: none;">
+              <option value="all">ALL SEVERITY</option>
+              <option value="normal">NORMAL</option>
+              <option value="info">INFO</option>
+              <option value="warn">WARN</option>
+              <option value="error">ERROR</option>
+            </select>
+            <button id="terminalExportCSV" class="terminal-btn" style="background: rgba(2, 6, 23, 0.6); border: 1px solid var(--cyan-neon); color: var(--cyan-neon); border-radius: 4px; padding: 2px 8px; font-size: 0.65rem; font-family: var(--font-mono); cursor: pointer; display: flex; align-items: center; gap: 4px;">
+              <i class="fa-solid fa-file-export"></i> EXPORT CSV
+            </button>
+          </div>
           <!-- Terminal output logger -->
           <div class="terminal-console" id="terminalLogContainer">
             <div class="terminal-line"><span class="terminal-prompt">&gt;</span> LUKAS OS Bootloader Loaded.</div>

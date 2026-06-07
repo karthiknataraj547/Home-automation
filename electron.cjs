@@ -950,6 +950,37 @@ const handleRequest = async (req, res) => {
 
       } catch(e) { json(res, { error: e.message, found: false, results: [] }, 500); }
     }
+
+    else if (urlPath === '/api/fetch-url' && req.method === 'POST') {
+      try {
+        const body = await readBody(req);
+        const { url } = JSON.parse(body);
+        if (!url) return json(res, { error: 'Missing url' }, 400);
+
+        const client = url.startsWith('https') ? https : http;
+        client.get(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          },
+          timeout: 6000
+        }, (r) => {
+          let html = '';
+          r.on('data', chunk => html += chunk);
+          r.on('end', () => {
+            let text = html
+              .replace(/<head>[\s\S]*?<\/head>/gi, '')
+              .replace(/<script[\s\S]*?<\/script>/gi, '')
+              .replace(/<style[\s\S]*?<\/style>/gi, '')
+              .replace(/<[^>]+>/g, ' ')
+              .replace(/\s+/g, ' ')
+              .trim();
+            json(res, { success: true, text: text.slice(0, 15000) });
+          });
+        }).on('error', (err) => {
+          json(res, { success: false, error: err.message }, 500);
+        });
+      } catch(e) { json(res, { success: false, error: e.message }, 500); }
+    }
     
     else {
       res.statusCode = 404;

@@ -80,3 +80,39 @@ export function getSessionUser() {
 export function logoutUser() {
   sessionStorage.removeItem('lukas_session');
 }
+
+// Stub for exchanging OAuth 2.0 auth code for JWT tokens
+export async function exchangeOAuthCodeForToken(code) {
+  console.log(`[AUTH STACK] Exchanging OAuth authorization code: ${code}`);
+  await new Promise(r => setTimeout(r, 600));
+  
+  const mockJwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJsdWthcyIsIm5hbWUiOiJDb21tYW5kZXIiLCJpYXQiOjE1MTYyMzkwMjJ9.stubSignature';
+  const mockRefreshToken = 'stub_refresh_token_' + Math.random().toString(36).substring(2);
+  
+  const session = {
+    username: 'Commander',
+    token: mockJwt,
+    refreshToken: mockRefreshToken,
+    loginTime: new Date().toISOString(),
+    expiresIn: 3600
+  };
+  
+  sessionStorage.setItem('lukas_session', JSON.stringify(session));
+  return { success: true, session };
+}
+
+// Stub for JWT token rotation and refresh
+export async function refreshJWTToken(refreshToken) {
+  console.log(`[AUTH STACK] Rotating JWT session token using refresh token...`);
+  await new Promise(r => setTimeout(r, 300));
+  
+  const newJwt = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJsdWthcyIsIm5hbWUiOiJDb21tYW5kZXIiLCJpYXQiOjE1MTYyNDI2MjJ9.newStubSignature';
+  const session = getSessionUser();
+  if (session) {
+    session.token = newJwt;
+    session.loginTime = new Date().toISOString();
+    sessionStorage.setItem('lukas_session', JSON.stringify(session));
+    return { success: true, token: newJwt };
+  }
+  return { success: false, error: 'No active session found to refresh.' };
+}

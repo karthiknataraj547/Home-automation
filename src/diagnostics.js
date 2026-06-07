@@ -49,6 +49,21 @@ class LukasDiagnosticsHub {
       this.renderVirtualLogs();
     }
 
+    // Bind terminal control events
+    const filterSelect = document.getElementById('terminalFilter');
+    if (filterSelect) {
+      filterSelect.addEventListener('change', () => {
+        this.renderVirtualLogs();
+      });
+    }
+
+    const exportBtn = document.getElementById('terminalExportCSV');
+    if (exportBtn) {
+      exportBtn.addEventListener('click', () => {
+        this.exportLogsToCSV();
+      });
+    }
+
     this.updateGauge('cpu', this.metrics.cpu);
     this.updateGauge('ram', this.metrics.ram);
     this.updateGauge('temp', this.metrics.temp);
@@ -91,7 +106,14 @@ class LukasDiagnosticsHub {
     const container = document.getElementById('terminalLogContainer');
     if (!container || !this.visibleContent || !this.scrollSpacer) return;
 
-    const totalHeight = this.logs.length * this.lineHeight;
+    // Get selected filter value
+    const filterSelect = document.getElementById('terminalFilter');
+    const filter = filterSelect ? filterSelect.value : 'all';
+
+    // Filter the logs
+    const filteredLogs = filter === 'all' ? this.logs : this.logs.filter(log => log.type === filter);
+
+    const totalHeight = filteredLogs.length * this.lineHeight;
     this.scrollSpacer.style.height = `${totalHeight}px`;
 
     const containerHeight = container.clientHeight || 200;
@@ -102,13 +124,13 @@ class LukasDiagnosticsHub {
 
     // Buffer visible area slightly to prevent clipping during scroll
     startIndex = Math.max(0, startIndex - 2);
-    endIndex = Math.min(this.logs.length, endIndex + 2);
+    endIndex = Math.min(filteredLogs.length, endIndex + 2);
 
     this.visibleContent.innerHTML = '';
     this.visibleContent.style.transform = `translateY(${startIndex * this.lineHeight}px)`;
 
     for (let i = startIndex; i < endIndex; i++) {
-      const log = this.logs[i];
+      const log = filteredLogs[i];
       const line = document.createElement('div');
       line.className = `terminal-line ${log.type || 'normal'}`;
       line.style.height = `${this.lineHeight}px`;
@@ -127,13 +149,40 @@ class LukasDiagnosticsHub {
       line.appendChild(textNode);
 
       // If it is the last item and is currently typing (or if it is the very last item in the console), show the blinking cursor
-      if (i === this.logs.length - 1) {
+      if (i === filteredLogs.length - 1) {
         const cursor = document.createElement('span');
         cursor.className = 'terminal-cursor';
         line.appendChild(cursor);
       }
 
       this.visibleContent.appendChild(line);
+    }
+  }
+
+  exportLogsToCSV() {
+    try {
+      const csvRows = [
+        ['Timestamp', 'Severity', 'Log Message']
+      ];
+      
+      this.logs.forEach(log => {
+        const timestamp = new Date().toISOString();
+        csvRows.push([timestamp, log.type.toUpperCase(), log.text]);
+      });
+      
+      const csvContent = "data:text/csv;charset=utf-8," 
+        + csvRows.map(e => e.map(val => `"${String(val).replace(/"/g, '""')}"`).join(",")).join("\n");
+        
+      const encodedUri = encodeURI(csvContent);
+      const link = document.createElement("a");
+      link.setAttribute("href", encodedUri);
+      link.setAttribute("download", `lukas_diagnostics_${Date.now()}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      console.log("[Diagnostics] CSV Export completed.");
+    } catch (e) {
+      console.error("[Diagnostics] CSV Export failed:", e);
     }
   }
 
