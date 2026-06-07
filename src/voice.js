@@ -110,8 +110,8 @@ class SpeechRecognitionManager {
     } else if (newState === 'SPEAKING') {
       this.controller.isListeningForWakeWord = false;
       this.controller.isCommandListeningActive = false;
-      // Keep recognition running to allow speech interruption
-      this.start();
+      // Restart speech recognition to clear old transcript context and allow fresh speech interruption
+      this.restart();
     } else if (newState === 'IDLE') {
       this.controller.isListeningForWakeWord = false;
       this.controller.isCommandListeningActive = false;
@@ -200,6 +200,7 @@ class LukasVoiceController {
     this.isListeningForWakeWord = false;
     this.isLongConversation = false;
     this.speakingText = '';
+    this.spokenTextAccumulated = '';
     this.wakeWordTimeout = null;
     this.isWakeLocked = false;
     
@@ -356,12 +357,24 @@ class LukasVoiceController {
       const userSpeech = fullTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
       
       const stopWords = ['stop', 'cancel', 'shut up', 'quiet', 'stop talking', 'stop listening', 'stand down', 'go to sleep'];
-      const isStopCommand = stopWords.some(word => userSpeech === word || userSpeech.startsWith(word + ' '));
+      
+      // Check for stop words
+      const isStopCommand = stopWords.some(word => {
+        const hasWord = userSpeech === word || userSpeech.startsWith(word + ' ') || userSpeech.endsWith(' ' + word) || userSpeech.includes(' ' + word + ' ');
+        if (hasWord) {
+          // If LUKAS spoke the word too, it's just an echo
+          if (!this._isWordInSpokenText(word, this.spokenTextAccumulated)) {
+            return true;
+          }
+        }
+        return false;
+      });
       
       if (isStopCommand) {
         console.log(`[INTERRUPT] Stop command detected during speech: "${userSpeech}"`);
         this.cancelSpeech();
         this.speakingText = '';
+        this.spokenTextAccumulated = '';
         if (this.onSpeechEnd) this.onSpeechEnd();
         
         this.recognitionManager.transitionTo('STANDBY');
@@ -372,11 +385,23 @@ class LukasVoiceController {
         return;
       }
       
-      const isEcho = this.speakingText && (this.speakingText.includes(userSpeech) || userSpeech.includes(this.speakingText));
-      if (!isEcho && userSpeech.length > 2) {
-        console.log(`[INTERRUPT] User spoke during vocalization: "${userSpeech}"`);
+      // Check for wake words
+      const isWakeCommand = this.wakeWords.some(word => {
+        const hasWord = userSpeech === word || userSpeech.startsWith(word + ' ') || userSpeech.endsWith(' ' + word) || userSpeech.includes(' ' + word + ' ');
+        if (hasWord) {
+          // If LUKAS spoke the word too, it's just an echo
+          if (!this._isWordInSpokenText(word, this.spokenTextAccumulated)) {
+            return true;
+          }
+        }
+        return false;
+      });
+
+      if (isWakeCommand) {
+        console.log(`[INTERRUPT] Wake word detected during speech: "${userSpeech}"`);
         this.cancelSpeech();
         this.speakingText = '';
+        this.spokenTextAccumulated = '';
         if (this.onSpeechEnd) this.onSpeechEnd();
         
         // INTERRUPTION FLOW: Cancel TTS -> wait 100ms -> release audio focus -> enable recognition -> listen
@@ -387,6 +412,7 @@ class LukasVoiceController {
         }, 100);
         return;
       }
+      
       return; // ignore echoes/noise during synthesis
     }
 
@@ -501,6 +527,15 @@ class LukasVoiceController {
       }
     }
     return null;
+  }
+
+  _isWordInSpokenText(word, spokenText) {
+    if (!spokenText) return false;
+    const cleanWord = word.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+    const cleanSpoken = spokenText.toLowerCase().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+    
+    const words = cleanSpoken.split(/\s+/);
+    return words.some(w => w === cleanWord || w.startsWith(cleanWord) || cleanWord.startsWith(w));
   }
 
   cancelSpeech() {
@@ -676,6 +711,7 @@ class LukasVoiceController {
     this.lastSpokenText = text;
     this.latency.speechStartAt = Date.now();
     this.cancelSpeech();
+    this.spokenTextAccumulated = "";
 
     // Set temporary speaking emotion based on configuration
     this.currentSpeechEmotion = this.emotionalToneMode === 'adaptive' ? null : this.emotionalToneMode;
@@ -770,6 +806,10 @@ class LukasVoiceController {
       this._processNextSpeechSegment();
       return;
     }
+
+    // Accumulate the spoken text for robust echo detection
+    const normalizedSegment = cleanedText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+    this.spokenTextAccumulated = (this.spokenTextAccumulated ? this.spokenTextAccumulated + " " : "") + normalizedSegment;
 
     // Apply phonetic substitution dictionary to spoken text, keeping cleanedText intact for tracking
     const spokenText = this._applyIndianPronunciations(cleanedText);
