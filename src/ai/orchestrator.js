@@ -80,15 +80,20 @@ class LukasOrchestrator {
       return { intent: INTENT.MEMORY_QUERY, confidence: 0.92, subtasks: ['recall_context'] };
     }
 
+    // Weather
+    const weatherPattern = /\b(weather|forecast|rain|humidity|wind|feels like|how (hot|cold)|what'?s the (temp|weather)|raining|snowing|sunny|cloudy)\b/i;
+    const weatherTempPattern = /\b(temperature|temp)\b/i.test(text) && 
+      (/\b(in|at|for|of|outside|today|tomorrow|current|right now|forecast)\b/i.test(text) || 
+       /\b(delhi|mumbai|bangalore|bengaluru|kolkata|chennai|hyderabad|london|paris|tokyo|new york|nyc|la|chicago|san francisco|seattle|boston|austin|denver|miami)\b/i.test(text));
+
+    if (weatherPattern.test(text) || weatherTempPattern) {
+      return { intent: INTENT.WEATHER, confidence: 0.92, subtasks: ['fetch_weather'] };
+    }
+
     // Home control — very high signal words
     const homePatterns = /\b(turn (on|off)|switch (on|off)|set (the )?light|dim|brightness|color|temperature|thermostat|lock|unlock|arm|disarm|routine|scene|mode|fan|ac|aircon|heater|sprinkler|water the|living room|bedroom|kitchen|outdoor|garage)\b/i;
     if (homePatterns.test(text)) {
       return { intent: INTENT.HOME_CONTROL, confidence: 0.93, subtasks: ['parse_device_command'] };
-    }
-
-    // Weather
-    if (/\b(weather|temperature outside|forecast|rain|humidity|wind|feels like|how (hot|cold)|what'?s the (temp|weather))\b/i.test(text)) {
-      return { intent: INTENT.WEATHER, confidence: 0.92, subtasks: ['fetch_weather'] };
     }
 
     // Media control

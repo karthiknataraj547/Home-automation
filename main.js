@@ -6110,6 +6110,64 @@ async function processCommand(rawCommand, source) {
     }
 
     // ── Direct profile query retrieval ──
+    const locationQueries = ['what is my location', 'where am i', 'tell me my location', 'get my location', 'where am i right now', 'my location'];
+    if (locationQueries.includes(cmd)) {
+      isProcessingCommand = false;
+      diag.logToTerminal("[AI CORE] Geolocating user location from browser coordinates...", "info");
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          async (position) => {
+            const lat = position.coords.latitude;
+            const lon = position.coords.longitude;
+            try {
+              const revResponse = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`, {
+                headers: { "Accept-Language": "en" }
+              });
+              if (revResponse.ok) {
+                const revData = await revResponse.json();
+                if (revData && revData.address) {
+                  const city = revData.address.city || revData.address.town || revData.address.village || revData.address.suburb || "Local Area";
+                  const country = revData.address.country || "";
+                  const address = revData.display_name || `${city}, ${country}`;
+                  handleAssistantResponse(`Your current GPS coordinates indicate that you are in ${city}, ${country} (Address: ${address}).`);
+                  
+                  if (!lukasMemory.longTerm.profile.city) {
+                    lukasMemory.longTerm.profile.city = city;
+                  }
+                  if (!lukasMemory.longTerm.profile.country) {
+                    lukasMemory.longTerm.profile.country = country;
+                  }
+                  lukasMemory._saveLongTerm();
+                  return;
+                }
+              }
+              handleAssistantResponse(`Your current coordinates are Latitude: ${lat.toFixed(4)}, Longitude: ${lon.toFixed(4)}.`);
+            } catch (e) {
+              handleAssistantResponse(`Your current coordinates are Latitude: ${lat.toFixed(4)}, Longitude: ${lon.toFixed(4)}.`);
+            }
+          },
+          (error) => {
+            const storedCity = lukasMemory.longTerm.profile.city;
+            if (storedCity) {
+              handleAssistantResponse(`I couldn't retrieve your real-time GPS coordinates (${error.message}), but your profile indicates you are in ${storedCity}.`);
+            } else {
+              handleAssistantResponse(`I couldn't retrieve your GPS coordinates (${error.message}). Please ensure location permissions are enabled for this device.`);
+            }
+          },
+          { timeout: 6000 }
+        );
+      } else {
+        const storedCity = lukasMemory.longTerm.profile.city;
+        if (storedCity) {
+          handleAssistantResponse(`Geolocation is unsupported by this browser. Your profile indicates you are in ${storedCity}.`);
+        } else {
+          handleAssistantResponse("Geolocation is unsupported by this browser and I don't have a city set in your profile.");
+        }
+      }
+      setTimeout(() => voice.startWakeWordListener(), 1000);
+      return;
+    }
+
     const nameQueries = ['what is my name', 'do you know my name', 'tell me my name'];
     const accentQueries = ['what is my preferred accent', 'what is my accent', 'do you know my accent', 'tell me my accent'];
     const countryQueries = ['what is my country', 'tell me my country', 'where am i from', 'which country am i from'];
@@ -7122,9 +7180,24 @@ ${lukasMemory.buildContextBlock()}`;
 async function handleWeatherIntent(rawCommand) {
   const cmd = rawCommand.toLowerCase().trim();
   let weatherCity = "";
-  const match = cmd.match(/(?:weather|temperature|temp|climate|forecast|raining|snowing|hot|cold|conditions|rain|snow|wind|precipitation|shower|cloudy|sunny|clear)\s+(?:in|at|for)\s+([a-zA-Z\s.-]+)/i);
-  if (match && match[1]) {
-    weatherCity = match[1].trim();
+  
+  // Pattern 1: keyword + in/at/for/of + city (e.g. "weather in Delhi", "temperature of Mumbai")
+  const match1 = cmd.match(/(?:weather|temperature|temp|climate|forecast|raining|snowing|hot|cold|conditions|rain|snow|wind|precipitation|shower|cloudy|sunny|clear)\s+(?:in|at|for|of)\s+([a-zA-Z\s.-]+)/i);
+  if (match1 && match1[1]) {
+    weatherCity = match1[1].trim();
+  } else {
+    // Pattern 2: city + keyword (e.g. "Delhi temperature", "Delhi weather")
+    const match2 = cmd.match(/([a-zA-Z\s.-]+)\s+(?:weather|temperature|temp|climate|forecast|raining|snowing|conditions|rain|shower|cloudy|sunny|clear)/i);
+    if (match2 && match2[1]) {
+      const parts = match2[1].trim().split(/\s+/);
+      // Take the last 1 or 2 words (e.g. "new york" or "delhi")
+      weatherCity = parts.length > 1 ? parts.slice(-2).join(' ') : parts[0];
+    }
+  }
+
+  if (weatherCity) {
+    // Clean up trailing terms
+    weatherCity = weatherCity.replace(/\b(right\s+now|now|today|tomorrow|current|currently|forecast)\b/gi, '').trim();
   }
 
   const targetCity = weatherCity;
