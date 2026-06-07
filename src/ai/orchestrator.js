@@ -75,9 +75,19 @@ class LukasOrchestrator {
   _classifyByRules(input) {
     const text = input.toLowerCase();
 
-    // Memory queries
-    if (/do you remember|what did (i|we)|earlier you said|you mentioned|recall|from our (last|previous)|what was I asking|my name is|you know (my|me)/i.test(text)) {
-      return { intent: INTENT.MEMORY_QUERY, confidence: 0.92, subtasks: ['recall_context'] };
+    // Memory and previous context queries
+    const memoryPatterns = [
+      /do you remember/i,
+      /what did (i|we)/i,
+      /recall/i,
+      /from our (last|previous)/i,
+      /what was I asking/i,
+      /my name is/i,
+      /you know (my|me)/i,
+      /\b(earlier|previously|previously said|previous data|you said|you reported|you stated|you mentioned|last time|before you said)\b/i
+    ];
+    if (memoryPatterns.some(re => re.test(text))) {
+      return { intent: INTENT.MEMORY_QUERY, confidence: 0.95, subtasks: ['recall_context'] };
     }
 
     // Weather

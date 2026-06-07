@@ -8337,6 +8337,14 @@ function handleAssistantResponse(text, isSmartHomeAction = false, isSilent = fal
   if (!isSilent) {
     voice.speak(parsed.responseText);
   }
+
+  if (typeof lukasMemory !== 'undefined') {
+    const history = lukasMemory.shortTerm.messages;
+    const lastMsg = history[history.length - 1];
+    if (!lastMsg || lastMsg.role !== 'assistant' || lastMsg.content !== text) {
+      lukasMemory.addMessage('assistant', text);
+    }
+  }
 }
 
 function playFuturisticBeep() {
