@@ -850,19 +850,48 @@ function initializeDashboard() {
   bootSequenceAnimation();
 }
 
-function resolveDevice(targetName, category) {
+function resolveDevice(targetName, category, targetZone) {
   if (!targetName) return { device: null, ambiguous: false, matches: [] };
   
   const searchName = targetName.toLowerCase().trim();
-  // Find all matches in home.dynamicDevices
-  let matches = home.dynamicDevices.filter(d => {
-    const devName = d.name.toLowerCase();
-    const nameMatch = devName.includes(searchName) || searchName.includes(devName);
-    if (category && ['light', 'climate', 'security', 'media'].includes(category)) {
-      return nameMatch && d.category === category;
-    }
-    return nameMatch;
-  });
+  
+  // 1. Determine zoneFilter
+  let zoneFilter = null;
+  if (targetZone) {
+    zoneFilter = targetZone;
+  } else if (searchName.includes('living room') || searchName.includes('livingroom')) {
+    zoneFilter = 'Living Room';
+  } else if (searchName.includes('bedroom')) {
+    zoneFilter = 'Bedroom';
+  } else if (searchName.includes('kitchen')) {
+    zoneFilter = 'Kitchen';
+  } else if (searchName.includes('outdoor')) {
+    zoneFilter = 'Outdoor';
+  }
+  
+  let matches = [];
+  if (zoneFilter) {
+    matches = home.dynamicDevices.filter(d => {
+      const matchZone = d.zone.toLowerCase() === zoneFilter.toLowerCase();
+      // Also match category if specified
+      if (category && ['light', 'climate', 'security', 'media', 'lock'].includes(category)) {
+        return matchZone && d.category === category;
+      }
+      return matchZone;
+    });
+  }
+  
+  // If we didn't find any zone-specific match or zoneFilter wasn't determined, fall back to general name-based search
+  if (matches.length === 0) {
+    matches = home.dynamicDevices.filter(d => {
+      const devName = d.name.toLowerCase();
+      const nameMatch = devName.includes(searchName) || searchName.includes(devName);
+      if (category && ['light', 'climate', 'security', 'media', 'lock'].includes(category)) {
+        return nameMatch && d.category === category;
+      }
+      return nameMatch;
+    });
+  }
   
   // Exact match takes precedence
   const exactMatch = matches.find(d => d.name.toLowerCase() === searchName);
@@ -1450,7 +1479,7 @@ class LukasMultiTaskEngine {
       if (isModifier && this.transactionDevice && (!parsed.targetDeviceName || parsed.targetDeviceName.toLowerCase() === 'it' || parsed.targetDeviceName.toLowerCase() === 'them')) {
         targetDevice = this.transactionDevice;
       } else {
-        const res = resolveDevice(parsed.targetDeviceName, parsed.category);
+        const res = resolveDevice(parsed.targetDeviceName, parsed.category, parsed.targetZone);
         if (res.ambiguous) {
           return { status: 'ambiguous', matches: res.matches, message: `Ambiguous target "${parsed.targetDeviceName}"` };
         }
@@ -2278,7 +2307,17 @@ function bindUIEvents() {
     const isAlexa = localStorage.getItem('lukas_assistant_persona') === 'alexa';
     const activeLang = voice.speechLang || 'en-IN';
     
-    if (state === 'command') {
+    // Normalize new SpeechRecognitionManager states to legacy status strings
+    let statusState = state;
+    if (state === 'listening') {
+      statusState = 'command';
+    } else if (state === 'standby') {
+      statusState = 'wakeword';
+    } else if (state === 'idle' || state === 'processing' || state === 'speaking') {
+      statusState = 'off';
+    }
+    
+    if (statusState === 'command') {
       micBtn.classList.add('active');
       voiceStatusText.textContent = (isAlexa ? 'ALEXA ACTIVE' : 'LUKAS ACTIVE') + ` (${activeLang})`;
       voiceStatusText.style.color = isAlexa ? 'var(--cyan-neon)' : 'var(--purple-neon)';
@@ -6537,7 +6576,7 @@ async function processCommand(rawCommand, source) {
         statusText.style.color = 'var(--rose-neon)';
       }
       
-      handleAssistantResponse("Understood, Commander. Entering standby. Say \"LUKAS\" anytime to wake me.");
+      handleAssistantResponse("Understood, Commander. Entering standby. Say \"LUKAS\" anytime to wake me.", false, true);
       
       // ★ Always keep wake-word listener alive so LUKAS can be woken from any state
       setTimeout(() => voice.startWakeWordListener(), 1500);
@@ -6958,7 +6997,7 @@ async function handleHomeControlIntent(rawCommand, apiKey, apiProvider) {
   
   if (!actions || actions.length === 0 || (actions.length === 1 && actions[0].category === 'unknown')) {
     diag.logToTerminal("[AI PARSER] Structured parse returned unknown/empty. Falling back to local pattern matching.", "warn");
-    executeLocalHomeControlFallback(rawCommand);
+    await executeLocalHomeControlFallback(rawCommand);
     return;
   }
 
@@ -7363,7 +7402,7 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
 
 // ═══════════════════ SUB-ROUTINE EXECUTION WRAPPERS ═══════════════════
 
-function executeParsedHomeControl(parsed) {
+async function executeParsedHomeControl(parsed) {
   let aiResponseText = "";
   let aiIsControlAction = false;
   let handledByAI = false;
@@ -7375,260 +7414,703 @@ function executeParsedHomeControl(parsed) {
     'gold': '#f59e0b', 'crimson': '#e11d48'
   };
 
-  if (parsed && parsed.category && parsed.category !== 'unknown') {
-    // LIGHTS
-    if (parsed.category === 'light') {
-      aiIsControlAction = true;
-      let targetZone = null;
-      let zoneLabel = "";
-      if (parsed.targetZone === 'Living Room') { targetZone = DEVICES.LIVING_ROOM; zoneLabel = "Living Room"; }
-      else if (parsed.targetZone === 'Bedroom') { targetZone = DEVICES.BEDROOM; zoneLabel = "Bedroom"; }
-      else if (parsed.targetZone === 'Kitchen') { targetZone = DEVICES.KITCHEN; zoneLabel = "Kitchen"; }
-      
-      let targetDevice = null;
-      if (parsed.targetDeviceName) {
-        const searchName = parsed.targetDeviceName.toLowerCase();
-        targetDevice = home.dynamicDevices.find(d => d.name.toLowerCase().includes(searchName) || searchName.includes(d.name.toLowerCase()));
+  try {
+    if (parsed && parsed.category && parsed.category !== 'unknown') {
+      // LIGHTS
+      if (parsed.category === 'light') {
+        aiIsControlAction = true;
+        let targetZone = null;
+        let zoneLabel = "";
+        if (parsed.targetZone === 'Living Room') { targetZone = DEVICES.LIVING_ROOM; zoneLabel = "Living Room"; }
+        else if (parsed.targetZone === 'Bedroom') { targetZone = DEVICES.BEDROOM; zoneLabel = "Bedroom"; }
+        else if (parsed.targetZone === 'Kitchen') { targetZone = DEVICES.KITCHEN; zoneLabel = "Kitchen"; }
+        
+        let targetDevice = null;
+        if (parsed.targetDeviceName) {
+          const res = resolveDevice(parsed.targetDeviceName, parsed.category || 'light', parsed.targetZone);
+          targetDevice = res.device;
+        }
+        
+        const turnOn = parsed.action === 'on' || parsed.action === 'activate';
+        const turnOff = parsed.action === 'off' || parsed.action === 'deactivate';
+        
+        if (targetDevice) {
+          const updates = {};
+          let actionLabel = "";
+          if (turnOn) {
+            updates.on = true;
+            actionLabel = "activated";
+          } else if (turnOff) {
+            updates.on = false;
+            actionLabel = "deactivated";
+          } else if (parsed.action === 'color' && parsed.value) {
+            const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
+            updates.on = true;
+            updates.color = hex;
+            actionLabel = `set to ${parsed.value}`;
+          } else if (parsed.action === 'brightness' && parsed.value) {
+            const val = parseInt(parsed.value);
+            updates.on = true;
+            updates.brightness = isNaN(val) ? 50 : val;
+            actionLabel = `dimmed to ${updates.brightness}%`;
+          } else {
+            updates.on = !targetDevice.on;
+            actionLabel = !targetDevice.on ? "activated" : "deactivated";
+          }
+          await setDeviceStateWithFeedback(targetDevice.id, updates);
+          aiResponseText = `Understood. I have successfully ${actionLabel} the ${targetDevice.name} in the ${targetDevice.zone}.`;
+          handledByAI = true;
+        } else if (parsed.isGlobal || (!targetZone && !parsed.targetDeviceName)) {
+          if (turnOn) {
+            await setDeviceStateWithFeedback(DEVICES.LIVING_ROOM, { on: true });
+            await setDeviceStateWithFeedback(DEVICES.BEDROOM, { on: true });
+            await setDeviceStateWithFeedback(DEVICES.KITCHEN, { on: true });
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light') await setDeviceStateWithFeedback(dev.id, { on: true });
+            }
+            aiResponseText = "Understood. Re-initializing all internal lighting arrays.";
+          } else if (turnOff) {
+            await setDeviceStateWithFeedback(DEVICES.LIVING_ROOM, { on: false });
+            await setDeviceStateWithFeedback(DEVICES.BEDROOM, { on: false });
+            await setDeviceStateWithFeedback(DEVICES.KITCHEN, { on: false });
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light') await setDeviceStateWithFeedback(dev.id, { on: false });
+            }
+            aiResponseText = "Understood. Powering down all lighting grids.";
+          } else if (parsed.action === 'color' && parsed.value) {
+            const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
+            await setDeviceStateWithFeedback(DEVICES.LIVING_ROOM, { on: true, color: hex });
+            await setDeviceStateWithFeedback(DEVICES.BEDROOM, { on: true, color: hex });
+            await setDeviceStateWithFeedback(DEVICES.KITCHEN, { on: true, color: hex });
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light') await setDeviceStateWithFeedback(dev.id, { on: true, color: hex });
+            }
+            aiResponseText = `Affirmative. Changing all active light spectrums to ${parsed.value}.`;
+          } else if (parsed.action === 'brightness' && parsed.value) {
+            const val = parseInt(parsed.value);
+            const percent = isNaN(val) ? 50 : val;
+            await setDeviceStateWithFeedback(DEVICES.LIVING_ROOM, { on: true, brightness: percent });
+            await setDeviceStateWithFeedback(DEVICES.BEDROOM, { on: true, brightness: percent });
+            await setDeviceStateWithFeedback(DEVICES.KITCHEN, { on: true, brightness: percent });
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light') await setDeviceStateWithFeedback(dev.id, { on: true, brightness: percent });
+            }
+            aiResponseText = `Adjusting all active light brightness levels to ${percent} percent.`;
+          } else {
+            const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
+            const newState = !isAnyOn;
+            await setDeviceStateWithFeedback(DEVICES.LIVING_ROOM, { on: newState });
+            await setDeviceStateWithFeedback(DEVICES.BEDROOM, { on: newState });
+            await setDeviceStateWithFeedback(DEVICES.KITCHEN, { on: newState });
+            for (const dev of home.dynamicDevices) {
+              if (dev.category === 'light') await setDeviceStateWithFeedback(dev.id, { on: newState });
+            }
+            aiResponseText = `Toggling all lighting grids ${newState ? 'ON' : 'OFF'}.`;
+          }
+          handledByAI = true;
+        } else if (targetZone) {
+          const updates = {};
+          let actionLabel = "";
+          if (turnOn) {
+            updates.on = true;
+            actionLabel = "activated";
+          } else if (turnOff) {
+            updates.on = false;
+            actionLabel = "deactivated";
+          } else if (parsed.action === 'color' && parsed.value) {
+            const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
+            updates.on = true;
+            updates.color = hex;
+            actionLabel = `set to ${parsed.value}`;
+          } else if (parsed.action === 'brightness' && parsed.value) {
+            const val = parseInt(parsed.value);
+            updates.on = true;
+            updates.brightness = isNaN(val) ? 50 : val;
+            actionLabel = `dimmed to ${updates.brightness}%`;
+          } else {
+            const isCurrentOn = home.state.devices[targetZone].on;
+            updates.on = !isCurrentOn;
+            actionLabel = !isCurrentOn ? "activated" : "deactivated";
+          }
+          await setDeviceStateWithFeedback(targetZone, updates);
+          for (const dev of home.dynamicDevices) {
+            if (dev.category === 'light' && dev.zone === zoneLabel) {
+              await setDeviceStateWithFeedback(dev.id, updates);
+            }
+          }
+          aiResponseText = `Perfect, I have ${actionLabel} the lighting grid in the ${zoneLabel}.`;
+          handledByAI = true;
+        }
       }
       
-      const turnOn = parsed.action === 'on' || parsed.action === 'activate';
-      const turnOff = parsed.action === 'off' || parsed.action === 'deactivate';
+      // CLIMATE
+      else if (parsed.category === 'climate') {
+        aiIsControlAction = true;
+        if (parsed.action === 'temp' && parsed.value) {
+          const val = parseInt(parsed.value);
+          if (!isNaN(val)) {
+            home.setTargetTemperature(val);
+            aiResponseText = `Adjusting climate modules. Eco-Thermostat target set to ${val} degrees Celsius.`;
+            handledByAI = true;
+          }
+        } else if (parsed.action === 'mode' && parsed.value) {
+          const mode = parsed.value.toLowerCase();
+          if (['cool', 'heat', 'eco'].includes(mode)) {
+            home.setClimateMode(mode);
+            aiResponseText = `Configuring eco-thermostat matrix to ${mode.toUpperCase()} mode.`;
+            handledByAI = true;
+          }
+        } else if (parsed.action === 'status') {
+          aiResponseText = `Current indoor sensor reading is ${home.state.climate.indoorTemp}°C, target set to ${home.state.climate.targetTemp}°C in ${home.state.climate.mode} mode.`;
+          aiIsControlAction = false;
+          handledByAI = true;
+        }
+      }
       
-      if (targetDevice) {
-        const updates = {};
-        let actionLabel = "";
+      // SECURITY
+      else if (parsed.category === 'security') {
+        aiIsControlAction = true;
+        let targetDevice = null;
+        if (parsed.targetDeviceName) {
+          const res = resolveDevice(parsed.targetDeviceName, parsed.category || 'security', parsed.targetZone);
+          targetDevice = res.device;
+        }
+        
+        const lock = parsed.action === 'off' || parsed.action === 'stop' || parsed.action === 'close';
+        const unlock = parsed.action === 'on' || parsed.action === 'open' || parsed.action === 'release';
+        
+        if (targetDevice) {
+          const isLocked = unlock ? false : (lock ? true : !targetDevice.locked);
+          await setDeviceStateWithFeedback(targetDevice.id, { locked: isLocked });
+          aiResponseText = `Understood. I have successfully ${isLocked ? 'locked and secured' : 'unlocked'} the ${targetDevice.name} in the ${targetDevice.zone}.`;
+          handledByAI = true;
+        } else {
+          const isLocked = unlock ? false : (lock ? true : !home.state.devices[DEVICES.OUTDOOR].locked);
+          await setDeviceStateWithFeedback(DEVICES.OUTDOOR, { locked: isLocked });
+          aiResponseText = isLocked ? "Perimeter locks engaged. Main entryway secured." : "Security locks disengaged. Main entryway is now unlocked.";
+          handledByAI = true;
+        }
+      }
+      
+      // ROUTINES
+      else if (parsed.category === 'routine' && parsed.value) {
+        aiIsControlAction = true;
+        const val = parsed.value.toLowerCase();
+        if (val.includes('morning') || val.includes('wake')) {
+          triggerRoutineEffect(ROUTINES.MORNING);
+          aiResponseText = "Vocalizing morning sequence. Thermostat and lighting profiles loaded for start of day.";
+          handledByAI = true;
+        } else if (val.includes('cinema') || val.includes('movie') || val.includes('theater')) {
+          triggerRoutineEffect(ROUTINES.CINEMA);
+          aiResponseText = "Initiating Cinema Mode. Ambient lights dimmed, secondary grids disabled. Enjoy your feature.";
+          handledByAI = true;
+        } else if (val.includes('eco') || val.includes('green') || val.includes('save')) {
+          triggerRoutineEffect(ROUTINES.ECO);
+          aiResponseText = "Power saving eco schedules initiated. Reducing carbon signature profiles.";
+          handledByAI = true;
+        } else if (val.includes('lockdown') || val.includes('emergency')) {
+          triggerRoutineEffect(ROUTINES.LOCKDOWN);
+          aiResponseText = "WARNING! SECURITY LOCKDOWN ACTIVATED. All portals secured, emergency beacons flashing red.";
+          handledByAI = true;
+        }
+      }
+      
+      // MEDIA — Smart Music Engine Routing
+      else if (parsed.category === 'media') {
+        aiIsControlAction = true;
+        const cmd = parsed.action || '';
+        const rawVal = parsed.value || '';
+
+        if (cmd === 'pause' || cmd === 'stop') {
+          isPlaying = false;
+          updateMediaPlayButton(false);
+          audioPlayer.pause();
+          aiResponseText = 'Audio feed paused. Standing by.';
+          handledByAI = true;
+
+        } else if (cmd === 'next') {
+          playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
+          currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
+          isPlaying = true; updateMediaWidget(); playTrack();
+          aiResponseText = `Skipping to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+          handledByAI = true;
+
+        } else if (cmd === 'prev') {
+          playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
+          currentTrackIndex = (currentTrackIndex - 1 + playlist.length) % playlist.length;
+          isPlaying = true; updateMediaWidget(); playTrack();
+          aiResponseText = `Reverting to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+          handledByAI = true;
+
+        } else {
+          // Smart music resolution — specific song or genre
+          handledByAI = true;
+          const searchQuery = rawVal || commandText;
+          const musicQuery = LukasMusicEngine.parseMediaCommand(searchQuery) || searchQuery;
+
+          // Show searching indicator
+          if (musicQuery) {
+            aiResponseText = `Searching for "${musicQuery}"... one moment.`;
+            handleAssistantResponse(aiResponseText);
+            diag.logToTerminal(`[MUSIC ENGINE] Resolving: "${musicQuery}"`, 'info');
+
+            lukasMusic.resolveRequest(musicQuery).then(result => {
+              if (result && result.track) {
+                const t = result.track;
+                // Inject the found track into the playlist and play it
+                const newTrack = { id: t.id, title: t.title, artist: t.artist, url: t.url, icon: 'fa-music', thumbnail: t.thumbnail || '' };
+                const existIdx = playlist.findIndex(p => p.id === t.id);
+                if (existIdx === -1) {
+                  playlist.push(newTrack);
+                  lukasMusic.saveToLibrary(t);
+                }
+                currentTrackIndex = playlist.findIndex(p => p.id === t.id);
+                if (currentTrackIndex === -1) currentTrackIndex = playlist.length - 1;
+                isPlaying = true;
+                updateMediaWidget();
+                playTrack();
+                diag.logToTerminal(`[MUSIC ENGINE] ✓ Playing: "${t.title}" by ${t.artist} (${result.source})`, 'info');
+                const msg = result.source === 'youtube'
+                  ? `Now playing "${t.title}" by ${t.artist}. Stream found via YouTube.`
+                  : `Now playing "${t.title}" by ${t.artist} from your LUKAS library.`;
+                handleAssistantResponse(msg);
+                if (lastCommandSource === 'voice') voice.speak(msg);
+              } else {
+                const fallbackMsg = `I couldn't find that song online. Playing from your LUKAS library instead.`;
+                isPlaying = true; updateMediaWidget(); playTrack();
+                handleAssistantResponse(fallbackMsg);
+                if (lastCommandSource === 'voice') voice.speak(fallbackMsg);
+              }
+            }).catch(err => {
+              diag.logToTerminal(`[MUSIC ENGINE] ❌ Search error: ${err.message}`, 'error');
+              isPlaying = true; updateMediaWidget(); playTrack();
+            });
+
+            // Return early — async response will be handled above
+            return;
+          } else {
+            // Genre or generic play
+            lukasMusic.resolveRequest(searchQuery).then(result => {
+              if (result && result.track) {
+                const t = result.track;
+                const existIdx = playlist.findIndex(p => p.id === t.id);
+                if (existIdx !== -1) {
+                  currentTrackIndex = existIdx;
+                } else {
+                  playlist.push(t);
+                  currentTrackIndex = playlist.length - 1;
+                }
+                isPlaying = true; updateMediaWidget(); playTrack();
+                const msg = `Playing ${t.title} from your LUKAS library.`;
+                handleAssistantResponse(msg);
+                if (lastCommandSource === 'voice') voice.speak(msg);
+              } else {
+                isPlaying = true; updateMediaWidget(); playTrack();
+                const msg = `Playing "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+                handleAssistantResponse(msg);
+                if (lastCommandSource === 'voice') voice.speak(msg);
+              }
+            }).catch(() => {
+              isPlaying = true; updateMediaWidget(); playTrack();
+            });
+            return;
+          }
+        }
+      }
+      
+      // CCTV
+      else if (parsed.category === 'cctv') {
+        aiIsControlAction = true;
+        const probeBtn = document.getElementById('cam1ProbeBtn');
+        if (probeBtn) {
+          probeBtn.click();
+          aiResponseText = "Understood. Engaging camera matrix and initiating auto-probe sequence for CAM 01.";
+        } else {
+          aiResponseText = "Initiating camera feed diagnostics. Loading CAM 01 live video stream.";
+        }
+        handledByAI = true;
+      }
+      
+      // TIME
+      else if (parsed.category === 'time') {
+        const now = new Date();
+        const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        aiResponseText = `The current system time is ${timeStr}.`;
+        handledByAI = true;
+      }
+      
+      // DATE
+      else if (parsed.category === 'date') {
+        const now = new Date();
+        const dateStr = now.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        aiResponseText = `Today is ${dateStr}.`;
+        handledByAI = true;
+      }
+      
+      // DIAGNOSTICS
+      else if (parsed.category === 'diagnostics') {
+        aiResponseText = `Diagnostics: CPU Load at ${Math.round(diag.metrics.cpu)}%, Thermals stable at ${diag.metrics.temp.toFixed(1)}°C, Firewall Shield Integrity at ${diag.metrics.security.toFixed(1)}%. Core database is normal.`;
+        diag.logToTerminal("[AI CORE] Performing system diagnostic dump...", "info");
+        setTimeout(() => {
+          diag.logToTerminal(`&gt; CPU: ${diag.metrics.cpu.toFixed(1)}% | RAM: ${diag.metrics.ram.toFixed(1)}% | Core Temp: ${diag.metrics.temp.toFixed(1)}C`, 'info');
+        }, 350);
+        handledByAI = true;
+      }
+      
+      // GREETINGS
+      else if (parsed.category === 'greetings') {
+        aiResponseText = "System online. Greetings, Commander. Ready for instruction.";
+        handledByAI = true;
+      }
+
+      if (handledByAI) {
+        handleAssistantResponse(aiResponseText, aiIsControlAction);
+      }
+    }
+  } catch (err) {
+    console.error("executeParsedHomeControl error:", err);
+    diag.logToTerminal(`[AI CORE] Control error: ${err.message}`, "error");
+    handleAssistantResponse(`I couldn't execute the command: ${err.message || 'connection failed'}.`, true);
+  }
+}
+
+async function executeLocalHomeControlFallback(rawCommand) {
+  try {
+    const cmd = rawCommand.toLowerCase().trim();
+    let responseText = "";
+    let isControlAction = false;
+
+    const colorMap = {
+      'red': '#ff0000', 'green': '#10b981', 'blue': '#3b82f6', 'purple': '#a855f7',
+      'cyan': '#00f0ff', 'orange': '#ff9f3b', 'white': '#ffffff', 'yellow': '#eab308',
+      'pink': '#ec4899', 'magenta': '#d946ef', 'lime': '#84cc16', 'teal': '#14b8a6',
+      'gold': '#f59e0b', 'crimson': '#e11d48'
+    };
+
+    // Check if command references a dynamically registered device
+    let dynamicMatch = null;
+    const isGlobalCommand = cmd.includes('all') || cmd.includes('every') || cmd.includes('entire') || cmd.includes('house');
+      
+    if (!isGlobalCommand) {
+      for (const dev of home.dynamicDevices) {
+        const devNameLower = dev.name.toLowerCase();
+        if (cmd.includes(devNameLower) || (devNameLower.split(' ').length > 1 && devNameLower.split(' ').some(word => word.length > 4 && cmd.includes(word)))) {
+          const isLegacy = ["livingRoomLight", "bedroomLight", "kitchenLight", "outdoorLock"].includes(dev.id);
+          if (!isLegacy) {
+            dynamicMatch = dev;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!dynamicMatch && !isGlobalCommand) {
+      for (const dev of home.dynamicDevices) {
+        const isLegacy = ["livingRoomLight", "bedroomLight", "kitchenLight", "outdoorLock"].includes(dev.id);
+        if (isLegacy) continue;
+        const words = dev.name.toLowerCase().split(' ');
+        const keyWords = words.filter(w => !['smart', 'node', 'device', 'the', 'light', 'lock', 'room'].includes(w));
+        if (keyWords.some(kw => cmd.includes(kw))) {
+          dynamicMatch = dev;
+          break;
+        }
+      }
+    }
+
+    if (dynamicMatch) {
+      const turnOn = /\bon\b/.test(cmd) || cmd.includes('activate') || cmd.includes('enable') || cmd.includes('start') || cmd.includes('turn on') || cmd.includes('open');
+      const turnOff = /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('deactivate') || cmd.includes('disable') || cmd.includes('shutdown') || cmd.includes('stop') || cmd.includes('turn off') || cmd.includes('close') || cmd.includes('lock');
+      
+      const updates = {};
+      let actionLabel = "";
+      
+      if (dynamicMatch.category === 'security') {
+        if (turnOn) {
+          updates.locked = false;
+          actionLabel = "unlocked";
+        } else if (turnOff) {
+          updates.locked = true;
+          actionLabel = "locked and secured";
+        } else {
+          updates.locked = !dynamicMatch.locked;
+          actionLabel = !dynamicMatch.locked ? "locked and secured" : "unlocked";
+        }
+      } else {
         if (turnOn) {
           updates.on = true;
           actionLabel = "activated";
         } else if (turnOff) {
           updates.on = false;
           actionLabel = "deactivated";
-        } else if (parsed.action === 'color' && parsed.value) {
-          const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
-          updates.on = true;
-          updates.color = hex;
-          actionLabel = `set to ${parsed.value}`;
-        } else if (parsed.action === 'brightness' && parsed.value) {
-          const val = parseInt(parsed.value);
-          updates.on = true;
-          updates.brightness = isNaN(val) ? 50 : val;
-          actionLabel = `dimmed to ${updates.brightness}%`;
         } else {
-          updates.on = !targetDevice.on;
-          actionLabel = !targetDevice.on ? "activated" : "deactivated";
+          updates.on = !dynamicMatch.on;
+          actionLabel = !dynamicMatch.on ? "activated" : "deactivated";
         }
-        home.setDeviceState(targetDevice.id, updates);
-        aiResponseText = `Understood. I have successfully ${actionLabel} the ${targetDevice.name} in the ${targetDevice.zone}.`;
-        handledByAI = true;
-      } else if (parsed.isGlobal || (!targetZone && !parsed.targetDeviceName)) {
-        if (turnOn) {
-          home.setDeviceState(DEVICES.LIVING_ROOM, { on: true });
-          home.setDeviceState(DEVICES.BEDROOM, { on: true });
-          home.setDeviceState(DEVICES.KITCHEN, { on: true });
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light') home.setDeviceState(dev.id, { on: true });
+        
+        if (dynamicMatch.category === 'light') {
+          const numbers = cmd.match(/\d+/);
+          if (numbers) {
+            updates.brightness = Math.min(100, Math.max(10, parseInt(numbers[0])));
+            updates.on = true;
+            actionLabel = `activated at ${updates.brightness}% brightness`;
           }
-          aiResponseText = "Understood. Re-initializing all internal lighting arrays.";
-        } else if (turnOff) {
-          home.setDeviceState(DEVICES.LIVING_ROOM, { on: false });
-          home.setDeviceState(DEVICES.BEDROOM, { on: false });
-          home.setDeviceState(DEVICES.KITCHEN, { on: false });
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light') home.setDeviceState(dev.id, { on: false });
+          
+          let hexColor = null;
+          let colorLabel = "";
+          if (cmd.includes('red')) { hexColor = "#ff0000"; colorLabel = "crimson red"; }
+          else if (cmd.includes('green')) { hexColor = "#10b981"; colorLabel = "emerald green"; }
+          else if (cmd.includes('blue')) { hexColor = "#3b82f6"; colorLabel = "royal blue"; }
+          else if (cmd.includes('purple')) { hexColor = "#a855f7"; colorLabel = "purple"; }
+          else if (cmd.includes('cyan')) { hexColor = "#00f0ff"; colorLabel = "neon cyan"; }
+          else if (cmd.includes('orange')) { hexColor = "#ff9f3b"; colorLabel = "amber orange"; }
+          else if (cmd.includes('white')) { hexColor = "#ffffff"; colorLabel = "cool white"; }
+          
+          if (hexColor) {
+            updates.color = hexColor;
+            updates.on = true;
+            actionLabel += (actionLabel ? " and set to " : "activated and set to ") + colorLabel;
           }
-          aiResponseText = "Understood. Powering down all lighting grids.";
-        } else if (parsed.action === 'color' && parsed.value) {
-          const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
-          home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, color: hex });
-          home.setDeviceState(DEVICES.BEDROOM, { on: true, color: hex });
-          home.setDeviceState(DEVICES.KITCHEN, { on: true, color: hex });
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, color: hex });
-          }
-          aiResponseText = `Affirmative. Changing all active light spectrums to ${parsed.value}.`;
-        } else if (parsed.action === 'brightness' && parsed.value) {
-          const val = parseInt(parsed.value);
-          const percent = isNaN(val) ? 50 : val;
-          home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, brightness: percent });
-          home.setDeviceState(DEVICES.BEDROOM, { on: true, brightness: percent });
-          home.setDeviceState(DEVICES.KITCHEN, { on: true, brightness: percent });
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, brightness: percent });
-          }
-          aiResponseText = `Adjusting all active light brightness levels to ${percent} percent.`;
-        } else {
-          const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
-          const newState = !isAnyOn;
-          home.setDeviceState(DEVICES.LIVING_ROOM, { on: newState });
-          home.setDeviceState(DEVICES.BEDROOM, { on: newState });
-          home.setDeviceState(DEVICES.KITCHEN, { on: newState });
-          for (const dev of home.dynamicDevices) {
-            if (dev.category === 'light') home.setDeviceState(dev.id, { on: newState });
-          }
-          aiResponseText = `Toggling all lighting grids ${newState ? 'ON' : 'OFF'}.`;
         }
-        handledByAI = true;
-      } else if (targetZone) {
+      }
+      
+      await setDeviceStateWithFeedback(dynamicMatch.id, updates);
+      responseText = `Understood. I have successfully ${actionLabel} the ${dynamicMatch.name} in the ${dynamicMatch.zone}.`;
+      diag.logToTerminal(`[AI VOICE CONTROL] Dynamic device match: ${dynamicMatch.name} -> Updates applied: ${JSON.stringify(updates)}`, 'info');
+      
+      handleAssistantResponse(responseText, true);
+      return;
+    }
+    
+    // LIGHTS DIRECTIVES
+    const isRoomCommand = cmd.includes('living') || cmd.includes('bedroom') || cmd.includes('kitchen') || cmd.includes('salon') || cmd.includes('cook') || cmd.includes('sleep');
+    const isGeneralLightCommand = cmd.includes('light') || cmd.includes('lamp') || cmd.includes('illumination') || cmd.includes('bulb') || cmd.includes('led');
+    const isColor = cmd.includes('color') || cmd.includes('colour') || Object.keys(colorMap).some(name => cmd.includes(name));
+    
+    if (isGeneralLightCommand || (isRoomCommand && (/\bon\b/.test(cmd) || /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('dim') || cmd.includes('brightness') || cmd.includes('color') || cmd.includes('colour') || cmd.includes('percent') || cmd.includes('%') || isColor))) {
+      let zone = null;
+      let zoneLabel = "";
+      if (cmd.includes('living') || cmd.includes('salon')) { zone = DEVICES.LIVING_ROOM; zoneLabel = "Living Room"; }
+      else if (cmd.includes('bedroom') || cmd.includes('sleep')) { zone = DEVICES.BEDROOM; zoneLabel = "Bedroom"; }
+      else if (cmd.includes('kitchen') || cmd.includes('cook')) { zone = DEVICES.KITCHEN; zoneLabel = "Kitchen"; }
+      
+      const turnOn = /\bon\b/.test(cmd) || cmd.includes('activate') || cmd.includes('enable') || cmd.includes('start');
+      const turnOff = /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('deactivate') || cmd.includes('disable') || cmd.includes('shutdown') || cmd.includes('stop');
+      const isDimming = cmd.includes('dim') || cmd.includes('percent') || cmd.includes('%') || cmd.includes('brightness') || cmd.includes('intensity');
+
+      if (zone) {
+        isControlAction = true;
         const updates = {};
-        let actionLabel = "";
-        if (turnOn) {
-          updates.on = true;
-          actionLabel = "activated";
-        } else if (turnOff) {
+        if (turnOff) {
           updates.on = false;
-          actionLabel = "deactivated";
-        } else if (parsed.action === 'color' && parsed.value) {
-          const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
+          responseText = `Acknowledged. Deactivating lighting systems in the ${zoneLabel}.`;
+        } else if (isDimming) {
+          const numbers = cmd.match(/\d+/);
+          const percentVal = numbers ? parseInt(numbers[0]) : 50;
           updates.on = true;
-          updates.color = hex;
-          actionLabel = `set to ${parsed.value}`;
-        } else if (parsed.action === 'brightness' && parsed.value) {
-          const val = parseInt(parsed.value);
+          updates.brightness = percentVal;
+          responseText = `Configured the ${zoneLabel} lights brightness capacity to ${percentVal} percent.`;
+        } else if (isColor) {
+          let hexColor = null;
+          let colorLabel = "";
+          for (const [name, hex] of Object.entries(colorMap)) {
+            if (cmd.includes(name)) {
+              hexColor = hex;
+              colorLabel = name;
+              break;
+            }
+          }
+          if (!hexColor) {
+            hexColor = "#ffffff";
+            colorLabel = "white";
+          }
           updates.on = true;
-          updates.brightness = isNaN(val) ? 50 : val;
-          actionLabel = `dimmed to ${updates.brightness}%`;
+          updates.color = hexColor;
+          responseText = `Affirmative. Setting the ${zoneLabel} spectrum overlay to ${colorLabel}.`;
+        } else if (turnOn) {
+          updates.on = true;
+          responseText = `Perfect, I have activated the lighting grid in the ${zoneLabel}.`;
         } else {
-          const isCurrentOn = home.state.devices[targetZone].on;
-          updates.on = !isCurrentOn;
-          actionLabel = !isCurrentOn ? "activated" : "deactivated";
+          const currentState = home.state.devices[zone].on;
+          updates.on = !currentState;
+          responseText = `Toggling the ${zoneLabel} lighting grid ${!currentState ? 'ON' : 'OFF'}.`;
         }
-        home.setDeviceState(targetZone, updates);
+
+        await setDeviceStateWithFeedback(zone, updates);
         for (const dev of home.dynamicDevices) {
           if (dev.category === 'light' && dev.zone === zoneLabel) {
-            home.setDeviceState(dev.id, updates);
+            await setDeviceStateWithFeedback(dev.id, updates);
           }
         }
-        aiResponseText = `Perfect, I have ${actionLabel} the lighting grid in the ${zoneLabel}.`;
-        handledByAI = true;
-      }
-    }
-    
-    // CLIMATE
-    else if (parsed.category === 'climate') {
-      aiIsControlAction = true;
-      if (parsed.action === 'temp' && parsed.value) {
-        const val = parseInt(parsed.value);
-        if (!isNaN(val)) {
-          home.setTargetTemperature(val);
-          aiResponseText = `Adjusting climate modules. Eco-Thermostat target set to ${val} degrees Celsius.`;
-          handledByAI = true;
-        }
-      } else if (parsed.action === 'mode' && parsed.value) {
-        const mode = parsed.value.toLowerCase();
-        if (['cool', 'heat', 'eco'].includes(mode)) {
-          home.setClimateMode(mode);
-          aiResponseText = `Configuring eco-thermostat matrix to ${mode.toUpperCase()} mode.`;
-          handledByAI = true;
-        }
-      } else if (parsed.action === 'status') {
-        aiResponseText = `Current indoor sensor reading is ${home.state.climate.indoorTemp}°C, target set to ${home.state.climate.targetTemp}°C in ${home.state.climate.mode} mode.`;
-        aiIsControlAction = false;
-        handledByAI = true;
-      }
-    }
-    
-    // SECURITY
-    else if (parsed.category === 'security') {
-      aiIsControlAction = true;
-      let targetDevice = null;
-      if (parsed.targetDeviceName) {
-        const searchName = parsed.targetDeviceName.toLowerCase();
-        targetDevice = home.dynamicDevices.find(d => d.category === 'security' && (d.name.toLowerCase().includes(searchName) || searchName.includes(d.name.toLowerCase())));
-      }
-      
-      const lock = parsed.action === 'off' || parsed.action === 'stop' || parsed.action === 'close';
-      const unlock = parsed.action === 'on' || parsed.action === 'open' || parsed.action === 'release';
-      
-      if (targetDevice) {
-        const isLocked = unlock ? false : (lock ? true : !targetDevice.locked);
-        home.setDeviceState(targetDevice.id, { locked: isLocked });
-        aiResponseText = `Understood. I have successfully ${isLocked ? 'locked and secured' : 'unlocked'} the ${targetDevice.name} in the ${targetDevice.zone}.`;
-        handledByAI = true;
       } else {
-        const isLocked = unlock ? false : (lock ? true : !home.state.devices[DEVICES.OUTDOOR].locked);
-        home.setDeviceState(DEVICES.OUTDOOR, { locked: isLocked });
-        aiResponseText = isLocked ? "Perimeter locks engaged. Main entryway secured." : "Security locks disengaged. Main entryway is now unlocked.";
-        handledByAI = true;
+        // Global light controls
+        if (turnOn) {
+          isControlAction = true;
+          await setDeviceStateWithFeedback(DEVICES.LIVING_ROOM, { on: true });
+          await setDeviceStateWithFeedback(DEVICES.BEDROOM, { on: true });
+          await setDeviceStateWithFeedback(DEVICES.KITCHEN, { on: true });
+          for (const dev of home.dynamicDevices) {
+            if (dev.category === 'light') await setDeviceStateWithFeedback(dev.id, { on: true });
+          }
+          responseText = "Understood. Re-initializing all internal lighting arrays.";
+        } else if (turnOff) {
+          isControlAction = true;
+          await setDeviceStateWithFeedback(DEVICES.LIVING_ROOM, { on: false });
+          await setDeviceStateWithFeedback(DEVICES.BEDROOM, { on: false });
+          await setDeviceStateWithFeedback(DEVICES.KITCHEN, { on: false });
+          for (const dev of home.dynamicDevices) {
+            if (dev.category === 'light') await setDeviceStateWithFeedback(dev.id, { on: false });
+          }
+          responseText = "Understood. Powering down all lighting grids.";
+        } else if (isColor) {
+          isControlAction = true;
+          let hexColor = null;
+          let colorLabel = "";
+          for (const [name, hex] of Object.entries(colorMap)) {
+            if (cmd.includes(name)) {
+              hexColor = hex;
+              colorLabel = name;
+              break;
+            }
+          }
+          if (!hexColor) {
+            hexColor = "#ffffff";
+            colorLabel = "white";
+          }
+          
+          await setDeviceStateWithFeedback(DEVICES.LIVING_ROOM, { on: true, color: hexColor });
+          await setDeviceStateWithFeedback(DEVICES.BEDROOM, { on: true, color: hexColor });
+          await setDeviceStateWithFeedback(DEVICES.KITCHEN, { on: true, color: hexColor });
+          for (const dev of home.dynamicDevices) {
+            if (dev.category === 'light') await setDeviceStateWithFeedback(dev.id, { on: true, color: hexColor });
+          }
+          responseText = `Affirmative. Changing all active light spectrums to ${colorLabel}.`;
+        } else if (isDimming) {
+          isControlAction = true;
+          const numbers = cmd.match(/\d+/);
+          const percentVal = numbers ? parseInt(numbers[0]) : 50;
+          
+          await setDeviceStateWithFeedback(DEVICES.LIVING_ROOM, { on: true, brightness: percentVal });
+          await setDeviceStateWithFeedback(DEVICES.BEDROOM, { on: true, brightness: percentVal });
+          await setDeviceStateWithFeedback(DEVICES.KITCHEN, { on: true, brightness: percentVal });
+          for (const dev of home.dynamicDevices) {
+            if (dev.category === 'light') await setDeviceStateWithFeedback(dev.id, { on: true, brightness: percentVal });
+          }
+          responseText = `Acknowledged. Adjusting all active light brightness levels to ${percentVal} percent.`;
+        } else if (cmd.includes('all') || cmd.includes('every') || cmd.includes('entire') || cmd.includes('house') || cmd.includes('toggle') || cmd.includes('switch')) {
+          isControlAction = true;
+          const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
+          const newState = !isAnyOn;
+          await setDeviceStateWithFeedback(DEVICES.LIVING_ROOM, { on: newState });
+          await setDeviceStateWithFeedback(DEVICES.BEDROOM, { on: newState });
+          await setDeviceStateWithFeedback(DEVICES.KITCHEN, { on: newState });
+          for (const dev of home.dynamicDevices) {
+            if (dev.category === 'light') await setDeviceStateWithFeedback(dev.id, { on: newState });
+          }
+          responseText = `Toggling all lighting grids ${newState ? 'ON' : 'OFF'}.`;
+        } else {
+          responseText = "Which zone lights would you like me to adjust? Living Room, Bedroom, or Kitchen?";
+        }
       }
     }
     
-    // ROUTINES
-    else if (parsed.category === 'routine' && parsed.value) {
-      aiIsControlAction = true;
-      const val = parsed.value.toLowerCase();
-      if (val.includes('morning') || val.includes('wake')) {
-        triggerRoutineEffect(ROUTINES.MORNING);
-        aiResponseText = "Vocalizing morning sequence. Thermostat and lighting profiles loaded for start of day.";
-        handledByAI = true;
-      } else if (val.includes('cinema') || val.includes('movie') || val.includes('theater')) {
-        triggerRoutineEffect(ROUTINES.CINEMA);
-        aiResponseText = "Initiating Cinema Mode. Ambient lights dimmed, secondary grids disabled. Enjoy your feature.";
-        handledByAI = true;
-      } else if (val.includes('eco') || val.includes('green') || val.includes('save')) {
-        triggerRoutineEffect(ROUTINES.ECO);
-        aiResponseText = "Power saving eco schedules initiated. Reducing carbon signature profiles.";
-        handledByAI = true;
-      } else if (val.includes('lockdown') || val.includes('emergency')) {
-        triggerRoutineEffect(ROUTINES.LOCKDOWN);
-        aiResponseText = "WARNING! SECURITY LOCKDOWN ACTIVATED. All portals secured, emergency beacons flashing red.";
-        handledByAI = true;
+    // CLIMATE DIRECTIVES
+    else if (cmd.includes('temp') || cmd.includes('temperature') || cmd.includes('climate') || cmd.includes('thermostat') || cmd.includes('heating') || cmd.includes('cooling') || cmd.includes('warm') || cmd.includes('cold')) {
+      const numbers = cmd.match(/\d+/);
+      
+      if (numbers) {
+        const targetTemp = parseInt(numbers[0]);
+        home.setTargetTemperature(targetTemp);
+        responseText = `Adjusting climate modules. Eco-Thermostat target set to ${targetTemp} degrees Celsius.`;
+        isControlAction = true;
+      } else if (cmd.includes('cool')) {
+        home.setClimateMode('cool');
+        responseText = "Configuring eco-thermostat matrix to COOLING cycles.";
+        isControlAction = true;
+      } else if (cmd.includes('heat') || cmd.includes('warm')) {
+        home.setClimateMode('heat');
+        responseText = "Configuring eco-thermostat matrix to HEATING cycles.";
+        isControlAction = true;
+      } else if (cmd.includes('eco') || cmd.includes('green') || cmd.includes('power saving')) {
+        home.setClimateMode('eco');
+        responseText = "Adjusting HVAC to optimal ECO energy conservation thresholds.";
+        isControlAction = true;
+      } else {
+        responseText = `Current indoor sensor reading is ${home.state.climate.indoorTemp}°C, target set to ${home.state.climate.targetTemp}°C in ${home.state.climate.mode} mode.`;
       }
     }
     
-    // MEDIA — Smart Music Engine Routing
-    else if (parsed.category === 'media') {
-      aiIsControlAction = true;
-      const cmd = parsed.action || '';
-      const rawVal = parsed.value || '';
-
-      if (cmd === 'pause' || cmd === 'stop') {
+    else if (cmd.includes('lock') || cmd.includes('gate') || cmd.includes('door') || cmd.includes('entrance')) {
+      isControlAction = true;
+      const lockUnlock = cmd.includes('unlock') || cmd.includes('open') || cmd.includes('release') || cmd.includes('deactivate');
+      
+      if (lockUnlock) {
+        await setDeviceStateWithFeedback(DEVICES.OUTDOOR, { locked: false });
+        responseText = "Security locks disengaged. Main entryway is now unlocked.";
+      } else {
+        await setDeviceStateWithFeedback(DEVICES.OUTDOOR, { locked: true });
+        responseText = "Perimeter locks engaged. Main entryway secured.";
+      }
+    }
+    
+    // ROUTINES CONTROL DIRECTIVES
+    else if (cmd.includes('morning') || cmd.includes('wake up') || cmd.includes('sunrise')) {
+      isControlAction = true;
+      triggerRoutineEffect(ROUTINES.MORNING);
+      responseText = "Vocalizing morning sequence. Thermostat and lighting profiles loaded for start of day.";
+    } 
+    else if (cmd.includes('cinema') || cmd.includes('movie') || cmd.includes('theater')) {
+      isControlAction = true;
+      triggerRoutineEffect(ROUTINES.CINEMA);
+      responseText = "Initiating Cinema Mode. Ambient lights dimmed, secondary grids disabled. Enjoy your feature.";
+    } 
+    else if (cmd.includes('eco') || cmd.includes('green') || cmd.includes('saving')) {
+      isControlAction = true;
+      triggerRoutineEffect(ROUTINES.ECO);
+      responseText = "Power saving eco schedules initiated. Reducing carbon signature profiles.";
+    } 
+    else if (cmd.includes('lockdown') || cmd.includes('emergency') || cmd.includes('threat') || cmd.includes('breach') || cmd.includes('danger')) {
+      isControlAction = true;
+      triggerRoutineEffect(ROUTINES.LOCKDOWN);
+      responseText = "WARNING! SECURITY LOCKDOWN ACTIVATED. All portals secured, emergency beacons flashing red.";
+    }
+    
+    // MEDIA DIRECTIVES — Smart Music Engine Routing
+    else if (cmd.includes('music') || cmd.includes('song') || cmd.includes('audio') || cmd.includes('play') || cmd.includes('pause') || cmd.includes('media')) {
+      isControlAction = true;
+      if (cmd.includes('pause') || cmd.includes('stop')) {
         isPlaying = false;
         updateMediaPlayButton(false);
         audioPlayer.pause();
-        aiResponseText = 'Audio feed paused. Standing by.';
-        handledByAI = true;
-
-      } else if (cmd === 'next') {
+        responseText = 'Audio feed paused. Standing by.';
+      } else if (cmd.includes('next') || cmd.includes('forward')) {
         playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
         currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
         isPlaying = true; updateMediaWidget(); playTrack();
-        aiResponseText = `Skipping to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
-        handledByAI = true;
-
-      } else if (cmd === 'prev') {
+        responseText = `Skipping to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
+      } else if (cmd.includes('prev') || cmd.includes('back')) {
         playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
         currentTrackIndex = (currentTrackIndex - 1 + playlist.length) % playlist.length;
         isPlaying = true; updateMediaWidget(); playTrack();
-        aiResponseText = `Reverting to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
-        handledByAI = true;
-
+        responseText = `Reverting to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
       } else {
-        // Smart music resolution — specific song or genre
-        handledByAI = true;
-        const searchQuery = rawVal || commandText;
-        const musicQuery = LukasMusicEngine.parseMediaCommand(searchQuery) || searchQuery;
-
-        // Show searching indicator
+        // Smart resolution — check if a specific song is named
+        const musicQuery = LukasMusicEngine.parseMediaCommand(cmd);
         if (musicQuery) {
-          aiResponseText = `Searching for "${musicQuery}"... one moment.`;
-          handleAssistantResponse(aiResponseText);
-          diag.logToTerminal(`[MUSIC ENGINE] Resolving: "${musicQuery}"`, 'info');
+          responseText = `Searching for "${musicQuery}"... one moment.`;
+          // Show the searching message immediately then resolve async
+          handleAssistantResponse(responseText);
+          if (lastCommandSource === 'voice') voice.speak(`Searching for ${musicQuery}`);
+          diag.logToTerminal(`[MUSIC ENGINE] Resolving (rule-based): "${musicQuery}"`, 'info');
 
           lukasMusic.resolveRequest(musicQuery).then(result => {
             if (result && result.track) {
               const t = result.track;
-              // Inject the found track into the playlist and play it
               const newTrack = { id: t.id, title: t.title, artist: t.artist, url: t.url, icon: 'fa-music', thumbnail: t.thumbnail || '' };
               const existIdx = playlist.findIndex(p => p.id === t.id);
-              if (existIdx === -1) {
-                playlist.push(newTrack);
-                lukasMusic.saveToLibrary(t);
-              }
+              if (existIdx === -1) { playlist.push(newTrack); lukasMusic.saveToLibrary(t); }
               currentTrackIndex = playlist.findIndex(p => p.id === t.id);
               if (currentTrackIndex === -1) currentTrackIndex = playlist.length - 1;
-              isPlaying = true;
-              updateMediaWidget();
-              playTrack();
+              isPlaying = true; updateMediaWidget(); playTrack();
               diag.logToTerminal(`[MUSIC ENGINE] ✓ Playing: "${t.title}" by ${t.artist} (${result.source})`, 'info');
               const msg = result.source === 'youtube'
                 ? `Now playing "${t.title}" by ${t.artist}. Stream found via YouTube.`
@@ -7636,490 +8118,68 @@ function executeParsedHomeControl(parsed) {
               handleAssistantResponse(msg);
               if (lastCommandSource === 'voice') voice.speak(msg);
             } else {
-              const fallbackMsg = `I couldn't find that song online. Playing from your LUKAS library instead.`;
               isPlaying = true; updateMediaWidget(); playTrack();
+              const fallbackMsg = `I couldn't find that exact song. Playing from your LUKAS library instead.`;
               handleAssistantResponse(fallbackMsg);
               if (lastCommandSource === 'voice') voice.speak(fallbackMsg);
             }
-          }).catch(err => {
-            diag.logToTerminal(`[MUSIC ENGINE] ❌ Search error: ${err.message}`, 'error');
-            isPlaying = true; updateMediaWidget(); playTrack();
-          });
-
-          // Return early — async response will be handled above
-          return;
+          }).catch(() => { isPlaying = true; updateMediaWidget(); playTrack(); });
+          return; // async, don't continue
         } else {
-          // Genre or generic play
-          lukasMusic.resolveRequest(searchQuery).then(result => {
+          // Genre/generic play
+          lukasMusic.resolveRequest(cmd).then(result => {
             if (result && result.track) {
               const t = result.track;
-              const existIdx = playlist.findIndex(p => p.id === t.id);
-              if (existIdx !== -1) {
-                currentTrackIndex = existIdx;
-              } else {
-                playlist.push(t);
-                currentTrackIndex = playlist.length - 1;
-              }
-              isPlaying = true; updateMediaWidget(); playTrack();
-              const msg = `Playing ${t.title} from your LUKAS library.`;
-              handleAssistantResponse(msg);
-              if (lastCommandSource === 'voice') voice.speak(msg);
-            } else {
-              isPlaying = true; updateMediaWidget(); playTrack();
-              const msg = `Playing "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
-              handleAssistantResponse(msg);
-              if (lastCommandSource === 'voice') voice.speak(msg);
+              const idx = playlist.findIndex(p => p.url === t.url);
+              if (idx !== -1) currentTrackIndex = idx;
             }
-          }).catch(() => {
             isPlaying = true; updateMediaWidget(); playTrack();
           });
-          return;
+          responseText = `Playing ${playlist[currentTrackIndex].title} on ${activePlatform}.`;
         }
       }
     }
-    
-    // CCTV
-    else if (parsed.category === 'cctv') {
-      aiIsControlAction = true;
+
+    // CCTV / CAMERA DIRECTIVES
+    else if (cmd.includes('cctv') || cmd.includes('camera') || cmd.includes('surveillance') || cmd.includes('feed') || cmd.includes('video') || cmd.includes('cam')) {
+      isControlAction = true;
       const probeBtn = document.getElementById('cam1ProbeBtn');
       if (probeBtn) {
         probeBtn.click();
-        aiResponseText = "Understood. Engaging camera matrix and initiating auto-probe sequence for CAM 01.";
+        responseText = "Understood. Engaging camera matrix and initiating auto-probe sequence for CAM 01.";
       } else {
-        aiResponseText = "Initiating camera feed diagnostics. Loading CAM 01 live video stream.";
+        responseText = "Initiating camera feed diagnostics. Loading CAM 01 live video stream.";
       }
-      handledByAI = true;
     }
-    
-    // TIME
-    else if (parsed.category === 'time') {
-      const now = new Date();
-      const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      aiResponseText = `The current system time is ${timeStr}.`;
-      handledByAI = true;
-    }
-    
-    // DATE
-    else if (parsed.category === 'date') {
-      const now = new Date();
-      const dateStr = now.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-      aiResponseText = `Today is ${dateStr}.`;
-      handledByAI = true;
-    }
-    
-    // DIAGNOSTICS
-    else if (parsed.category === 'diagnostics') {
-      aiResponseText = `Diagnostics: CPU Load at ${Math.round(diag.metrics.cpu)}%, Thermals stable at ${diag.metrics.temp.toFixed(1)}°C, Firewall Shield Integrity at ${diag.metrics.security.toFixed(1)}%. Core database is normal.`;
+
+    // SYSTEM DIAGNOSTICS DIRECTIVES
+    else if (cmd.includes('status') || cmd.includes('diagnostic') || cmd.includes('health') || cmd.includes('report') || cmd.includes('system')) {
+      responseText = `Diagnostics: CPU Load at ${Math.round(diag.metrics.cpu)}%, Thermals stable at ${diag.metrics.temp.toFixed(1)}°C, Firewall Shield Integrity at ${diag.metrics.security.toFixed(1)}%. Core database is normal.`;
       diag.logToTerminal("[AI CORE] Performing system diagnostic dump...", "info");
       setTimeout(() => {
         diag.logToTerminal(`&gt; CPU: ${diag.metrics.cpu.toFixed(1)}% | RAM: ${diag.metrics.ram.toFixed(1)}% | Core Temp: ${diag.metrics.temp.toFixed(1)}C`, 'info');
+        diag.logToTerminal(`&gt; Storage: 24.8TB Free | Network bandwidth: 1.2Gbps secure`, 'info');
       }, 350);
-      handledByAI = true;
     }
     
-    // GREETINGS
-    else if (parsed.category === 'greetings') {
-      aiResponseText = "System online. Greetings, Commander. Ready for instruction.";
-      handledByAI = true;
+    // GENERAL CHAT GREETINGS
+    else if (/\bhello\b/i.test(cmd) || /\bhi\b/i.test(cmd) || /\bhey\b/i.test(cmd) || cmd.includes('lukas')) {
+      responseText = "System online. Greetings, Commander. Ready for instruction.";
+    } else if (cmd.includes('who are you') || cmd.includes('what is your name')) {
+      responseText = "I am LUKAS, a futuristic home automation and assistant core, specialized in managing your climate, security grids, and energy grids.";
+    } else if (cmd.includes('how are you')) {
+      responseText = "My processor arrays are functioning at optimal temperatures, and network packets are completely secure. Thank you for checking in, Commander.";
+    } else if (cmd.includes('thank') || cmd.includes('great') || cmd.includes('cool')) {
+      responseText = "At your service, Commander. Let me know if you require further neural subroutines.";
     }
 
-    if (handledByAI) {
-      handleAssistantResponse(aiResponseText, aiIsControlAction);
+    if (responseText) {
+      handleAssistantResponse(responseText, isControlAction);
     }
-  }
-}
-
-function executeLocalHomeControlFallback(rawCommand) {
-  const cmd = rawCommand.toLowerCase().trim();
-  let responseText = "";
-  let isControlAction = false;
-
-  const colorMap = {
-    'red': '#ff0000', 'green': '#10b981', 'blue': '#3b82f6', 'purple': '#a855f7',
-    'cyan': '#00f0ff', 'orange': '#ff9f3b', 'white': '#ffffff', 'yellow': '#eab308',
-    'pink': '#ec4899', 'magenta': '#d946ef', 'lime': '#84cc16', 'teal': '#14b8a6',
-    'gold': '#f59e0b', 'crimson': '#e11d48'
-  };
-
-  // Check if command references a dynamically registered device
-  let dynamicMatch = null;
-  const isGlobalCommand = cmd.includes('all') || cmd.includes('every') || cmd.includes('entire') || cmd.includes('house');
-    
-  if (!isGlobalCommand) {
-    for (const dev of home.dynamicDevices) {
-      const devNameLower = dev.name.toLowerCase();
-      if (cmd.includes(devNameLower) || (devNameLower.split(' ').length > 1 && devNameLower.split(' ').some(word => word.length > 4 && cmd.includes(word)))) {
-        const isLegacy = ["livingRoomLight", "bedroomLight", "kitchenLight", "outdoorLock"].includes(dev.id);
-        if (!isLegacy) {
-          dynamicMatch = dev;
-          break;
-        }
-      }
-    }
-  }
-
-  if (!dynamicMatch && !isGlobalCommand) {
-    for (const dev of home.dynamicDevices) {
-      const isLegacy = ["livingRoomLight", "bedroomLight", "kitchenLight", "outdoorLock"].includes(dev.id);
-      if (isLegacy) continue;
-      const words = dev.name.toLowerCase().split(' ');
-      const keyWords = words.filter(w => !['smart', 'node', 'device', 'the', 'light', 'lock', 'room'].includes(w));
-      if (keyWords.some(kw => cmd.includes(kw))) {
-        dynamicMatch = dev;
-        break;
-      }
-    }
-  }
-
-  if (dynamicMatch) {
-    const turnOn = /\bon\b/.test(cmd) || cmd.includes('activate') || cmd.includes('enable') || cmd.includes('start') || cmd.includes('turn on') || cmd.includes('open');
-    const turnOff = /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('deactivate') || cmd.includes('disable') || cmd.includes('shutdown') || cmd.includes('stop') || cmd.includes('turn off') || cmd.includes('close') || cmd.includes('lock');
-    
-    const updates = {};
-    let actionLabel = "";
-    
-    if (dynamicMatch.category === 'security') {
-      if (turnOn) {
-        updates.locked = false;
-        actionLabel = "unlocked";
-      } else if (turnOff) {
-        updates.locked = true;
-        actionLabel = "locked and secured";
-      } else {
-        updates.locked = !dynamicMatch.locked;
-        actionLabel = !dynamicMatch.locked ? "locked and secured" : "unlocked";
-      }
-    } else {
-      if (turnOn) {
-        updates.on = true;
-        actionLabel = "activated";
-      } else if (turnOff) {
-        updates.on = false;
-        actionLabel = "deactivated";
-      } else {
-        updates.on = !dynamicMatch.on;
-        actionLabel = !dynamicMatch.on ? "activated" : "deactivated";
-      }
-      
-      if (dynamicMatch.category === 'light') {
-        const numbers = cmd.match(/\d+/);
-        if (numbers) {
-          updates.brightness = Math.min(100, Math.max(10, parseInt(numbers[0])));
-          updates.on = true;
-          actionLabel = `activated at ${updates.brightness}% brightness`;
-        }
-        
-        let hexColor = null;
-        let colorLabel = "";
-        if (cmd.includes('red')) { hexColor = "#ff0000"; colorLabel = "crimson red"; }
-        else if (cmd.includes('green')) { hexColor = "#10b981"; colorLabel = "emerald green"; }
-        else if (cmd.includes('blue')) { hexColor = "#3b82f6"; colorLabel = "royal blue"; }
-        else if (cmd.includes('purple')) { hexColor = "#a855f7"; colorLabel = "purple"; }
-        else if (cmd.includes('cyan')) { hexColor = "#00f0ff"; colorLabel = "neon cyan"; }
-        else if (cmd.includes('orange')) { hexColor = "#ff9f3b"; colorLabel = "amber orange"; }
-        else if (cmd.includes('white')) { hexColor = "#ffffff"; colorLabel = "cool white"; }
-        
-        if (hexColor) {
-          updates.color = hexColor;
-          updates.on = true;
-          actionLabel += (actionLabel ? " and set to " : "activated and set to ") + colorLabel;
-        }
-      }
-    }
-    
-    home.setDeviceState(dynamicMatch.id, updates);
-    responseText = `Understood. I have successfully ${actionLabel} the ${dynamicMatch.name} in the ${dynamicMatch.zone}.`;
-    diag.logToTerminal(`[AI VOICE CONTROL] Dynamic device match: ${dynamicMatch.name} -> Updates applied: ${JSON.stringify(updates)}`, 'info');
-    
-    handleAssistantResponse(responseText, true);
-    return;
-  }
-  
-  // LIGHTS DIRECTIVES
-  const isRoomCommand = cmd.includes('living') || cmd.includes('bedroom') || cmd.includes('kitchen') || cmd.includes('salon') || cmd.includes('cook') || cmd.includes('sleep');
-  const isGeneralLightCommand = cmd.includes('light') || cmd.includes('lamp') || cmd.includes('illumination') || cmd.includes('bulb') || cmd.includes('led');
-  const isColor = cmd.includes('color') || cmd.includes('colour') || Object.keys(colorMap).some(name => cmd.includes(name));
-  
-  if (isGeneralLightCommand || (isRoomCommand && (/\bon\b/.test(cmd) || /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('dim') || cmd.includes('brightness') || cmd.includes('color') || cmd.includes('colour') || cmd.includes('percent') || cmd.includes('%') || isColor))) {
-    let zone = null;
-    let zoneLabel = "";
-    if (cmd.includes('living') || cmd.includes('salon')) { zone = DEVICES.LIVING_ROOM; zoneLabel = "Living Room"; }
-    else if (cmd.includes('bedroom') || cmd.includes('sleep')) { zone = DEVICES.BEDROOM; zoneLabel = "Bedroom"; }
-    else if (cmd.includes('kitchen') || cmd.includes('cook')) { zone = DEVICES.KITCHEN; zoneLabel = "Kitchen"; }
-    
-    const turnOn = /\bon\b/.test(cmd) || cmd.includes('activate') || cmd.includes('enable') || cmd.includes('start');
-    const turnOff = /\boff\b/.test(cmd) || /\bof\b/.test(cmd) || cmd.includes('deactivate') || cmd.includes('disable') || cmd.includes('shutdown') || cmd.includes('stop');
-    const isDimming = cmd.includes('dim') || cmd.includes('percent') || cmd.includes('%') || cmd.includes('brightness') || cmd.includes('intensity');
-
-    if (zone) {
-      isControlAction = true;
-      if (turnOn) {
-        home.setDeviceState(zone, { on: true });
-        responseText = `Perfect, I have activated the lighting grid in the ${zoneLabel}.`;
-      } else if (turnOff) {
-        home.setDeviceState(zone, { on: false });
-        responseText = `Acknowledged. Deactivating lighting systems in the ${zoneLabel}.`;
-      } else if (isDimming) {
-        const numbers = cmd.match(/\d+/);
-        const percentVal = numbers ? parseInt(numbers[0]) : 50;
-        home.setDeviceState(zone, { on: true, brightness: percentVal });
-        responseText = `Configured the ${zoneLabel} lights brightness capacity to ${percentVal} percent.`;
-      } else if (isColor) {
-        let hexColor = null;
-        let colorLabel = "";
-        for (const [name, hex] of Object.entries(colorMap)) {
-          if (cmd.includes(name)) {
-            hexColor = hex;
-            colorLabel = name;
-            break;
-          }
-        }
-        if (!hexColor) {
-          hexColor = "#ffffff";
-          colorLabel = "white";
-        }
-
-        home.setDeviceState(zone, { on: true, color: hexColor });
-        responseText = `Affirmative. Setting the ${zoneLabel} spectrum overlay to ${colorLabel}.`;
-      } else {
-        const currentState = home.state.devices[zone].on;
-        home.setDeviceState(zone, { on: !currentState });
-        responseText = `Toggling the ${zoneLabel} lighting grid ${!currentState ? 'ON' : 'OFF'}.`;
-      }
-    } else {
-      // Global light controls
-      if (turnOn) {
-        isControlAction = true;
-        home.setDeviceState(DEVICES.LIVING_ROOM, { on: true });
-        home.setDeviceState(DEVICES.BEDROOM, { on: true });
-        home.setDeviceState(DEVICES.KITCHEN, { on: true });
-        for (const dev of home.dynamicDevices) {
-          if (dev.category === 'light') home.setDeviceState(dev.id, { on: true });
-        }
-        responseText = "Understood. Re-initializing all internal lighting arrays.";
-      } else if (turnOff) {
-        isControlAction = true;
-        home.setDeviceState(DEVICES.LIVING_ROOM, { on: false });
-        home.setDeviceState(DEVICES.BEDROOM, { on: false });
-        home.setDeviceState(DEVICES.KITCHEN, { on: false });
-        for (const dev of home.dynamicDevices) {
-          if (dev.category === 'light') home.setDeviceState(dev.id, { on: false });
-        }
-        responseText = "Understood. Powering down all lighting grids.";
-      } else if (isColor) {
-        isControlAction = true;
-        let hexColor = null;
-        let colorLabel = "";
-        for (const [name, hex] of Object.entries(colorMap)) {
-          if (cmd.includes(name)) {
-            hexColor = hex;
-            colorLabel = name;
-            break;
-          }
-        }
-        if (!hexColor) {
-          hexColor = "#ffffff";
-          colorLabel = "white";
-        }
-        
-        home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, color: hexColor });
-        home.setDeviceState(DEVICES.BEDROOM, { on: true, color: hexColor });
-        home.setDeviceState(DEVICES.KITCHEN, { on: true, color: hexColor });
-        for (const dev of home.dynamicDevices) {
-          if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, color: hexColor });
-        }
-        responseText = `Affirmative. Changing all active light spectrums to ${colorLabel}.`;
-      } else if (isDimming) {
-        isControlAction = true;
-        const numbers = cmd.match(/\d+/);
-        const percentVal = numbers ? parseInt(numbers[0]) : 50;
-        
-        home.setDeviceState(DEVICES.LIVING_ROOM, { on: true, brightness: percentVal });
-        home.setDeviceState(DEVICES.BEDROOM, { on: true, brightness: percentVal });
-        home.setDeviceState(DEVICES.KITCHEN, { on: true, brightness: percentVal });
-        for (const dev of home.dynamicDevices) {
-          if (dev.category === 'light') home.setDeviceState(dev.id, { on: true, brightness: percentVal });
-        }
-        responseText = `Acknowledged. Adjusting all active light brightness levels to ${percentVal} percent.`;
-      } else if (cmd.includes('all') || cmd.includes('every') || cmd.includes('entire') || cmd.includes('house') || cmd.includes('toggle') || cmd.includes('switch')) {
-        isControlAction = true;
-        const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
-        const newState = !isAnyOn;
-        home.setDeviceState(DEVICES.LIVING_ROOM, { on: newState });
-        home.setDeviceState(DEVICES.BEDROOM, { on: newState });
-        home.setDeviceState(DEVICES.KITCHEN, { on: newState });
-        for (const dev of home.dynamicDevices) {
-          if (dev.category === 'light') home.setDeviceState(dev.id, { on: newState });
-        }
-        responseText = `Toggling all lighting grids ${newState ? 'ON' : 'OFF'}.`;
-      } else {
-        responseText = "Which zone lights would you like me to adjust? Living Room, Bedroom, or Kitchen?";
-      }
-    }
-  }
-  
-  // CLIMATE DIRECTIVES
-  else if (cmd.includes('temp') || cmd.includes('temperature') || cmd.includes('climate') || cmd.includes('thermostat') || cmd.includes('heating') || cmd.includes('cooling') || cmd.includes('warm') || cmd.includes('cold')) {
-    const numbers = cmd.match(/\d+/);
-    
-    if (numbers) {
-      const targetTemp = parseInt(numbers[0]);
-      home.setTargetTemperature(targetTemp);
-      responseText = `Adjusting climate modules. Eco-Thermostat target set to ${targetTemp} degrees Celsius.`;
-      isControlAction = true;
-    } else if (cmd.includes('cool')) {
-      home.setClimateMode('cool');
-      responseText = "Configuring eco-thermostat matrix to COOLING cycles.";
-      isControlAction = true;
-    } else if (cmd.includes('heat') || cmd.includes('warm')) {
-      home.setClimateMode('heat');
-      responseText = "Configuring eco-thermostat matrix to HEATING cycles.";
-      isControlAction = true;
-    } else if (cmd.includes('eco') || cmd.includes('green') || cmd.includes('power saving')) {
-      home.setClimateMode('eco');
-      responseText = "Adjusting HVAC to optimal ECO energy conservation thresholds.";
-      isControlAction = true;
-    } else {
-      responseText = `Current indoor sensor reading is ${home.state.climate.indoorTemp}°C, target set to ${home.state.climate.targetTemp}°C in ${home.state.climate.mode} mode.`;
-    }
-  }
-  
-  else if (cmd.includes('lock') || cmd.includes('gate') || cmd.includes('door') || cmd.includes('entrance')) {
-    isControlAction = true;
-    const lockUnlock = cmd.includes('unlock') || cmd.includes('open') || cmd.includes('release') || cmd.includes('deactivate');
-    
-    if (lockUnlock) {
-      home.setDeviceState(DEVICES.OUTDOOR, { locked: false });
-      responseText = "Security locks disengaged. Main entryway is now unlocked.";
-    } else {
-      home.setDeviceState(DEVICES.OUTDOOR, { locked: true });
-      responseText = "Perimeter locks engaged. Main entryway secured.";
-    }
-  }
-  
-  // ROUTINES CONTROL DIRECTIVES
-  else if (cmd.includes('morning') || cmd.includes('wake up') || cmd.includes('sunrise')) {
-    isControlAction = true;
-    triggerRoutineEffect(ROUTINES.MORNING);
-    responseText = "Vocalizing morning sequence. Thermostat and lighting profiles loaded for start of day.";
-  } 
-  else if (cmd.includes('cinema') || cmd.includes('movie') || cmd.includes('theater')) {
-    isControlAction = true;
-    triggerRoutineEffect(ROUTINES.CINEMA);
-    responseText = "Initiating Cinema Mode. Ambient lights dimmed, secondary grids disabled. Enjoy your feature.";
-  } 
-  else if (cmd.includes('eco') || cmd.includes('green') || cmd.includes('saving')) {
-    isControlAction = true;
-    triggerRoutineEffect(ROUTINES.ECO);
-    responseText = "Power saving eco schedules initiated. Reducing carbon signature profiles.";
-  } 
-  else if (cmd.includes('lockdown') || cmd.includes('emergency') || cmd.includes('threat') || cmd.includes('breach') || cmd.includes('danger')) {
-    isControlAction = true;
-    triggerRoutineEffect(ROUTINES.LOCKDOWN);
-    responseText = "WARNING! SECURITY LOCKDOWN ACTIVATED. All portals secured, emergency beacons flashing red.";
-  }
-  
-  // MEDIA DIRECTIVES — Smart Music Engine Routing
-  else if (cmd.includes('music') || cmd.includes('song') || cmd.includes('audio') || cmd.includes('play') || cmd.includes('pause') || cmd.includes('media')) {
-    isControlAction = true;
-    if (cmd.includes('pause') || cmd.includes('stop')) {
-      isPlaying = false;
-      updateMediaPlayButton(false);
-      audioPlayer.pause();
-      responseText = 'Audio feed paused. Standing by.';
-    } else if (cmd.includes('next') || cmd.includes('forward')) {
-      playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
-      currentTrackIndex = (currentTrackIndex + 1) % playlist.length;
-      isPlaying = true; updateMediaWidget(); playTrack();
-      responseText = `Skipping to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
-    } else if (cmd.includes('prev') || cmd.includes('back')) {
-      playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }));
-      currentTrackIndex = (currentTrackIndex - 1 + playlist.length) % playlist.length;
-      isPlaying = true; updateMediaWidget(); playTrack();
-      responseText = `Reverting to: "${playlist[currentTrackIndex].title}" on ${activePlatform}.`;
-    } else {
-      // Smart resolution — check if a specific song is named
-      const musicQuery = LukasMusicEngine.parseMediaCommand(cmd);
-      if (musicQuery) {
-        responseText = `Searching for "${musicQuery}"... one moment.`;
-        // Show the searching message immediately then resolve async
-        handleAssistantResponse(responseText);
-        if (lastCommandSource === 'voice') voice.speak(`Searching for ${musicQuery}`);
-        diag.logToTerminal(`[MUSIC ENGINE] Resolving (rule-based): "${musicQuery}"`, 'info');
-
-        lukasMusic.resolveRequest(musicQuery).then(result => {
-          if (result && result.track) {
-            const t = result.track;
-            const newTrack = { id: t.id, title: t.title, artist: t.artist, url: t.url, icon: 'fa-music', thumbnail: t.thumbnail || '' };
-            const existIdx = playlist.findIndex(p => p.id === t.id);
-            if (existIdx === -1) { playlist.push(newTrack); lukasMusic.saveToLibrary(t); }
-            currentTrackIndex = playlist.findIndex(p => p.id === t.id);
-            if (currentTrackIndex === -1) currentTrackIndex = playlist.length - 1;
-            isPlaying = true; updateMediaWidget(); playTrack();
-            diag.logToTerminal(`[MUSIC ENGINE] ✓ Playing: "${t.title}" by ${t.artist} (${result.source})`, 'info');
-            const msg = result.source === 'youtube'
-              ? `Now playing "${t.title}" by ${t.artist}. Stream found via YouTube.`
-              : `Now playing "${t.title}" by ${t.artist} from your LUKAS library.`;
-            handleAssistantResponse(msg);
-            if (lastCommandSource === 'voice') voice.speak(msg);
-          } else {
-            isPlaying = true; updateMediaWidget(); playTrack();
-            const fallbackMsg = `I couldn't find that exact song. Playing from your LUKAS library instead.`;
-            handleAssistantResponse(fallbackMsg);
-            if (lastCommandSource === 'voice') voice.speak(fallbackMsg);
-          }
-        }).catch(() => { isPlaying = true; updateMediaWidget(); playTrack(); });
-        return; // async, don't continue
-      } else {
-        // Genre/generic play
-        lukasMusic.resolveRequest(cmd).then(result => {
-          if (result && result.track) {
-            const t = result.track;
-            const idx = playlist.findIndex(p => p.url === t.url);
-            if (idx !== -1) currentTrackIndex = idx;
-          }
-          isPlaying = true; updateMediaWidget(); playTrack();
-        });
-        responseText = `Playing ${playlist[currentTrackIndex].title} on ${activePlatform}.`;
-      }
-    }
-  }
-
-  // CCTV / CAMERA DIRECTIVES
-  else if (cmd.includes('cctv') || cmd.includes('camera') || cmd.includes('surveillance') || cmd.includes('feed') || cmd.includes('video') || cmd.includes('cam')) {
-    isControlAction = true;
-    const probeBtn = document.getElementById('cam1ProbeBtn');
-    if (probeBtn) {
-      probeBtn.click();
-      responseText = "Understood. Engaging camera matrix and initiating auto-probe sequence for CAM 01.";
-    } else {
-      responseText = "Initiating camera feed diagnostics. Loading CAM 01 live video stream.";
-    }
-  }
-
-  // SYSTEM DIAGNOSTICS DIRECTIVES
-  else if (cmd.includes('status') || cmd.includes('diagnostic') || cmd.includes('health') || cmd.includes('report') || cmd.includes('system')) {
-    responseText = `Diagnostics: CPU Load at ${Math.round(diag.metrics.cpu)}%, Thermals stable at ${diag.metrics.temp.toFixed(1)}°C, Firewall Shield Integrity at ${diag.metrics.security.toFixed(1)}%. Core database is normal.`;
-    diag.logToTerminal("[AI CORE] Performing system diagnostic dump...", "info");
-    setTimeout(() => {
-      diag.logToTerminal(`&gt; CPU: ${diag.metrics.cpu.toFixed(1)}% | RAM: ${diag.metrics.ram.toFixed(1)}% | Core Temp: ${diag.metrics.temp.toFixed(1)}C`, 'info');
-      diag.logToTerminal(`&gt; Storage: 24.8TB Free | Network bandwidth: 1.2Gbps secure`, 'info');
-    }, 350);
-  }
-  
-  // GENERAL CHAT GREETINGS
-  else if (/\bhello\b/i.test(cmd) || /\bhi\b/i.test(cmd) || /\bhey\b/i.test(cmd) || cmd.includes('lukas')) {
-    responseText = "System online. Greetings, Commander. Ready for instruction.";
-  } else if (cmd.includes('who are you') || cmd.includes('what is your name')) {
-    responseText = "I am LUKAS, a futuristic home automation and assistant core, specialized in managing your climate, security grids, and energy grids.";
-  } else if (cmd.includes('how are you')) {
-    responseText = "My processor arrays are functioning at optimal temperatures, and network packets are completely secure. Thank you for checking in, Commander.";
-  } else if (cmd.includes('thank') || cmd.includes('great') || cmd.includes('cool')) {
-    responseText = "At your service, Commander. Let me know if you require further neural subroutines.";
-  }
-
-  if (responseText) {
-    handleAssistantResponse(responseText, isControlAction);
+  } catch (err) {
+    console.error("executeLocalHomeControlFallback error:", err);
+    diag.logToTerminal(`[AI CORE] Local fallback control error: ${err.message}`, "error");
+    handleAssistantResponse(`I couldn't execute the command: ${err.message || 'connection failed'}.`, true);
   }
 }
 
@@ -8148,7 +8208,7 @@ function runWikipediaSearchFallback(rawCommand) {
 }
 
 // 6. Speak and display response bubbles
-function handleAssistantResponse(text, isSmartHomeAction = false) {
+function handleAssistantResponse(text, isSmartHomeAction = false, isSilent = false) {
   isProcessingCommand = false;
   const coreBtn = document.getElementById('lukasCoreBtn');
   if (coreBtn) {
@@ -8178,7 +8238,9 @@ function handleAssistantResponse(text, isSmartHomeAction = false) {
   appendChatBubble(text, 'assistant');
   // Stop wake word listening while vocalizing to avoid self-triggering
   voice.stopWakeWordListener();
-  voice.speak(parsed.responseText);
+  if (!isSilent) {
+    voice.speak(parsed.responseText);
+  }
 }
 
 function playFuturisticBeep() {
@@ -8630,7 +8692,9 @@ function renderDashboardCustomDevices() {
   const container = document.querySelector('.automation-zones');
   if (!container) return;
 
-  const devices = home.dynamicDevices;
+  const devices = home.dynamicDevices.filter(d => 
+    !['livingRoomLight', 'bedroomLight', 'kitchenLight', 'outdoorLock'].includes(d.id)
+  );
   devices.forEach(dev => {
     // Resolve FontAwesome icon based on device category
     let iconClass = 'fa-cube';

@@ -26,6 +26,81 @@ class LukasAutomationHub {
     // Load dynamic device registry from local storage
     this.dynamicDevices = JSON.parse(localStorage.getItem('lukas_dynamic_devices')) || [];
 
+    // Bootstrap built-in devices if they are missing
+    const defaultBuiltIns = [
+      {
+        id: 'livingRoomLight',
+        name: 'Living Room Light',
+        zone: 'Living Room',
+        category: 'light',
+        protocol: 'Zigbee',
+        ipAddress: '192.168.1.10',
+        integration: 'local',
+        status: 'ONLINE',
+        on: true,
+        brightness: 80,
+        color: '#00f0ff',
+        latency: 8,
+        rssi: -55
+      },
+      {
+        id: 'bedroomLight',
+        name: 'Bedroom Light',
+        zone: 'Bedroom',
+        category: 'light',
+        protocol: 'Zigbee',
+        ipAddress: '192.168.1.11',
+        integration: 'local',
+        status: 'ONLINE',
+        on: false,
+        brightness: 50,
+        color: '#a855f7',
+        latency: 12,
+        rssi: -62
+      },
+      {
+        id: 'kitchenLight',
+        name: 'Kitchen Light',
+        zone: 'Kitchen',
+        category: 'light',
+        protocol: 'Zigbee',
+        ipAddress: '192.168.1.12',
+        integration: 'local',
+        status: 'ONLINE',
+        on: false,
+        brightness: 60,
+        color: '#10b981',
+        latency: 10,
+        rssi: -58
+      },
+      {
+        id: 'outdoorLock',
+        name: 'Outdoor Lock',
+        zone: 'Outdoor',
+        category: 'lock',
+        protocol: 'Zigbee',
+        ipAddress: '192.168.1.13',
+        integration: 'local',
+        status: 'ONLINE',
+        locked: true,
+        floodlights: false,
+        latency: 15,
+        rssi: -65
+      }
+    ];
+
+    let modified = false;
+    for (const defDev of defaultBuiltIns) {
+      if (!this.dynamicDevices.some(d => d.id === defDev.id)) {
+        this.dynamicDevices.push(defDev);
+        modified = true;
+      }
+    }
+
+    if (modified) {
+      this.saveDynamicDevices();
+    }
+
     const savedGarden = localStorage.getItem('lukas_garden_state');
     this.state = {
       // Keep state.devices compatible with legacy main.js mappings
