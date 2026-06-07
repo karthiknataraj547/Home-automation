@@ -19,11 +19,36 @@ class LukasDiagnosticsHub {
     this.chartWidth = 1000;
     this.chartHeight = 80;
     
+    // Virtualized logs config
+    this.logs = [];
+    this.maxLogs = 500;
+    this.lineHeight = 18;
+    this.scrollSpacer = null;
+    this.visibleContent = null;
+    
     this.initEnergyHistory();
   }
 
   // Set up gauges with initial values
   initGauges() {
+    // Parse existing lines in container on load
+    const container = document.getElementById('terminalLogContainer');
+    if (container) {
+      const existingLines = container.querySelectorAll('.terminal-line');
+      existingLines.forEach(line => {
+        const text = line.textContent.replace(/^>\s*/, '').replace(/_$/, '').trim();
+        let type = 'normal';
+        if (line.classList.contains('info')) type = 'info';
+        else if (line.classList.contains('warn')) type = 'warn';
+        else if (line.classList.contains('error')) type = 'error';
+        this.logs.push({ text, type, isTyping: false });
+      });
+      container.innerHTML = '';
+      
+      this.setupVirtualDOM(container);
+      this.renderVirtualLogs();
+    }
+
     this.updateGauge('cpu', this.metrics.cpu);
     this.updateGauge('ram', this.metrics.ram);
     this.updateGauge('temp', this.metrics.temp);
@@ -33,6 +58,83 @@ class LukasDiagnosticsHub {
     setInterval(() => {
       this.fluctuateMetrics();
     }, 3000);
+  }
+
+  setupVirtualDOM(container) {
+    container.style.position = 'relative';
+    container.style.overflowY = 'auto';
+    
+    // Create scroll spacer
+    this.scrollSpacer = document.createElement('div');
+    this.scrollSpacer.className = 'terminal-scroll-spacer';
+    this.scrollSpacer.style.height = '0px';
+    this.scrollSpacer.style.position = 'relative';
+    this.scrollSpacer.style.width = '100%';
+    
+    // Create visible content container
+    this.visibleContent = document.createElement('div');
+    this.visibleContent.className = 'terminal-visible-content';
+    this.visibleContent.style.position = 'absolute';
+    this.visibleContent.style.top = '0';
+    this.visibleContent.style.left = '0';
+    this.visibleContent.style.right = '0';
+    
+    this.scrollSpacer.appendChild(this.visibleContent);
+    container.appendChild(this.scrollSpacer);
+    
+    container.addEventListener('scroll', () => {
+      this.renderVirtualLogs();
+    });
+  }
+
+  renderVirtualLogs() {
+    const container = document.getElementById('terminalLogContainer');
+    if (!container || !this.visibleContent || !this.scrollSpacer) return;
+
+    const totalHeight = this.logs.length * this.lineHeight;
+    this.scrollSpacer.style.height = `${totalHeight}px`;
+
+    const containerHeight = container.clientHeight || 200;
+    const scrollTop = container.scrollTop;
+
+    let startIndex = Math.floor(scrollTop / this.lineHeight);
+    let endIndex = Math.ceil((scrollTop + containerHeight) / this.lineHeight);
+
+    // Buffer visible area slightly to prevent clipping during scroll
+    startIndex = Math.max(0, startIndex - 2);
+    endIndex = Math.min(this.logs.length, endIndex + 2);
+
+    this.visibleContent.innerHTML = '';
+    this.visibleContent.style.transform = `translateY(${startIndex * this.lineHeight}px)`;
+
+    for (let i = startIndex; i < endIndex; i++) {
+      const log = this.logs[i];
+      const line = document.createElement('div');
+      line.className = `terminal-line ${log.type || 'normal'}`;
+      line.style.height = `${this.lineHeight}px`;
+      line.style.display = 'flex';
+      line.style.alignItems = 'center';
+
+      // Prompt symbol
+      const prompt = document.createElement('span');
+      prompt.className = 'terminal-prompt';
+      prompt.innerHTML = '&gt; ';
+      line.appendChild(prompt);
+
+      // Text content
+      const textNode = document.createElement('span');
+      textNode.textContent = log.text;
+      line.appendChild(textNode);
+
+      // If it is the last item and is currently typing (or if it is the very last item in the console), show the blinking cursor
+      if (i === this.logs.length - 1) {
+        const cursor = document.createElement('span');
+        cursor.className = 'terminal-cursor';
+        line.appendChild(cursor);
+      }
+
+      this.visibleContent.appendChild(line);
+    }
   }
 
   // Update a specific circular SVG gauge
@@ -92,51 +194,33 @@ class LukasDiagnosticsHub {
     const container = document.getElementById('terminalLogContainer');
     if (!container) return;
 
-    // Remove cursor line if present
-    const cursor = container.querySelector('.terminal-cursor');
-    if (cursor) cursor.remove();
+    // Create a new log entry
+    const newEntry = { text: "", type, targetText: text, isTyping: true };
+    this.logs.push(newEntry);
 
-    const line = document.createElement('div');
-    line.className = `terminal-line ${type}`;
+    if (this.logs.length > this.maxLogs) {
+      this.logs.shift();
+    }
 
-    // Add high-tech prompt symbol
-    const prompt = document.createElement('span');
-    prompt.className = 'terminal-prompt';
-    prompt.innerHTML = '&gt; ';
-    line.appendChild(prompt);
-
-    // Text content
-    const textNode = document.createElement('span');
-    line.appendChild(textNode);
-    container.appendChild(line);
-
-    // Re-append cursor
-    const newCursor = document.createElement('span');
-    newCursor.className = 'terminal-cursor';
-    container.appendChild(newCursor);
-
-    // Typewriter print effect for logs
+    // Typewriter animation on the array entry
     let index = 0;
-    const typeSpeed = 15; // ms per char
-    
+    const typeSpeed = 15;
+
     const typeWriter = () => {
       if (index < text.length) {
-        textNode.textContent += text.charAt(index);
+        newEntry.text += text.charAt(index);
         index++;
+        this.renderVirtualLogs();
         container.scrollTop = container.scrollHeight;
         setTimeout(typeWriter, typeSpeed);
       } else {
+        newEntry.isTyping = false;
+        this.renderVirtualLogs();
         container.scrollTop = container.scrollHeight;
       }
     };
-    
-    typeWriter();
 
-    // Cap total terminal log lines at 50 to prevent DOM slowdowns
-    const lines = container.querySelectorAll('.terminal-line');
-    if (lines.length > 50) {
-      lines[0].remove();
-    }
+    typeWriter();
   }
 
   // Initialize simulated energy data

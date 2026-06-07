@@ -877,6 +877,98 @@ function resolveDevice(targetName, category) {
   return { device: matches[0] || null, ambiguous: false, matches: matches };
 }
 
+async function setDeviceStateWithFeedback(deviceId, updates) {
+  // 1. Locate the card
+  let id = deviceId;
+  if (id === 'livingRoom' || id === 'livingRoomLight') id = 'zoneLivingRoom';
+  else if (id === 'bedroom' || id === 'bedroomLight') id = 'zoneBedroom';
+  else if (id === 'kitchen' || id === 'kitchenLight') id = 'zoneKitchen';
+  else if (id === 'outdoor' || id === 'outdoorLock') id = 'zoneOutdoor';
+
+  const card = document.getElementById(id) || 
+               document.querySelector(`.custom-device-card[data-id="${deviceId}"]`) || 
+               document.querySelector(`.node-item-card[data-id="${deviceId}"]`);
+
+  // 2. Add spinner & reset error state
+  let spinner = null;
+  let errorIcon = null;
+  let feedbackLine = null;
+  
+  if (card) {
+    // Check/create spinner
+    spinner = card.querySelector('.device-spinner');
+    if (!spinner) {
+      spinner = document.createElement('i');
+      spinner.className = 'fa-solid fa-spinner fa-spin device-spinner';
+      spinner.style.color = 'var(--cyan-neon)';
+      spinner.style.marginLeft = '0.5rem';
+      spinner.style.fontSize = '0.9rem';
+      card.querySelector('.zone-header')?.appendChild(spinner);
+    }
+    spinner.style.display = 'inline-block';
+
+    // Hide existing error icon
+    errorIcon = card.querySelector('.device-error-icon');
+    if (errorIcon) {
+      errorIcon.style.display = 'none';
+    }
+
+    // Check/create feedback line at the bottom of card
+    feedbackLine = card.querySelector('.device-feedback-line');
+    if (!feedbackLine) {
+      feedbackLine = document.createElement('div');
+      feedbackLine.className = 'device-feedback-line';
+      feedbackLine.style.fontSize = '0.6rem';
+      feedbackLine.style.color = '#64748b';
+      feedbackLine.style.marginTop = '6px';
+      feedbackLine.style.display = 'flex';
+      feedbackLine.style.justifyContent = 'space-between';
+      card.appendChild(feedbackLine);
+    }
+  }
+
+  try {
+    // 3. Await actual home state update (which fetches API)
+    await home.setDeviceState(deviceId, updates);
+
+    // 4. Update UI with Success
+    if (card) {
+      if (spinner) spinner.style.display = 'none';
+      
+      // Update RSSI and Latency if we have dynamic device details
+      const dev = home.dynamicDevices.find(d => d.id === deviceId || d.id === id);
+      const latencyVal = dev ? dev.latency : Math.floor(Math.random() * 20) + 5;
+      const rssiVal = dev ? dev.rssi : -50 - Math.floor(Math.random() * 25);
+      
+      if (feedbackLine) {
+        feedbackLine.innerHTML = `<span>Updated: ${new Date().toLocaleTimeString()}</span> <span>RSSI: ${rssiVal}dBm (${latencyVal}ms)</span>`;
+      }
+    }
+  } catch (err) {
+    // 5. Handle Failure: Revert UI, hide spinner, display warning icon
+    console.error(`[setDeviceStateWithFeedback Error]`, err);
+    if (card) {
+      if (spinner) spinner.style.display = 'none';
+      
+      errorIcon = card.querySelector('.device-error-icon');
+      if (!errorIcon) {
+        errorIcon = document.createElement('i');
+        errorIcon.className = 'fa-solid fa-triangle-exclamation device-error-icon';
+        errorIcon.style.color = 'var(--rose-neon)';
+        errorIcon.style.marginLeft = '0.5rem';
+        errorIcon.style.fontSize = '0.9rem';
+        card.querySelector('.zone-header')?.appendChild(errorIcon);
+      }
+      errorIcon.style.display = 'inline-block';
+
+      if (feedbackLine) {
+        feedbackLine.innerHTML = `<span style="color: var(--rose-neon);">API Error: ${err.message || 'Timeout'}</span>`;
+      }
+    }
+    throw err;
+  }
+}
+
 class LukasMultiTaskEngine {
   constructor() {
     this.currentActions = [];
@@ -901,7 +993,7 @@ class LukasMultiTaskEngine {
     this.modifiedClimate = null;
   }
 
-  _setDeviceStateAndTrack(devId, updates) {
+  async _setDeviceStateAndTrack(devId, updates) {
     const currentDev = home.dynamicDevices.find(d => d.id === devId);
     if (!currentDev) return;
     
@@ -922,7 +1014,7 @@ class LukasMultiTaskEngine {
       });
     }
 
-    home.setDeviceState(devId, updates);
+    await setDeviceStateWithFeedback(devId, updates);
   }
 
   _setTargetTemperatureAndTrack(val) {
@@ -1105,101 +1197,102 @@ class LukasMultiTaskEngine {
     this.climateSnapshot = JSON.parse(JSON.stringify(home.state.climate));
     this.devicesSnapshot = JSON.parse(JSON.stringify(home.state.devices));
 
-    let transactionSuccess = false;
-    let finalSpeechResponse = "";
-    
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      diag.logToTerminal(`[TRANSACTION] Starting execution attempt ${attempt}/2...`, "info");
-      
-      this.expectedDeviceStates = {};
-      this.expectedClimateStates = {};
-      this.modifiedDevicesList = [];
-      this.modifiedClimate = null;
-      this.transactionDevice = null;
-      
-      home.dynamicDevices = JSON.parse(JSON.stringify(this.registrySnapshot));
-      home.saveDynamicDevices();
-      Object.assign(home.state.climate, this.climateSnapshot);
-      Object.assign(home.state.devices, this.devicesSnapshot);
-      
-      let allSuccessful = true;
-      let halted = false;
-      let haltMessage = "";
-      
-      for (let i = 0; i < actions.length; i++) {
-        this.currentIndex = i;
-        this.statusMap[i] = 'running';
-        this._updateQueueUI();
-        
-        await new Promise(resolve => setTimeout(resolve, 800));
+    this.expectedDeviceStates = {};
+    this.expectedClimateStates = {};
+    this.modifiedDevicesList = [];
+    this.modifiedClimate = null;
+    this.transactionDevice = null;
 
-        const action = actions[i];
-        try {
-          const result = await this._executeSingleAction(action);
-          if (result.status === 'ambiguous') {
-            this.statusMap[i] = 'ambiguous';
-            this.detailsMap[i] = `Ambiguous device: ${result.message}`;
-            this._updateQueueUI();
-            
-            allSuccessful = false;
-            halted = true;
-            haltMessage = `Wait, I found multiple matches for "${action.targetDeviceName}": ${result.matches.map(m => m.name).join(', ')}. Which one did you mean?`;
-            break;
-          } else if (result.status === 'failed') {
-            this.statusMap[i] = 'failed';
-            this.detailsMap[i] = result.message;
-            this._updateQueueUI();
-            allSuccessful = false;
-            break;
-          } else {
-            this.statusMap[i] = 'completed';
-            this.detailsMap[i] = result.message;
-            this._updateQueueUI();
-          }
-        } catch (err) {
-          console.error(err);
-          this.statusMap[i] = 'failed';
-          this.detailsMap[i] = `Error: ${err.message}`;
+    let ambiguousHalt = false;
+    let ambiguousMessage = "";
+
+    for (let i = 0; i < actions.length; i++) {
+      this.currentIndex = i;
+      this.statusMap[i] = 'running';
+      this._updateQueueUI();
+      
+      await new Promise(resolve => setTimeout(resolve, 800));
+
+      const action = actions[i];
+      try {
+        const result = await this._executeSingleAction(action);
+        if (result.status === 'ambiguous') {
+          this.statusMap[i] = 'ambiguous';
+          this.detailsMap[i] = `Ambiguous device: ${result.message}`;
           this._updateQueueUI();
-          allSuccessful = false;
+          
+          ambiguousHalt = true;
+          ambiguousMessage = `Wait, I found multiple matches for "${action.targetDeviceName}": ${result.matches.map(m => m.name).join(', ')}. Which one did you mean?`;
           break;
-        }
-      }
-
-      if (halted) {
-        this._rollback();
-        this._speakAndOutput(haltMessage, true);
-        this.isRunning = false;
-        return;
-      }
-
-      if (allSuccessful) {
-        const verification = this._verifyStates();
-        if (verification.passed) {
-          transactionSuccess = true;
-          finalSpeechResponse = this._buildConfirmationResponse();
-          break;
+        } else if (result.status === 'failed') {
+          this.statusMap[i] = 'failed';
+          this.detailsMap[i] = result.message;
+          this._updateQueueUI();
         } else {
-          console.warn(`[TRANSACTION] Verification failed: ${verification.details}`);
-          diag.logToTerminal(`[TRANSACTION] ⚠️ State verification mismatch: ${verification.details}. Retrying...`, "warn");
+          this.statusMap[i] = 'completed';
+          this.detailsMap[i] = result.message;
+          this._updateQueueUI();
         }
-      } else {
-        diag.logToTerminal(`[TRANSACTION] ⚠️ Attempt ${attempt} failed execution. Retrying...`, "warn");
-      }
-      
-      if (attempt < 2) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (err) {
+        console.error(err);
+        this.statusMap[i] = 'failed';
+        this.detailsMap[i] = `Error: ${err.message}`;
+        this._updateQueueUI();
       }
     }
 
     this.isRunning = false;
 
-    if (transactionSuccess) {
-      this._speakAndOutput(finalSpeechResponse);
-    } else {
+    if (ambiguousHalt) {
       this._rollback();
-      this._speakAndOutput("I was unable to apply some of the device actions successfully. Rolling back the entire command.");
+      this._speakAndOutput(ambiguousMessage, true);
+      return;
     }
+
+    const succeededCount = this.statusMap.filter(s => s === 'completed').length;
+    const failedCount = this.statusMap.filter(s => s === 'failed').length;
+
+    if (succeededCount === actions.length) {
+      // All actions succeeded! Verify and speak.
+      const verification = this._verifyStates();
+      if (verification.passed) {
+        const response = this._buildConfirmationResponse();
+        this._speakAndOutput(response);
+      } else {
+        // State mismatch warning
+        const response = this._buildConfirmationResponse() + " Note: state verification reported some mismatches.";
+        this._speakAndOutput(response);
+      }
+    } else if (succeededCount === 0) {
+      // All actions failed! Rollback and say failed.
+      this._rollback();
+      
+      const failedActs = [];
+      for (let i = 0; i < actions.length; i++) {
+        failedActs.push(this._getActionDescriptionSimplified(actions[i]));
+      }
+      this._speakAndOutput(`I couldn't reach the device to execute: ${failedActs.join(', ')}.`);
+    } else {
+      // Partial success! Do not rollback, but report success & failure truths.
+      const succeededActs = [];
+      const failedActs = [];
+      for (let i = 0; i < actions.length; i++) {
+        const desc = this._getActionDescriptionSimplified(actions[i]);
+        if (this.statusMap[i] === 'completed') {
+          succeededActs.push(desc);
+        } else if (this.statusMap[i] === 'failed') {
+          failedActs.push(desc);
+        }
+      }
+      this._speakAndOutput(`I was able to ${succeededActs.join(' and ')}, but ${failedActs.join(' and ')} failed.`);
+    }
+  }
+
+  _getActionDescriptionSimplified(act) {
+    const actionStr = act.action === 'on' ? 'turn on' : (act.action === 'off' ? 'turn off' : act.action || 'set');
+    const target = act.targetDeviceName || act.targetZone || 'device';
+    const value = act.value ? ` to ${act.value}` : '';
+    return `${actionStr} ${target}${value}`;
   }
 
   _getActionDescription(act) {
@@ -1365,55 +1458,55 @@ class LukasMultiTaskEngine {
             }
           }
           if (Object.keys(updates).length > 0) {
-            this._setDeviceStateAndTrack(targetDevice.id, updates);
+            await this._setDeviceStateAndTrack(targetDevice.id, updates);
             return { status: 'success', message: `I have successfully updated the ${targetDevice.name}.` };
           }
           return { status: 'success', message: `No updates needed for ${targetDevice.name}.` };
         } else if (parsed.isGlobal || (!targetZone && !parsed.targetDeviceName)) {
           if (turnOn) {
-            this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { on: true });
-            this._setDeviceStateAndTrack(DEVICES.BEDROOM, { on: true });
-            this._setDeviceStateAndTrack(DEVICES.KITCHEN, { on: true });
+            await this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { on: true });
+            await this._setDeviceStateAndTrack(DEVICES.BEDROOM, { on: true });
+            await this._setDeviceStateAndTrack(DEVICES.KITCHEN, { on: true });
             for (const dev of home.dynamicDevices) {
-              if (dev.category === 'light') this._setDeviceStateAndTrack(dev.id, { on: true });
+              if (dev.category === 'light') await this._setDeviceStateAndTrack(dev.id, { on: true });
             }
             return { status: 'success', message: "Re-initialized all lighting arrays." };
           } else if (turnOff) {
-            this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { on: false });
-            this._setDeviceStateAndTrack(DEVICES.BEDROOM, { on: false });
-            this._setDeviceStateAndTrack(DEVICES.KITCHEN, { on: false });
+            await this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { on: false });
+            await this._setDeviceStateAndTrack(DEVICES.BEDROOM, { on: false });
+            await this._setDeviceStateAndTrack(DEVICES.KITCHEN, { on: false });
             for (const dev of home.dynamicDevices) {
-              if (dev.category === 'light') this._setDeviceStateAndTrack(dev.id, { on: false });
+              if (dev.category === 'light') await this._setDeviceStateAndTrack(dev.id, { on: false });
             }
             return { status: 'success', message: "Powering down all lighting grids." };
           } else if (parsed.action === 'color' && parsed.value) {
             const hex = colorMap[parsed.value.toLowerCase()] || parsed.value;
-            this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { color: hex });
-            this._setDeviceStateAndTrack(DEVICES.BEDROOM, { color: hex });
-            this._setDeviceStateAndTrack(DEVICES.KITCHEN, { color: hex });
+            await this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { color: hex });
+            await this._setDeviceStateAndTrack(DEVICES.BEDROOM, { color: hex });
+            await this._setDeviceStateAndTrack(DEVICES.KITCHEN, { color: hex });
             for (const dev of home.dynamicDevices) {
-              if (dev.category === 'light') this._setDeviceStateAndTrack(dev.id, { color: hex });
+              if (dev.category === 'light') await this._setDeviceStateAndTrack(dev.id, { color: hex });
             }
             return { status: 'success', message: `Changing all light spectrums to ${parsed.value}.` };
           } else if (parsed.action === 'brightness' && parsed.value) {
             const val = parseInt(parsed.value);
             const percent = isNaN(val) ? 50 : val;
-            this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { brightness: percent });
-            this._setDeviceStateAndTrack(DEVICES.BEDROOM, { brightness: percent });
-            this._setDeviceStateAndTrack(DEVICES.KITCHEN, { brightness: percent });
+            await this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { brightness: percent });
+            await this._setDeviceStateAndTrack(DEVICES.BEDROOM, { brightness: percent });
+            await this._setDeviceStateAndTrack(DEVICES.KITCHEN, { brightness: percent });
             for (const dev of home.dynamicDevices) {
-              if (dev.category === 'light') this._setDeviceStateAndTrack(dev.id, { brightness: percent });
+              if (dev.category === 'light') await this._setDeviceStateAndTrack(dev.id, { brightness: percent });
             }
             return { status: 'success', message: `Adjusting light levels to ${percent} percent.` };
           } else {
             if (parsed.action === 'toggle') {
               const isAnyOn = home.state.devices[DEVICES.LIVING_ROOM].on || home.state.devices[DEVICES.BEDROOM].on;
               const newState = !isAnyOn;
-              this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { on: newState });
-              this._setDeviceStateAndTrack(DEVICES.BEDROOM, { on: newState });
-              this._setDeviceStateAndTrack(DEVICES.KITCHEN, { on: newState });
+              await this._setDeviceStateAndTrack(DEVICES.LIVING_ROOM, { on: newState });
+              await this._setDeviceStateAndTrack(DEVICES.BEDROOM, { on: newState });
+              await this._setDeviceStateAndTrack(DEVICES.KITCHEN, { on: newState });
               for (const dev of home.dynamicDevices) {
-                if (dev.category === 'light') this._setDeviceStateAndTrack(dev.id, { on: newState });
+                if (dev.category === 'light') await this._setDeviceStateAndTrack(dev.id, { on: newState });
               }
               return { status: 'success', message: `Toggling all lighting grids ${newState ? 'ON' : 'OFF'}.` };
             }
@@ -1443,10 +1536,10 @@ class LukasMultiTaskEngine {
             }
           }
           if (Object.keys(updates).length > 0) {
-            this._setDeviceStateAndTrack(targetZone, updates);
+            await this._setDeviceStateAndTrack(targetZone, updates);
             for (const dev of home.dynamicDevices) {
               if (dev.category === 'light' && dev.zone === zoneLabel) {
-                this._setDeviceStateAndTrack(dev.id, updates);
+                await this._setDeviceStateAndTrack(dev.id, updates);
               }
             }
             return { status: 'success', message: `Perfect, I have ${actionLabel} the lighting grid in the ${zoneLabel}.` };
@@ -1480,11 +1573,11 @@ class LukasMultiTaskEngine {
         
         if (targetDevice) {
           const isLocked = unlock ? false : (lock ? true : !targetDevice.locked);
-          this._setDeviceStateAndTrack(targetDevice.id, { locked: isLocked });
+          await this._setDeviceStateAndTrack(targetDevice.id, { locked: isLocked });
           return { status: 'success', message: `I have successfully ${isLocked ? 'locked' : 'unlocked'} the ${targetDevice.name}.` };
         } else {
           const isLocked = unlock ? false : (lock ? true : !home.state.devices[DEVICES.OUTDOOR].locked);
-          this._setDeviceStateAndTrack(DEVICES.OUTDOOR, { locked: isLocked });
+          await this._setDeviceStateAndTrack(DEVICES.OUTDOOR, { locked: isLocked });
           return { status: 'success', message: isLocked ? "Perimeter locks engaged. Main entryway secured." : "Security locks disengaged. Main entryway is now unlocked." };
         }
       }
@@ -2480,13 +2573,13 @@ function bindUIEvents() {
 
   // Outdoor Security Lock controls
   const doorLockOutdoor = document.getElementById('doorLockOutdoor');
-  doorLockOutdoor.addEventListener('change', (e) => {
-    home.setDeviceState(DEVICES.OUTDOOR, { locked: e.target.checked });
+  doorLockOutdoor.addEventListener('change', async (e) => {
+    await setDeviceStateWithFeedback(DEVICES.OUTDOOR, { locked: e.target.checked });
   });
 
   const floodlightsOutdoor = document.getElementById('floodlightsOutdoor');
-  floodlightsOutdoor.addEventListener('change', (e) => {
-    home.setDeviceState(DEVICES.OUTDOOR, { floodlights: e.target.checked });
+  floodlightsOutdoor.addEventListener('change', async (e) => {
+    await setDeviceStateWithFeedback(DEVICES.OUTDOOR, { floodlights: e.target.checked });
   });
 
   // Routines buttons
@@ -4268,16 +4361,16 @@ function setupZoneControlListeners(domPrefix, stateName) {
   const dimmerNode = document.getElementById(`dimmer${domPrefix}`);
   const colorNode = document.getElementById(`color${domPrefix}`);
 
-  switchNode.addEventListener('change', (e) => {
-    home.setDeviceState(stateName, { on: e.target.checked });
+  switchNode.addEventListener('change', async (e) => {
+    await setDeviceStateWithFeedback(stateName, { on: e.target.checked });
   });
 
-  dimmerNode.addEventListener('input', (e) => {
-    home.setDeviceState(stateName, { brightness: parseInt(e.target.value) });
+  dimmerNode.addEventListener('input', async (e) => {
+    await setDeviceStateWithFeedback(stateName, { brightness: parseInt(e.target.value) });
   });
 
-  colorNode.addEventListener('input', (e) => {
-    home.setDeviceState(stateName, { color: e.target.value });
+  colorNode.addEventListener('input', async (e) => {
+    await setDeviceStateWithFeedback(stateName, { color: e.target.value });
   });
 }
 
@@ -5678,7 +5771,7 @@ async function processCommand(rawCommand, source) {
       const yesWords = ['yes', 'sure', 'yeah', 'yep', 'ok', 'okay', 'update', 'change', 'please', 'confirm', 'correct'];
       if (yesWords.some(w => cmd.includes(w))) {
         const { key, value } = pendingProfileUpdate;
-        const identityKeys = ['name', 'country', 'city', 'email', 'phone', 'language'];
+        const identityKeys = ['name', 'country', 'city', 'language', 'accent'];
         
         if (identityKeys.includes(key)) {
           lukasMemory.longTerm.profile[key] = value;
@@ -5715,11 +5808,22 @@ async function processCommand(rawCommand, source) {
       const key = pendingDirectProfileQuery;
       pendingDirectProfileQuery = '';
       
-      const cleanVal = rawCommand.trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+      let cleanVal = rawCommand.trim();
+      if (key === 'name') {
+        const match = cleanVal.match(/(?:my name is|call me|i am|i'm|this is)\s+([a-zA-Z\s]+)/i);
+        if (match) {
+          cleanVal = match[1].trim();
+        } else {
+          cleanVal = cleanVal.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"").trim();
+        }
+      } else {
+        cleanVal = cleanVal.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"").trim();
+      }
+
       if (cleanVal.length < 2) {
         handleAssistantResponse(`Aborted. The provided value was too short.`);
       } else {
-        const identityKeys = ['name', 'country', 'city', 'email', 'phone', 'language'];
+        const identityKeys = ['name', 'country', 'city', 'language', 'accent'];
         if (identityKeys.includes(key)) {
           lukasMemory.longTerm.profile[key] = cleanVal;
           lukasMemory._saveLongTerm();
@@ -5752,12 +5856,10 @@ async function processCommand(rawCommand, source) {
       const profileLines = [
         "**[PROFILE DETAILS]**",
         `Name: ${profile.name || 'Not set'}`,
-        `Email: ${profile.email || 'Not set'}`,
-        `Phone: ${profile.phone || 'Not set'}`,
         `Country: ${profile.country || 'Not set'}`,
         `City: ${profile.city || 'Not set'}`,
         `Preferred Language: ${profile.language || prefs.speechLang || 'en-IN'}`,
-        `Preferred Accent: ${lukasMemory.getFact('accent') || prefs.voiceAccent || 'indian_english'}`,
+        `Preferred Accent: ${profile.accent || prefs.voiceAccent || 'Not set'}`,
         `Time Zone: ${lukasMemory.getFact('timezone') || 'Asia/Kolkata'}`,
         `Profession: ${lukasMemory.getFact('profession') || 'Not set'}`,
         `Interests: ${lukasMemory.getFact('interests') || 'Not set'}`,
@@ -5779,15 +5881,15 @@ async function processCommand(rawCommand, source) {
       return;
     }
     
-    const deleteFactMatch = cmd.match(/^delete (?:my\s+)?(name|country|city|email|phone|language|accent|timezone|profession|interests|projects|style) from profile$/i)
-      || cmd.match(/^delete (?:my\s+)?(name|country|city|email|phone|language|accent|timezone|profession|interests|projects|style)$/i)
-      || cmd.match(/^remove (?:my\s+)?(name|country|city|email|phone|language|accent|timezone|profession|interests|projects|style) from profile$/i)
-      || cmd.match(/^remove (?:my\s+)?(name|country|city|email|phone|language|accent|timezone|profession|interests|projects|style)$/i);
+    const deleteFactMatch = cmd.match(/^delete (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style) from profile$/i)
+      || cmd.match(/^delete (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style)$/i)
+      || cmd.match(/^remove (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style) from profile$/i)
+      || cmd.match(/^remove (?:my\s+)?(name|country|city|language|accent|timezone|profession|interests|projects|style)$/i);
       
     if (deleteFactMatch) {
       isProcessingCommand = false;
       const key = deleteFactMatch[1].toLowerCase().trim();
-      const identityKeys = ['name', 'country', 'city', 'email', 'phone', 'language'];
+      const identityKeys = ['name', 'country', 'city', 'language', 'accent'];
       let ok = false;
       if (identityKeys.includes(key)) {
         if (lukasMemory.longTerm.profile[key]) {
@@ -5810,8 +5912,7 @@ async function processCommand(rawCommand, source) {
 
     // ── Direct profile query retrieval ──
     const nameQueries = ['what is my name', 'do you know my name', 'tell me my name'];
-    const emailQueries = ['what is my email', 'do you know my email', 'tell me my email'];
-    const phoneQueries = ['what is my phone number', 'what is my phone', 'do you know my phone number'];
+    const accentQueries = ['what is my preferred accent', 'what is my accent', 'do you know my accent', 'tell me my accent'];
     const countryQueries = ['what is my country', 'tell me my country', 'where am i from', 'which country am i from'];
     const cityQueries = ['what city do i live in', 'what is my city', 'which city do i live in', 'where do i live'];
     const langQueries = ['what language do i prefer', 'what is my preferred language', 'which language do i prefer'];
@@ -5833,26 +5934,16 @@ async function processCommand(rawCommand, source) {
       }
       targetQueryKey = 'name';
       queryPrompt = "I don't know your name yet. What would you like me to call you?";
-    } else if (emailQueries.includes(cmd)) {
-      const email = lukasMemory.longTerm.profile.email;
-      if (email) {
+    } else if (accentQueries.includes(cmd)) {
+      const accent = lukasMemory.longTerm.profile.accent || lukasMemory.getPreference('voiceAccent');
+      if (accent) {
         isProcessingCommand = false;
-        handleAssistantResponse(`Your email is ${email}.`);
+        handleAssistantResponse(`Your preferred accent is ${accent}.`);
         setTimeout(() => voice.startWakeWordListener(), 1000);
         return;
       }
-      targetQueryKey = 'email';
-      queryPrompt = "I don't know your email yet. What is your email address?";
-    } else if (phoneQueries.includes(cmd)) {
-      const phone = lukasMemory.longTerm.profile.phone;
-      if (phone) {
-        isProcessingCommand = false;
-        handleAssistantResponse(`Your phone number is ${phone}.`);
-        setTimeout(() => voice.startWakeWordListener(), 1000);
-        return;
-      }
-      targetQueryKey = 'phone';
-      queryPrompt = "I don't know your phone number yet. What is your phone number?";
+      targetQueryKey = 'accent';
+      queryPrompt = "I don't know your preferred accent yet. What is your preferred accent?";
     } else if (countryQueries.includes(cmd)) {
       const country = lukasMemory.longTerm.profile.country;
       if (country) {
@@ -5939,15 +6030,14 @@ async function processCommand(rawCommand, source) {
       { re: /\b(?:i am from|my country is|change my country to)\s+([a-z\s]+)$/i, key: 'country' },
       { re: /\b(?:i live in|my city is|change my city to)\s+([a-z\s]+)$/i, key: 'city' },
       { re: /\b(?:i prefer|my preferred language is|change my language to)\s+([a-z\s]+)$/i, key: 'language' },
+      { re: /\b(?:my preferred accent is|my accent is|change my accent to)\s+([a-z\s_-]+)$/i, key: 'accent' },
       { re: /\b(?:my profession is|i work as|i run a)\s+([a-z\s]+)$/i, key: 'profession' },
       { re: /\b(?:my interests are|i am interested in)\s+([a-z\s]+)$/i, key: 'interests' },
       { re: /\b(?:my projects are|i am working on)\s+([a-z\s]+)$/i, key: 'projects' },
-      { re: /\b(?:my communication style is|i prefer style|change my style to)\s+([a-z\s]+)$/i, key: 'style' },
-      { re: /\b(?:my email is|email is|change my email to)\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})$/i, key: 'email' },
-      { re: /\b(?:my phone number is|my phone is|phone is|change my phone to)\s+(\+?[0-9\s-]{8,15})$/i, key: 'phone' }
+      { re: /\b(?:my communication style is|i prefer style|change my style to)\s+([a-z\s]+)$/i, key: 'style' }
     ];
 
-    const identityKeys = ['name', 'country', 'city', 'email', 'phone', 'language'];
+    const identityKeys = ['name', 'country', 'city', 'language', 'accent'];
 
     for (const { re, key } of updatePatterns) {
       const match = cmd.match(re);
@@ -8316,7 +8406,7 @@ function drawRegistryList() {
           } else {
             updates.on = e.target.checked;
           }
-          home.setDeviceState(dev.id, updates);
+          await setDeviceStateWithFeedback(dev.id, updates);
           diag.logToTerminal(`[NODE REGISTRY] State change: ${dev.name} is now ${e.target.checked ? 'ON/SECURE' : 'OFF/OPEN'}`, 'info');
         }
       });
@@ -8638,7 +8728,7 @@ function renderDashboardCustomDevices() {
     }
 
     if (toggle) {
-      toggle.addEventListener('change', (e) => {
+      toggle.addEventListener('change', async (e) => {
         const checked = e.target.checked;
         const updates = {};
         if (dev.category === 'security' || dev.category === 'lock') {
@@ -8646,7 +8736,7 @@ function renderDashboardCustomDevices() {
         } else {
           updates.on = checked;
         }
-        home.setDeviceState(dev.id, updates);
+        await setDeviceStateWithFeedback(dev.id, updates);
 
         // Update card active class
         if (checked) {
@@ -8682,16 +8772,16 @@ function renderDashboardCustomDevices() {
     }
 
     if (dimmer) {
-      dimmer.addEventListener('input', (e) => {
+      dimmer.addEventListener('input', async (e) => {
         const val = parseInt(e.target.value);
-        home.setDeviceState(dev.id, { brightness: val });
+        await setDeviceStateWithFeedback(dev.id, { brightness: val });
       });
     }
 
     if (colorPicker) {
-      colorPicker.addEventListener('input', (e) => {
+      colorPicker.addEventListener('input', async (e) => {
         const val = e.target.value;
-        home.setDeviceState(dev.id, { color: val });
+        await setDeviceStateWithFeedback(dev.id, { color: val });
         card.style.setProperty('--zone-color', val);
         const newGlow = `${val}25`;
         card.style.setProperty('--zone-color-glow', newGlow);
@@ -8704,12 +8794,12 @@ function renderDashboardCustomDevices() {
     // Bind projector selectors
     const selects = card.querySelectorAll('.custom-dash-select');
     selects.forEach(select => {
-      select.addEventListener('change', (e) => {
+      select.addEventListener('change', async (e) => {
         const prop = e.target.getAttribute('data-prop');
         const val = e.target.value;
         const updates = {};
         updates[prop] = val;
-        home.setDeviceState(dev.id, updates);
+        await setDeviceStateWithFeedback(dev.id, updates);
         diag.logToTerminal(`[PROJECTOR] Changed ${prop} to: ${val}`, 'info');
       });
     });

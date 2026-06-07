@@ -305,8 +305,9 @@ class LukasVoiceController {
     // Keywords prioritizing premium vocal engines (Microsoft Natural, Google TTS, Siri, Alexa, etc.)
     const premiumKeywords = [
       'natural', 'google', 'neural', 'premium', 'siri', 'aria', 'guy', 'danny', 
-      'ravi', 'heera', 'david', 'zira', 'hazel', 'mark', 'george', 'susan', 
-      'ashley', 'karen', 'karan', 'neerja', 'linda', 'heather', 'catherine'
+      'heera', 'hemant', 'kalpana', 'girish', 'david', 'zira', 'hazel', 'mark', 
+      'george', 'susan', 'ashley', 'karen', 'karan', 'neerja', 'linda', 'heather', 
+      'catherine', 'ravi'
     ];
     
     matchedVoices.sort((a, b) => {
@@ -559,51 +560,15 @@ class LukasVoiceController {
 
   // Safe wrapper to prevent duplicate starts
   startRecognitionInternal() {
-    if (!this.recognition) {
-      console.warn("[voice.js] Speech recognition is not supported or blocked in this context.");
-      if (this.onRecognitionStateChange) {
-        this.onRecognitionStateChange('off', 'unsupported_origin_or_browser');
-      }
-      return;
-    }
-    if (this.isRecognitionActive) return;
-    // Allow starting recognition while speaking to support wake word or stop interrupts
-
-    // Prevent hot-looping if started too recently (throttling)
-    const now = Date.now();
-    const timeSinceLastStart = now - (this.lastStartTime || 0);
-    const minInterval = 600; // Minimum 600ms between starts (reduced for responsiveness)
-    if (timeSinceLastStart < minInterval) {
-      const waitTime = minInterval - timeSinceLastStart;
-      console.log(`[voice.js] Throttling speech recognition start, waiting ${waitTime}ms...`);
-      if (this.retryStartTimeout) clearTimeout(this.retryStartTimeout);
-      this.retryStartTimeout = setTimeout(() => this.startRecognitionInternal(), waitTime);
-      return;
-    }
-
-    try {
-      this.recognition.start();
-      this.isRecognitionActive = true;
-      this.lastStartTime = Date.now();
-      this.isTransitioning = false; // Clear transition lock on successful start
-    } catch (e) {
-      console.warn("Failed to start speech recognition:", e);
-      this.isTransitioning = false;
+    if (this.recognitionManager) {
+      this.recognitionManager.start();
     }
   }
 
   // Safe wrapper to avoid overlap requests
   stopRecognitionInternal() {
-    if (this.retryStartTimeout) {
-      clearTimeout(this.retryStartTimeout);
-      this.retryStartTimeout = null;
-    }
-    this.pendingStart = false;
-    if (this.isRecognitionActive && !this.isStopping) {
-      this.isStopping = true;
-      try {
-        this.recognition.stop();
-      } catch (e) {}
+    if (this.recognitionManager) {
+      this.recognitionManager.stop();
     }
   }
 

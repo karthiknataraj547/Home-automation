@@ -72,7 +72,7 @@ class LukasAutomationHub {
   }
 
   // Set individual device state
-  setDeviceState(id, updates) {
+  async setDeviceState(id, updates) {
     // Check if legacy key is used
     let resolvedId = id;
     if (id === DEVICES.LIVING_ROOM) resolvedId = 'livingRoomLight';
@@ -89,37 +89,51 @@ class LukasAutomationHub {
                       resolvedId === 'outdoorLock' ? 'outdoor' : null;
 
     if (dev) {
+      // Keep a backup of the original state of dev
+      const backup = {};
+      for (const k of Object.keys(updates)) {
+        backup[k] = dev[k];
+      }
+
+      // Apply changes locally first
       Object.assign(dev, updates);
-      this.saveDynamicDevices();
 
       // Send command to physical Tuya cloud device if integrated
       if (dev.integration === 'tuya-cloud' && dev.tuyaDeviceId) {
-        fetch('/api/tuya-control', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ deviceId: dev.tuyaDeviceId, updates: updates })
-        })
-        .then(r => r.json())
-        .then(data => {
-          if (!data.success) {
-            console.warn(`[Tuya API Error] ${data.error}`);
-            if (typeof window !== 'undefined' && window.diag) {
-              window.diag.logToTerminal(`[TUYA ERROR] Command failed for ${dev.name}: ${data.error}`, 'error');
-            }
-          } else {
-            if (typeof window !== 'undefined' && window.diag) {
-              window.diag.logToTerminal(`[TUYA] Command sent to Wipro Cloud: ${dev.name} updated.`, 'info');
-            }
+        try {
+          const response = await fetch('/api/tuya-control', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ deviceId: dev.tuyaDeviceId, updates: updates })
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
           }
-        })
-        .catch(err => {
-          console.error('[Tuya Network Error]', err);
-        });
+          const data = await response.json();
+          if (!data.success) {
+            throw new Error(data.error || 'Unknown Tuya Cloud API error');
+          }
+          
+          if (typeof window !== 'undefined' && window.diag) {
+            window.diag.logToTerminal(`[TUYA] Command sent to Wipro Cloud: ${dev.name} updated.`, 'info');
+          }
+        } catch (err) {
+          console.error('[Tuya Error]', err);
+          // Revert state
+          Object.assign(dev, backup);
+          if (typeof window !== 'undefined' && window.diag) {
+            window.diag.logToTerminal(`[TUYA ERROR] Command failed for ${dev.name}: ${err.message}`, 'error');
+          }
+          throw err;
+        }
       } else if (dev.integration === 'tuya-local' && dev.tuyaLocalKey) {
         if (typeof window !== 'undefined' && window.diag) {
           window.diag.logToTerminal(`[TUYA LOCAL] Sending direct local LAN UDP/TCP commands to ${dev.name} (${dev.ipAddress})...`, 'info');
         }
       }
+
+      // Only save and mirror on success
+      this.saveDynamicDevices();
 
       // Mirror back to legacy state
       if (legacyKey) {

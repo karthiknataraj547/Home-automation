@@ -267,8 +267,8 @@ header {
 .dashboard-container {
   display: grid;
   grid-template-columns: 320px 1fr 360px;
-  gap: 1.25rem;
-  padding: 1.25rem;
+  gap: 16px;
+  padding: 16px;
   flex: 1;
 }
 
@@ -276,7 +276,7 @@ header {
 .panel-column {
   display: flex;
   flex-direction: column;
-  gap: 1.25rem;
+  gap: 16px;
 }
 
 .panel-column.scrollable {
@@ -289,8 +289,8 @@ header {
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   border: 1px solid rgba(0,240,255,0.1);
-  border-radius: 14px;
-  padding: 1.25rem;
+  border-radius: 16px;
+  padding: 16px;
   box-shadow: 0 8px 40px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04);
   transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
@@ -720,7 +720,7 @@ header {
   flex: 1;
   display: grid;
   grid-template-rows: 240px 1fr 180px;
-  gap: 1.25rem;
+  gap: 16px;
 }
 
 /* Center Top: Environment & Climate Row */
@@ -1285,13 +1285,11 @@ input:checked + .slider-knob:before {
   z-index: 3;
 }
 
-/* System Diagnostics */
 .diagnostics-widget {
-  flex: 1.5;
+  height: 480px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  min-height: 250px;
 }
 
 .diagnostics-grid {
@@ -1560,11 +1558,11 @@ input:checked + .slider-knob:before {
 
 @media (max-width: 768px) {
   .dashboard-container {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto;
+    display: flex;
+    flex-direction: column;
     height: auto;
-    padding: 0.5rem;
-    gap: 0.75rem;
+    padding: 16px;
+    gap: 16px;
   }
   header {
     flex-direction: column;
@@ -1598,10 +1596,36 @@ input:checked + .slider-knob:before {
   .status-value {
     font-size: 0.8rem;
   }
-  .main-dashboard {
-    grid-template-columns: 1fr;
-    grid-template-rows: auto;
-    gap: 0.75rem;
+  .panel-column, .main-dashboard {
+    display: contents;
+  }
+  .diagnostics-widget {
+    order: 1 !important;
+    height: 400px !important;
+  }
+  #climateWidget {
+    order: 2 !important;
+  }
+  #automationWidget {
+    order: 3 !important;
+  }
+  .chat-widget {
+    order: 4 !important;
+  }
+  .core-widget {
+    order: 5 !important;
+  }
+  .cctv-widget {
+    order: 6 !important;
+  }
+  #mediaWidget {
+    order: 7 !important;
+  }
+  #remindersWidget {
+    order: 8 !important;
+  }
+  #gardenWidget {
+    order: 9 !important;
   }
   .climate-grid {
     grid-template-columns: 1fr;

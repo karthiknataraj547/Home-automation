@@ -98,7 +98,7 @@ class LukasMemory {
       catch { return fallback; }
     };
     const profilePrefix = `lukas_user_${this.currentUsername.toLowerCase()}_profile`;
-    let profile = { name: null, email: null, phone: null, city: null, country: null, language: null };
+    let profile = { name: "", country: "", city: "", language: "", accent: "" };
     try {
       const stored = localStorage.getItem(profilePrefix);
       if (stored) {
@@ -385,9 +385,8 @@ class LukasMemory {
     lines.push(`Name: ${profile.name || 'Unknown'}`);
     lines.push(`Country: ${profile.country || 'Unknown'}`);
     lines.push(`City: ${profile.city || 'Unknown'}`);
-    lines.push(`Email: ${profile.email || 'Unknown'}`);
-    lines.push(`Phone: ${profile.phone || 'Unknown'}`);
     lines.push(`Language: ${profile.language || 'Unknown'}`);
+    lines.push(`Accent: ${profile.accent || 'Unknown'}`);
     lines.push(`Profession: ${this.getFact('profession') || 'Unknown'}`);
     lines.push(`Interests: ${this.getFact('interests') || 'Unknown'}`);
 
@@ -419,7 +418,7 @@ class LukasMemory {
     const structuredKeys = [
       'name', 'country', 'city', 'location', 'language', 'accent', 'timezone',
       'profession', 'interests', 'projects', 'style', 'businesses', 'ai_projects',
-      'websites', 'personal_goals', 'business_goals', 'userId', 'email', 'phone'
+      'websites', 'personal_goals', 'business_goals', 'userId'
     ];
     const otherFactKeys = Object.keys(facts).filter(k => !structuredKeys.includes(k));
     if (otherFactKeys.length > 0) {
@@ -619,17 +618,16 @@ class LukasMemory {
     const items = [];
     
     if (profile.name) items.push({ key: 'Name', value: profile.name });
-    if (profile.email) items.push({ key: 'Email', value: profile.email });
-    if (profile.phone) items.push({ key: 'Phone', value: profile.phone });
     if (profile.city || profile.country) {
       items.push({ key: 'Location', value: [profile.city, profile.country].filter(Boolean).join(', ') });
     }
     if (profile.language) items.push({ key: 'Language', value: profile.language });
+    if (profile.accent) items.push({ key: 'Accent', value: profile.accent });
 
     const keyLabels = { name: 'Name', location: 'Location', responseStyle: 'Style', dominantUseCase: 'Top Use' };
     for (const [k, v] of Object.entries(facts)) {
       if (items.length >= 8) break;
-      if (['name', 'email', 'phone', 'city', 'country', 'language', 'location'].includes(k)) continue;
+      if (['name', 'city', 'country', 'language', 'accent', 'location'].includes(k)) continue;
       items.push({ key: keyLabels[k] || k, value: v.value });
     }
     if (prefs.responseStyle && !facts.responseStyle && items.length < 8) items.push({ key: 'Response Style', value: prefs.responseStyle });
@@ -726,7 +724,7 @@ class LukasMemory {
 
   clearAllMemory() {
     this.clearSession();
-    this.longTerm = { preferences: {}, facts: {}, projects: {}, patterns: [], interactionLog: [], sessionCount: 0, profile: { name: null, email: null, phone: null, city: null, country: null, language: null } };
+    this.longTerm = { preferences: {}, facts: {}, projects: {}, patterns: [], interactionLog: [], sessionCount: 0, profile: { name: "", country: "", city: "", language: "", accent: "" } };
     const prefix = `lukas_user_${this.currentUsername.toLowerCase()}_`;
     ['preferences','facts','projects','patterns','sessions','interactions']
       .forEach(k => localStorage.removeItem(prefix + k));
