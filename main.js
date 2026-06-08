@@ -146,6 +146,7 @@ const executionTracker = new LukasExecutionTracker({ voice, home, diag });
 
 // ═══════ LUKAS Intelligence System ═══════
 let lukasMemory = new LukasMemory();
+window.lukasMemory = lukasMemory;
 const lukasOrchestrator = new LukasOrchestrator(lukasMemory);
 const lukasResearch = new LukasResearchAgent();
 const lukasReasoning = new LukasReasoningEngine();
