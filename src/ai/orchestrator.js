@@ -77,6 +77,11 @@ class LukasOrchestrator {
   _classifyByRules(input) {
     const text = input.toLowerCase();
 
+    // Greetings & conversational openings
+    if (/\b(hi|hello|hey|greetings|yo|sup|hola|namaste|heyy|good\s+morning|good\s+afternoon|good\s+evening)\b/i.test(text)) {
+      return { intent: INTENT.CONVERSATION, confidence: 0.95, subtasks: ['conversational_response'] };
+    }
+
     // Games, play, bored patterns
     const gamePatterns = [
       /\b(play|start|launch)\s+(a\s+)?(game|quiz|trivia|chess|sudoku|hangman|tic tac toe|snake|2048|memory challenge|word chain|guess the song|guess the movie|number challenge|rapid fire)\b/i,

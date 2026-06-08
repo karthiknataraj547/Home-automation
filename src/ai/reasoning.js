@@ -101,7 +101,7 @@ class LukasReasoningEngine {
       const projects = memory.getAllProjects();
       const mentionsProjectWord = /\bproject\b/i.test(lowerInput);
       if (mentionsProjectWord) {
-        const matchesAny = projects.some(p => lowerInput.includes(p.name.toLowerCase()) || lowerResp.includes(p.name.toLowerCase()));
+        const matchesAny = projects.some(p => p && p.name && (lowerInput.includes(p.name.toLowerCase()) || lowerResp.includes(p.name.toLowerCase())));
         if (!matchesAny && projects.length > 0) {
           memoryPass = false;
           issues.push("[GATE 3: MEMORY] Response references project goals without retrieving correct project details.");

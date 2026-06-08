@@ -7976,9 +7976,13 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
       if (response) {
         // Vocalize clean response only after the ENTIRE generation has completed!
         if (isVoiceMode) {
-          const parsed = parseExecutiveAnalysis(response);
-          voice.stopWakeWordListener();
-          voice.speak(parsed.responseText);
+          try {
+            const parsed = parseExecutiveAnalysis(response);
+            voice.stopWakeWordListener();
+            voice.speak(parsed.responseText);
+          } catch (voiceErr) {
+            console.warn("[Voice] Failed to speak response:", voiceErr);
+          }
         }
 
         // Remove processing state from Core Button
@@ -7989,36 +7993,48 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
         }
 
         // Log and add to memory
-        diag.logToTerminal(`[LUKAS REPLY] "${response.slice(0, 120)}${response.length > 120 ? '...' : ''}"`, 'info');
-        lukasMemory.addMessage('assistant', response, intent);
+        try {
+          diag.logToTerminal(`[LUKAS REPLY] "${response.slice(0, 120)}${response.length > 120 ? '...' : ''}"`, 'info');
+          lukasMemory.addMessage('assistant', response, intent);
+        } catch (memErr) {
+          console.warn("[Memory] Failed to log or add message:", memErr);
+        }
 
         // Validation Checks (Layer 6 & 7 / Response Quality Rules)
-        const validation = lukasReasoning.validate(rawCommand, response, lukasMemory);
-        diag.logToTerminal("[STAGE 6: ACCURACY] Assessing prompt compliance and response precision score...", "info");
-        diag.logToTerminal("[STAGE 7: VALIDATE] Performing response quality validation and self-reflection refinement...", "info");
-        diag.logToTerminal("[STAGE 8: RESPONSE] Synthesizing final response output...", "info");
-        
-        if (validation) {
-          if (!validation.valid) {
-            diag.logToTerminal(`[REASONING WARNING] Output validation failed (Score: ${validation.score}). Issues: ${validation.issues.join(', ')}.`, 'warn');
-          } else {
-            diag.logToTerminal(`[REASONING] Response validated successfully (Score: ${validation.score}).`, 'info');
-          }
+        try {
+          const validation = lukasReasoning.validate(rawCommand, response, lukasMemory);
+          diag.logToTerminal("[STAGE 6: ACCURACY] Assessing prompt compliance and response precision score...", "info");
+          diag.logToTerminal("[STAGE 7: VALIDATE] Performing response quality validation and self-reflection refinement...", "info");
+          diag.logToTerminal("[STAGE 8: RESPONSE] Synthesizing final response output...", "info");
+          
+          if (validation) {
+            if (!validation.valid) {
+              diag.logToTerminal(`[REASONING WARNING] Output validation failed (Score: ${validation.score}). Issues: ${validation.issues.join(', ')}.`, 'warn');
+            } else {
+              diag.logToTerminal(`[REASONING] Response validated successfully (Score: ${validation.score}).`, 'info');
+            }
 
-          // Add accuracy badge to the final response bubble
-          const badge = document.createElement('div');
-          let level = 'high';
-          if (validation.score < 60) level = 'low';
-          else if (validation.score < 80) level = 'medium';
-          badge.className = `accuracy-badge ${level}`;
-          badge.innerHTML = `<i class="fa-solid fa-circle-nodes"></i> Accuracy: ${validation.score}%`;
-          streamingBubble.element.appendChild(badge);
+            // Add accuracy badge to the final response bubble
+            const badge = document.createElement('div');
+            let level = 'high';
+            if (validation.score < 60) level = 'low';
+            else if (validation.score < 80) level = 'medium';
+            badge.className = `accuracy-badge ${level}`;
+            badge.innerHTML = `<i class="fa-solid fa-circle-nodes"></i> Accuracy: ${validation.score}%`;
+            streamingBubble.element.appendChild(badge);
+          }
+        } catch (valErr) {
+          console.warn("[Reasoning] Validation check or badge attachment failed:", valErr);
         }
 
         // Keep mic alive for follow-up commands if voice mode
-        const isQuestion = response.trim().endsWith('?') || response.includes('?');
-        if (isQuestion || intent === 'planning' || intent === 'task_execution' || isVoiceMode) {
-          keepConversationAlive(15000);
+        try {
+          const isQuestion = response.trim().endsWith('?') || response.includes('?');
+          if (isQuestion || intent === 'planning' || intent === 'task_execution' || isVoiceMode) {
+            keepConversationAlive(15000);
+          }
+        } catch (aliveErr) {
+          console.warn("[Voice] Failed to keep conversation alive:", aliveErr);
         }
       }
     } catch (err) {
@@ -8031,32 +8047,55 @@ async function handleConversationalIntent(rawCommand, intent, apiKey, apiProvide
     }
   } else {
     // Non-streaming fallback for Puter AI
-    const response = await generateConversationalResponse({
-      userMessage: rawCommand,
-      memory: lukasMemory,
-      homeContext,
-      intent,
-      apiKey,
-      apiProvider,
-      isVoice: isVoiceMode
-    });
+    try {
+      const response = await generateConversationalResponse({
+        userMessage: rawCommand,
+        memory: lukasMemory,
+        homeContext,
+        intent,
+        apiKey,
+        apiProvider,
+        isVoice: isVoiceMode
+      });
 
-    if (response) {
-      lukasMemory.addMessage('assistant', response, intent);
-      
-      const validation = lukasReasoning.validate(rawCommand, response, lukasMemory);
-      appendChatBubble(response, 'assistant', null, validation.score);
-      
-      const parsed = parseExecutiveAnalysis(response);
-      voice.stopWakeWordListener();
-      voice.speak(parsed.responseText);
-      
-      const isQuestion = response.trim().endsWith('?') || response.includes('?');
-      if (isQuestion || intent === 'planning' || intent === 'task_execution' || isVoiceMode) {
-        keepConversationAlive(15000);
+      if (response) {
+        try {
+          lukasMemory.addMessage('assistant', response, intent);
+        } catch (memErr) {
+          console.warn("[Memory] Failed to add response to memory:", memErr);
+        }
+        
+        let validation = null;
+        try {
+          validation = lukasReasoning.validate(rawCommand, response, lukasMemory);
+        } catch (valErr) {
+          console.warn("[Reasoning] Validation check failed:", valErr);
+        }
+
+        appendChatBubble(response, 'assistant', null, validation ? validation.score : null);
+        
+        try {
+          const parsed = parseExecutiveAnalysis(response);
+          voice.stopWakeWordListener();
+          voice.speak(parsed.responseText);
+        } catch (voiceErr) {
+          console.warn("[Voice] Failed to speak response:", voiceErr);
+        }
+        
+        try {
+          const isQuestion = response.trim().endsWith('?') || response.includes('?');
+          if (isQuestion || intent === 'planning' || intent === 'task_execution' || isVoiceMode) {
+            keepConversationAlive(15000);
+          }
+        } catch (aliveErr) {
+          console.warn("[Voice] Failed to keep conversation alive:", aliveErr);
+        }
+      } else {
+        runWikipediaSearchFallback(rawCommand);
       }
-    } else {
-      runWikipediaSearchFallback(rawCommand);
+    } catch (err) {
+      console.error("Error in non-streaming response:", err);
+      appendChatBubble("Sorry, I encountered an internal error during response generation.", 'assistant');
     }
   }
 }

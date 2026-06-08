@@ -551,17 +551,23 @@ Previous response: "${result}"
 
 Please rewrite the response to resolve all the issues above. Keep it professional, Jarvis-style, natural, concise, and completely accurate. Do NOT apologize, do NOT say "as an AI", and do NOT explain your edits; return ONLY the refined response text.`;
 
-    const refined = await callLukasAI({
-      systemPrompt: "You are LUKAS, an advanced AI Operating System. You refine and polish your own text to be perfect.",
-      userMessage: reflectionPrompt,
-      memory: null,
-      apiKey,
-      apiProvider,
-      temperature: 0.45,
-      maxTokens: Math.max(600, maxTokens),
-      jsonMode: false,
-      includeHistory: false,
-    });
+    let refined = null;
+    try {
+      refined = await callLukasAI({
+        systemPrompt: "You are LUKAS, an advanced AI Operating System. You refine and polish your own text to be perfect.",
+        userMessage: reflectionPrompt,
+        memory: null,
+        apiKey,
+        apiProvider,
+        temperature: 0.45,
+        maxTokens: Math.max(600, maxTokens),
+        jsonMode: false,
+        includeHistory: false,
+      });
+    } catch (e) {
+      console.warn("[AI Core] Refinement call failed, keeping previous response:", e.message);
+      break;
+    }
 
     if (refined && refined.trim().length > 5) {
       // Sanity check: discard if refined is shorter than 80% of original (over-truncation)
