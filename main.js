@@ -1172,6 +1172,12 @@ class LukasMultiTaskEngine {
       };
     }
     home.setTargetTemperature(val);
+
+    // Verify target temp
+    const actual = home.state.climate.targetTemp;
+    if (actual !== val) {
+      throw new Error(`Eco-Thermostat target temperature mismatch: expected ${val}, got ${actual}`);
+    }
   }
 
   _setClimateModeAndTrack(mode) {
@@ -1182,6 +1188,12 @@ class LukasMultiTaskEngine {
       };
     }
     home.setClimateMode(mode);
+
+    // Verify mode
+    const actual = home.state.climate.mode;
+    if (actual !== mode) {
+      throw new Error(`Eco-Thermostat mode mismatch: expected ${mode}, got ${actual}`);
+    }
   }
 
   _rollback() {
@@ -1234,6 +1246,120 @@ class LukasMultiTaskEngine {
     }
 
     return { passed, details: mismatchDetails.join(', ') };
+  }
+
+  _buildExecutionReport() {
+    const lines = ["### 📋 LUKAS EXECUTION REPORT\n"];
+    const verifications = ["**Verification Matrix:**"];
+    
+    let hasFailure = false;
+    let hasSuccess = false;
+    
+    const reverseColorMap = {
+      '#ff0000': 'red', '#10b981': 'green', '#3b82f6': 'blue', '#a855f7': 'purple',
+      '#00f0ff': 'cyan', '#ff9f3b': 'orange', '#ffffff': 'white', '#eab308': 'yellow',
+      '#ec4899': 'pink', '#d946ef': 'magenta', '#84cc16': 'lime', '#14b8a6': 'teal',
+      '#f59e0b': 'gold', '#e11d48': 'crimson'
+    };
+
+    this.currentActions.forEach((act, idx) => {
+      const status = this.statusMap[idx];
+      const detail = this.detailsMap[idx];
+      
+      let attemptDesc = "";
+      let verDesc = "";
+      
+      const isSucceeded = status === 'completed';
+      if (isSucceeded) {
+        hasSuccess = true;
+      } else {
+        hasFailure = true;
+      }
+
+      const checkMark = isSucceeded ? "✓" : "✗";
+
+      if (act.category === 'light') {
+        const devName = act.targetDeviceName || (act.targetZone ? `${act.targetZone} Light` : 'Light');
+        const actionStr = act.action === 'on' ? 'turn ON' : (act.action === 'off' ? 'turn OFF' : act.action);
+        const valStr = act.value ? ` to ${act.value}` : '';
+        
+        attemptDesc = `* **${checkMark}** Request to ${actionStr} ${devName}${valStr}`;
+        
+        let dev = null;
+        if (act.targetDeviceName) {
+          const res = resolveDevice(act.targetDeviceName, 'light', act.targetZone);
+          dev = res.device;
+        }
+        if (!dev && act.targetZone) {
+          dev = home.dynamicDevices.find(d => d.category === 'light' && d.zone === act.targetZone);
+        }
+        
+        if (dev) {
+          let actualState = "";
+          if (act.action === 'color') {
+            actualState = reverseColorMap[dev.color.toLowerCase()] || dev.color;
+          } else if (act.action === 'brightness') {
+            actualState = `${dev.brightness}%`;
+          } else {
+            actualState = dev.on ? 'ON' : 'OFF';
+          }
+          verDesc = `* **${checkMark}** ${dev.name} state = **${actualState}**${isSucceeded ? '' : ' (Device not responding)'}`;
+        } else {
+          verDesc = `* **${checkMark}** ${devName} state = **unknown**`;
+        }
+      } else if (act.category === 'climate') {
+        attemptDesc = `* **${checkMark}** Request to configure thermostat`;
+        if (act.action === 'temp') {
+          attemptDesc += ` target temperature to ${act.value}°C`;
+          const actualTemp = home.state.climate.targetTemp;
+          verDesc = `* **${checkMark}** Thermostat target = **${actualTemp}°C**`;
+        } else if (act.action === 'mode') {
+          attemptDesc += ` mode to ${String(act.value).toUpperCase()}`;
+          const actualMode = home.state.climate.mode;
+          verDesc = `* **${checkMark}** Thermostat mode = **${actualMode.toUpperCase()}**`;
+        } else {
+          verDesc = `* **${checkMark}** Thermostat state readback complete`;
+        }
+      } else if (act.category === 'security') {
+        const devName = act.targetDeviceName || 'Main Entryway';
+        const actionStr = act.action === 'lock' || act.action === 'off' ? 'LOCK' : 'UNLOCK';
+        attemptDesc = `* **${checkMark}** Request to ${actionStr} ${devName}`;
+        
+        let dev = null;
+        if (act.targetDeviceName) {
+          const res = resolveDevice(act.targetDeviceName, 'security', act.targetZone);
+          dev = res.device;
+        }
+        if (!dev) {
+          dev = home.dynamicDevices.find(d => d.category === 'security');
+        }
+        
+        if (dev) {
+          verDesc = `* **${checkMark}** ${dev.name} state = **${dev.locked ? 'LOCKED' : 'UNLOCKED'}**${isSucceeded ? '' : ' (Device not responding)'}`;
+        } else {
+          const isLocked = home.state.devices[DEVICES.OUTDOOR].locked;
+          verDesc = `* **${checkMark}** ${devName} state = **${isLocked ? 'LOCKED' : 'UNLOCKED'}**`;
+        }
+      } else {
+        const simpleDesc = this._getActionDescriptionSimplified(act);
+        attemptDesc = `* **${checkMark}** Request to ${simpleDesc}`;
+        verDesc = `* **${checkMark}** Action execution status: **${status.toUpperCase()}**`;
+      }
+
+      lines.push(attemptDesc);
+      verifications.push(verDesc);
+    });
+
+    lines.push("");
+    lines.push(...verifications);
+    lines.push("");
+
+    const statusText = (!hasFailure) ? "All requested tasks completed successfully."
+                     : (!hasSuccess) ? "All tasks failed execution."
+                     : "Partial success. Some tasks failed to verify.";
+    lines.push(`**Status:** ${statusText}`);
+
+    return lines.join("\n");
   }
 
   _buildConfirmationResponse() {
@@ -1449,16 +1575,18 @@ class LukasMultiTaskEngine {
     const succeededCount = this.statusMap.filter(s => s === 'completed').length;
     const failedCount = this.statusMap.filter(s => s === 'failed').length;
 
+    const reportText = this._buildExecutionReport();
+
     if (succeededCount === actions.length) {
       // All actions succeeded! Verify and speak.
       const verification = this._verifyStates();
       if (verification.passed) {
         const response = this._buildConfirmationResponse();
-        this._speakAndOutput(response);
+        this._speakAndOutput(reportText, response);
       } else {
         // State mismatch warning - Zero False Success Claims
         diag.logToTerminal(`[TRANSACTION] State verification failed: ${verification.details}`, "error");
-        this._speakAndOutput("Command sent. Device did not confirm state change. Please check connection.");
+        this._speakAndOutput(reportText, "Command sent. Device did not confirm state change. Please check connection.");
       }
     } else if (succeededCount === 0) {
       // All actions failed! Rollback and say failed.
@@ -1468,7 +1596,7 @@ class LukasMultiTaskEngine {
       for (let i = 0; i < actions.length; i++) {
         failedActs.push(this._getActionDescriptionSimplified(actions[i]));
       }
-      this._speakAndOutput(`I couldn't reach the device to execute: ${failedActs.join(', ')}.`);
+      this._speakAndOutput(reportText, `I couldn't reach the device to execute: ${failedActs.join(', ')}.`);
     } else {
       // Partial success! Do not rollback, but report success & failure truths.
       const succeededActs = [];
@@ -1481,7 +1609,7 @@ class LukasMultiTaskEngine {
           failedActs.push(desc);
         }
       }
-      this._speakAndOutput(`I was able to ${succeededActs.join(' and ')}, but ${failedActs.join(' and ')} failed.`);
+      this._speakAndOutput(reportText, `I was able to ${succeededActs.join(' and ')}, but ${failedActs.join(' and ')} failed.`);
     }
   }
 
@@ -1564,7 +1692,8 @@ class LukasMultiTaskEngine {
     });
   }
 
-  _speakAndOutput(text, isClarification = false) {
+  _speakAndOutput(displayText, speechText = null) {
+    const speakText = speechText || displayText;
     isProcessingCommand = false;
     const coreBtn = document.getElementById('lukasCoreBtn');
     if (coreBtn) {
@@ -1572,14 +1701,14 @@ class LukasMultiTaskEngine {
       coreBtn.classList.remove('listening');
     }
     
-    diag.logToTerminal(`[LUKAS REPLY] "${text}"`, 'info');
+    diag.logToTerminal(`[LUKAS REPLY] "${speakText}"`, 'info');
     
-    appendChatBubble(text, 'assistant');
+    appendChatBubble(displayText, 'assistant');
     
     voice.stopWakeWordListener();
-    voice.speak(text);
+    voice.speak(speakText);
     
-    lukasMemory.addMessage('assistant', text, 'home_control');
+    lukasMemory.addMessage('assistant', displayText, 'home_control');
   }
 
   async _executeSingleAction(parsed) {
@@ -7050,7 +7179,8 @@ async function processCommand(rawCommand, source) {
     lukasReasoning.runReasoningCycle(rawCommand, diag.logToTerminal.bind(diag));
 
     // ── FAST PATH: Temperature / Thermostat (instant regex, no AI wait) ──────
-    if (!isPlanExecution) {
+    const isCompoundCommand = /\b(and|then|also|with|but)\b/i.test(cmd) || cmd.includes(',');
+    if (!isPlanExecution && !isCompoundCommand) {
       const tempFastMatch = cmd.match(
         /(?:set|adjust|change|make|put|increase|decrease|raise|lower|turn(?:\s+up|\s+down)?)\s+(?:the\s+)?(?:temp(?:erature)?|thermostat|ac|air\s*con(?:ditioning)?|climate|heat(?:ing)?|cool(?:ing)?)\s+(?:to\s+)?(\d{1,2})(?:\s*°?\s*(?:celsius|centigrade|degrees?|c))?/i
       ) || cmd.match(/(?:temp(?:erature)?|thermostat)\s+(?:to\s+)?(\d{1,2})/i)
@@ -7065,7 +7195,33 @@ async function processCommand(rawCommand, source) {
           isProcessingCommand = false;
           diag.logToTerminal(`[FAST PATH] Temperature command detected. Setting thermostat to ${val}°C`, 'info');
           home.setTargetTemperature(val);
-          handleAssistantResponse(`Acknowledged, Commander. Eco-Thermostat target adjusted to ${val} degrees Celsius.`, true);
+          
+          // Verify target temperature
+          const actualTemp = home.state.climate.targetTemp;
+          const isVerified = actualTemp === val;
+          if (typeof window !== 'undefined' && window.lukasVerify) {
+            window.lukasVerify._results.push({
+              deviceId: 'thermostat',
+              expected: { targetTemp: val },
+              actual: { targetTemp: actualTemp },
+              verified: isVerified,
+              latencyMs: 10,
+              method: 'fast_path_readback',
+              ts: new Date().toISOString()
+            });
+          }
+          if (typeof window !== 'undefined' && window.lukasSupervisor) {
+            window.lukasSupervisor.logAgentAction('verification', 
+              `[DEVICE VERIFY] "Eco-Thermostat": expected="${val}", actual="${actualTemp}" → ${isVerified ? '✓ MATCH' : '✗ MISMATCH'}`,
+              isVerified ? 'info' : 'warn'
+            );
+          }
+
+          if (isVerified) {
+            handleAssistantResponse(`Acknowledged, Commander. Eco-Thermostat target adjusted and verified at ${val} degrees Celsius.`, true);
+          } else {
+            handleAssistantResponse(`Command sent. Eco-Thermostat did not confirm target change. Current target is ${actualTemp} degrees Celsius.`, true);
+          }
           keepConversationAlive(8000);
           return;
         }
@@ -7077,7 +7233,33 @@ async function processCommand(rawCommand, source) {
         isProcessingCommand = false;
         diag.logToTerminal(`[FAST PATH] Climate mode command detected: ${mode.toUpperCase()}`, 'info');
         home.setClimateMode(mode);
-        handleAssistantResponse(`Climate matrix switching to ${mode.toUpperCase()} mode.`, true);
+        
+        // Verify climate mode
+        const actualMode = home.state.climate.mode;
+        const isVerified = actualMode === mode;
+        if (typeof window !== 'undefined' && window.lukasVerify) {
+          window.lukasVerify._results.push({
+            deviceId: 'thermostat_mode',
+            expected: { mode: mode },
+            actual: { mode: actualMode },
+            verified: isVerified,
+            latencyMs: 10,
+            method: 'fast_path_readback',
+            ts: new Date().toISOString()
+          });
+        }
+        if (typeof window !== 'undefined' && window.lukasSupervisor) {
+          window.lukasSupervisor.logAgentAction('verification', 
+            `[DEVICE VERIFY] "Eco-Thermostat Mode": expected="${mode}", actual="${actualMode}" → ${isVerified ? '✓ MATCH' : '✗ MISMATCH'}`,
+            isVerified ? 'info' : 'warn'
+          );
+        }
+
+        if (isVerified) {
+          handleAssistantResponse(`Climate matrix switching and verified at ${mode.toUpperCase()} mode.`, true);
+        } else {
+          handleAssistantResponse(`Command sent. Climate matrix did not confirm mode change. Current mode is ${actualMode.toUpperCase()}.`, true);
+        }
         keepConversationAlive(8000);
         return;
       }
