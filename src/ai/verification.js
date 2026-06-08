@@ -51,8 +51,8 @@ class LukasVerificationAgent {
         break;
       }
 
-      // Check all expected fields
-      const mismatch = this._findMismatch(device, expectedUpdates);
+      // Check all expected fields and visual DOM states
+      const mismatch = this._findMismatch(device, expectedUpdates, deviceId);
 
       if (!mismatch) {
         // All fields match — success
@@ -151,7 +151,7 @@ class LukasVerificationAgent {
       if (resp.ok) {
         const data = await resp.json();
         if (data.success && data.state) {
-          const mismatch = this._findMismatch(data.state, expectedUpdates);
+          const mismatch = this._findMismatch(data.state, expectedUpdates, device.id);
           return this._buildResult(device.id, expectedUpdates, data.state, startTime,
             mismatch ? 'tuya_mismatch' : 'tuya_confirmed');
         }
@@ -163,7 +163,7 @@ class LukasVerificationAgent {
 
   // ─── State Comparison ────────────────────────────────────────────────────
 
-  _findMismatch(actual, expected) {
+  _findMismatch(actual, expected, deviceId) {
     for (const [key, val] of Object.entries(expected)) {
       const actualVal = actual[key];
       if (actualVal === undefined) return `field "${key}" missing`;
@@ -171,6 +171,62 @@ class LukasVerificationAgent {
       if (typeof val === 'number' && Math.abs(actual[key] - val) > 2) return `"${key}" is ${actual[key]} not ${val}`;
       if (typeof val === 'string' && actual[key]?.toLowerCase() !== val.toLowerCase()) return `"${key}" is "${actual[key]}" not "${val}"`;
     }
+    
+    // Check actual DOM state in browser environment to avoid false confirmations
+    if (typeof document !== 'undefined' && deviceId) {
+      let domPrefix = '';
+      if (deviceId === 'livingRoomLight' || deviceId === 'livingRoom') domPrefix = 'Living';
+      else if (deviceId === 'bedroomLight' || deviceId === 'bedroom') domPrefix = 'Bedroom';
+      else if (deviceId === 'kitchenLight' || deviceId === 'kitchen') domPrefix = 'Kitchen';
+      
+      if (domPrefix) {
+        for (const [key, val] of Object.entries(expected)) {
+          if (key === 'on') {
+            const el = document.getElementById(`lightSwitch${domPrefix}`);
+            if (el && el.checked !== val) {
+              return `DOM switch for "${domPrefix}" is ${el.checked} not ${val}`;
+            }
+          } else if (key === 'brightness') {
+            const el = document.getElementById(`dimmer${domPrefix}`);
+            if (el && Math.abs(parseInt(el.value) - val) > 5) {
+              return `DOM dimmer for "${domPrefix}" is ${el.value} not ${val}`;
+            }
+          } else if (key === 'color') {
+            const el = document.getElementById(`color${domPrefix}`);
+            if (el) {
+              const cleanVal = String(val).toLowerCase();
+              const cleanElVal = String(el.value).toLowerCase();
+              const colorMap = {
+                'red': '#ff0000', 'green': '#10b981', 'blue': '#3b82f6', 'purple': '#a855f7',
+                'cyan': '#00f0ff', 'orange': '#ff9f3b', 'white': '#ffffff', 'yellow': '#eab308',
+                'pink': '#ec4899', 'magenta': '#d946ef', 'lime': '#84cc16', 'teal': '#14b8a6',
+                'gold': '#f59e0b', 'crimson': '#e11d48'
+              };
+              const mappedVal = colorMap[cleanVal] || cleanVal;
+              const mappedElVal = colorMap[cleanElVal] || cleanElVal;
+              if (mappedElVal !== mappedVal) {
+                return `DOM color for "${domPrefix}" is "${el.value}" not "${val}"`;
+              }
+            }
+          }
+        }
+      } else if (deviceId === 'outdoorLock' || deviceId === 'outdoor') {
+        for (const [key, val] of Object.entries(expected)) {
+          if (key === 'locked') {
+            const el = document.getElementById('doorLockOutdoor');
+            if (el && el.checked !== val) {
+              return `DOM doorLockOutdoor is ${el.checked} not ${val}`;
+            }
+          } else if (key === 'floodlights') {
+            const el = document.getElementById('floodlightsOutdoor');
+            if (el && el.checked !== val) {
+              return `DOM floodlightsOutdoor is ${el.checked} not ${val}`;
+            }
+          }
+        }
+      }
+    }
+    
     return null; // all match
   }
 

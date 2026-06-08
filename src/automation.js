@@ -298,7 +298,27 @@ class LukasAutomationHub {
       outdoor:    'outdoorLock',
     };
     const resolvedId = aliasMap[id] || id;
-    return this.dynamicDevices.find(d => d.id === resolvedId) || null;
+    const found = this.dynamicDevices.find(d => d.id === resolvedId);
+    if (found) return found;
+    
+    // Fallback if registry node was deleted but legacy UI exists
+    const legacyKey = resolvedId === 'livingRoomLight' ? 'livingRoom' :
+                      resolvedId === 'bedroomLight' ? 'bedroom' :
+                      resolvedId === 'kitchenLight' ? 'kitchen' :
+                      resolvedId === 'outdoorLock' ? 'outdoor' : null;
+    if (legacyKey) {
+      const stateVal = this.state.devices[legacyKey];
+      return {
+        id: resolvedId,
+        name: resolvedId === 'livingRoomLight' ? 'Living Room Light' :
+              resolvedId === 'bedroomLight' ? 'Bedroom Light' :
+              resolvedId === 'kitchenLight' ? 'Kitchen Light' : 'Outdoor Lock',
+        zone: resolvedId === 'outdoorLock' ? 'Outdoor' : resolvedId === 'livingRoomLight' ? 'Living Room' : resolvedId === 'bedroomLight' ? 'Bedroom' : 'Kitchen',
+        category: resolvedId === 'outdoorLock' ? 'lock' : 'light',
+        ...stateVal
+      };
+    }
+    return null;
   }
 
   /**

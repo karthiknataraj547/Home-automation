@@ -987,11 +987,25 @@ function resolveDevice(targetName, category, targetZone) {
   
   let matches = [];
   
+  // Try to find matching devices in dynamicDevices first
+  let devicesToSearch = [...home.dynamicDevices];
+  
+  // If dynamicDevices doesn't have the standard default devices, include their virtual fallbacks in the search pool
+  const standardIds = ['livingRoomLight', 'bedroomLight', 'kitchenLight', 'outdoorLock'];
+  for (const id of standardIds) {
+    if (!devicesToSearch.some(d => d.id === id)) {
+      const fallbackDev = home.getDeviceById(id);
+      if (fallbackDev) {
+        devicesToSearch.push(fallbackDev);
+      }
+    }
+  }
+  
   // Step A: If room/zone specified or inferred, get all devices in that room
   if (zoneFilter) {
-    matches = home.dynamicDevices.filter(d => d.zone.toLowerCase() === zoneFilter.toLowerCase());
+    matches = devicesToSearch.filter(d => d.zone.toLowerCase() === zoneFilter.toLowerCase());
   } else {
-    matches = [...home.dynamicDevices];
+    matches = [...devicesToSearch];
   }
   
   // Step B: Filter by category/type if provided
@@ -1149,31 +1163,40 @@ class LukasMultiTaskEngine {
   }
 
   async _setDeviceStateAndTrack(devId, updates) {
-    const currentDev = home.dynamicDevices.find(d => d.id === devId);
+    const currentDev = home.getDeviceById(devId);
     if (!currentDev) return;
     
-    if (!this.expectedDeviceStates[devId]) {
-      this.expectedDeviceStates[devId] = {};
+    // Resolve legacy DEVICES.* constant aliases to canonical keys
+    const aliasMap = {
+      livingRoom: 'livingRoomLight',
+      bedroom:    'bedroomLight',
+      kitchen:    'kitchenLight',
+      outdoor:    'outdoorLock',
+    };
+    const resolvedId = aliasMap[devId] || devId;
+    
+    if (!this.expectedDeviceStates[resolvedId]) {
+      this.expectedDeviceStates[resolvedId] = {};
     }
     
     for (const [k, v] of Object.entries(updates)) {
-      this.expectedDeviceStates[devId][k] = v;
+      this.expectedDeviceStates[resolvedId][k] = v;
     }
     
-    if (!this.modifiedDevicesList.some(d => d.id === devId)) {
+    if (!this.modifiedDevicesList.some(d => d.id === resolvedId)) {
       this.modifiedDevicesList.push({
-        id: devId,
+        id: resolvedId,
         name: currentDev.name,
         category: currentDev.category,
         originalState: { ...currentDev }
       });
     }
 
-    await setDeviceStateWithFeedback(devId, updates);
+    await setDeviceStateWithFeedback(resolvedId, updates);
 
     // Call Verification Agent for live status feedback & retry loop
     if (typeof lukasVerify !== 'undefined' && lukasVerify) {
-      const verifyRes = await lukasVerify.verifyDeviceCommand(home, devId, updates, { supervisor: lukasSupervisor });
+      const verifyRes = await lukasVerify.verifyDeviceCommand(home, resolvedId, updates, { supervisor: lukasSupervisor });
       if (!verifyRes.verified) {
         throw new Error(`Device verification failed for "${currentDev.name}": state mismatch.`);
       }
@@ -1240,7 +1263,7 @@ class LukasMultiTaskEngine {
     const mismatchDetails = [];
 
     for (const [devId, expectedProps] of Object.entries(this.expectedDeviceStates)) {
-      const dev = home.dynamicDevices.find(d => d.id === devId);
+      const dev = home.getDeviceById(devId);
       if (!dev) {
         passed = false;
         mismatchDetails.push(`Device ${devId} not found in registry.`);
@@ -1391,7 +1414,7 @@ class LukasMultiTaskEngine {
     };
 
     for (const item of this.modifiedDevicesList) {
-      const dev = home.dynamicDevices.find(d => d.id === item.id);
+      const dev = home.getDeviceById(item.id);
       if (!dev) continue;
 
       const changes = [];
@@ -4823,6 +4846,10 @@ function setupZoneControlListeners(domPrefix, stateName) {
 function setupAutomationHooks() {
   // Update UI components when device state shifts
   home.onDeviceStateChange = (zone, deviceState) => {
+    console.log('[DEBUG UI SYNC] onDeviceStateChange triggered:', zone, deviceState);
+    if (typeof diag !== 'undefined' && diag) {
+      diag.logToTerminal(`[DEBUG UI SYNC] Zone: ${zone} -> state: ${JSON.stringify(deviceState)}`, 'info');
+    }
     let domPrefix = '';
     if (zone === DEVICES.LIVING_ROOM) domPrefix = 'Living';
     else if (zone === DEVICES.BEDROOM) domPrefix = 'Bedroom';
