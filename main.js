@@ -4216,7 +4216,18 @@ function bindUIEvents() {
         return;
       }
       diag.logToTerminal('[NEXUS SYNC] Purging memory database...', 'warn');
+      
+      // Clear memory agent state and localStorage
       lukasMemory.clearAllMemory();
+      localStorage.clear();
+      
+      // Delete IndexedDB database
+      try {
+        indexedDB.deleteDatabase('LukasAIOS');
+        diag.logToTerminal('[NEXUS SYNC] Local IndexedDB cleared.', 'info');
+      } catch (e) {
+        console.warn('Failed to delete IndexedDB:', e);
+      }
       
       const enabled = lukasMemory.getPreference('syncEnabled', 'false') === 'true';
       if (enabled) {
@@ -4232,8 +4243,12 @@ function bindUIEvents() {
           diag.logToTerminal(`[NEXUS SYNC] ❌ Failed to purge server storage: ${err.message}`, 'error');
         }
       }
-      updateMemoryPanel();
-      diag.logToTerminal('[NEXUS SYNC] Memory database purged successfully.', 'info');
+      
+      diag.logToTerminal('[NEXUS SYNC] Memory database purged successfully. Rebooting...', 'info');
+      
+      setTimeout(() => {
+        window.location.reload();
+      }, 1000);
     });
   }
 
