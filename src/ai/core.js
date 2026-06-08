@@ -456,18 +456,38 @@ async function generateConversationalResponse({
 }) {
   const finalSystemPrompt = systemPrompt || buildSystemPrompt(memory, homeContext, intent, isVoice);
 
-  let result = await callLukasAI({
-    systemPrompt: finalSystemPrompt,
-    userMessage,
-    memory,
-    apiKey,
-    apiProvider,
-    temperature,
-    maxTokens,
-    jsonMode: false,
-    includeHistory: !!memory,
-    streamCallback,
-  });
+  let result = null;
+  try {
+    result = await callLukasAI({
+      systemPrompt: finalSystemPrompt,
+      userMessage,
+      memory,
+      apiKey,
+      apiProvider,
+      temperature,
+      maxTokens,
+      jsonMode: false,
+      includeHistory: !!memory,
+      streamCallback,
+    });
+  } catch (err) {
+    console.warn("[AI Core] AI call failed, using local fallback:", err.message);
+  }
+
+  if (!result) {
+    const fallbackText = generateLocalFallbackResponse(userMessage, intent);
+    if (streamCallback) {
+      // Simulate streaming for the local fallback response
+      let currentText = '';
+      for (let i = 0; i < fallbackText.length; i++) {
+        currentText += fallbackText[i];
+        streamCallback(fallbackText[i], currentText);
+        // Wait 10ms to simulate streaming typing
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+    }
+    return fallbackText;
+  }
 
   // If streaming is active, we cannot intercept to refine, so return immediately
   if (streamCallback) return result;
@@ -678,6 +698,45 @@ Return only this structured analysis. Keep the tone professional, Jarvis-style, 
 [USER PROFILE & CONTEXT]
 ${contextBlock}`;
 }
+function generateLocalFallbackResponse(message, intent) {
+  const msg = message.toLowerCase().trim();
+  
+  // 1. Greetings
+  if (/\b(hi|hello|hey|greetings|yo|sup|hola|namaste|heyy)\b/i.test(msg)) {
+    return `[EMOTION: Calm] Hello, Commander. [PAUSE: 200] I am currently operating on offline local fallback mode, but I am ready to assist. How can I help you today?`;
+  }
+  
+  // 2. How are you
+  if (msg.includes('how are you') || msg.includes('how\'s it going') || msg.includes('how do you do')) {
+    return `[EMOTION: Calm] I am functioning within normal local parameters, Commander. [PAUSE: 150] Ready to receive your directives.`;
+  }
+  
+  // 3. Thank you
+  if (msg.includes('thank you') || msg.includes('thanks')) {
+    return `[EMOTION: Calm] You are very welcome, Commander. [PAUSE: 150] It is my pleasure to assist.`;
+  }
+  
+  // 4. Smart home command hints
+  if (msg.includes('light') || msg.includes('lamp') || msg.includes('bulb')) {
+    if (msg.includes('off') || msg.includes('shut') || msg.includes('trun off')) {
+      return `[EMOTION: Confident] Understood. [PAUSE: 100] Attempting to turn off the lights locally.`;
+    }
+    if (msg.includes('on') || msg.includes('trun on')) {
+      return `[EMOTION: Confident] Understood. [PAUSE: 100] Attempting to turn on the lights locally.`;
+    }
+    return `[EMOTION: Confident] Understood. [PAUSE: 100] Attempting to switch the light state locally.`;
+  }
+  
+  if (msg.includes('temperature') || msg.includes('thermostat') || msg.includes('ac') || msg.includes('temp')) {
+    const tempMatch = msg.match(/\d+/);
+    const tempStr = tempMatch ? ` to ${tempMatch[0]} degrees` : '';
+    return `[EMOTION: Confident] Acknowledged. [PAUSE: 100] Adjusting local climate control parameters${tempStr}.`;
+  }
+
+  // 5. Default generic response
+  return `[EMOTION: Calm] Acknowledged, Commander. [PAUSE: 150] I received your request: "${message}". [PAUSE: 250] I am currently running in offline local fallback mode due to API rate limits, but I will do my best to assist.`;
+}
+
 
 export {
   buildSystemPrompt,
