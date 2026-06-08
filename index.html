@@ -601,11 +601,22 @@
           <!-- Terminal control panel for filtering and export -->
           <div class="terminal-controls" style="display: flex; gap: 0.5rem; margin-bottom: 0.5rem; justify-content: flex-end;">
             <select id="terminalFilter" class="terminal-select" style="background: rgba(2, 6, 23, 0.6); border: 1px solid var(--purple-neon); color: #fff; border-radius: 4px; padding: 2px 6px; font-size: 0.65rem; font-family: var(--font-mono); outline: none;">
-              <option value="all">ALL SEVERITY</option>
-              <option value="normal">NORMAL</option>
-              <option value="info">INFO</option>
-              <option value="warn">WARN</option>
-              <option value="error">ERROR</option>
+              <option value="all">ALL LOGS</option>
+              <optgroup label="── SEVERITY ──" style="color: var(--cyan-neon);">
+                <option value="normal">NORMAL</option>
+                <option value="info">INFO</option>
+                <option value="warn">WARN</option>
+                <option value="error">ERROR</option>
+              </optgroup>
+              <optgroup label="── AGENT STREAMS ──" style="color: var(--purple-neon);">
+                <option value="agent:supervisor">🔷 SUPERVISOR</option>
+                <option value="agent:master">🔶 MASTER</option>
+                <option value="agent:planner">🟢 PLANNER</option>
+                <option value="agent:home">🏠 HOME</option>
+                <option value="agent:research">🔍 RESEARCH</option>
+                <option value="agent:memory">🧠 MEMORY</option>
+                <option value="agent:voice">🎙 VOICE</option>
+              </optgroup>
             </select>
             <button id="terminalExportCSV" class="terminal-btn" style="background: rgba(2, 6, 23, 0.6); border: 1px solid var(--cyan-neon); color: var(--cyan-neon); border-radius: 4px; padding: 2px 8px; font-size: 0.65rem; font-family: var(--font-mono); cursor: pointer; display: flex; align-items: center; gap: 4px;">
               <i class="fa-solid fa-file-export"></i> EXPORT CSV

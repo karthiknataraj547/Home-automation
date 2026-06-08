@@ -18,6 +18,7 @@ import LukasGameEngine, { GAMES } from './src/ai/games.js';
 import LukasPlannerAgent from './src/ai/planner.js';
 import LukasTaskRunner from './src/ai/taskrunner.js';
 import { LukasExecutionTracker } from './src/ai/execution.js';
+import LukasSupervisor from './src/ai/supervisor.js';
 
 // ── Puter Quiet Mode (Silence WebSocket warnings in console) ───────────
 if (window.puter) {
@@ -100,6 +101,20 @@ function handleLocalAPIResponse(url, options) {
     resBody = [];
   } else if (endpoint === '/api/music-search') {
     resBody = { found: false, error: 'Music search requires local dev server. Use built-in playlist.' };
+  } else if (endpoint === '/api/write-agent-log') {
+    // Offline fallback — supervisor logs go to LocalStorage ring buffer
+    try {
+      const parsed = options && options.body ? JSON.parse(options.body) : {};
+      const { agent, entry } = parsed;
+      if (agent && entry) {
+        const key = `lukas_agent_log_${String(agent).replace(/[^a-zA-Z0-9_-]/g, '')}`;
+        const existing = JSON.parse(localStorage.getItem(key) || '[]');
+        existing.push(entry);
+        if (existing.length > 500) existing.splice(0, existing.length - 500);
+        localStorage.setItem(key, JSON.stringify(existing));
+      }
+    } catch { /* ignore */ }
+    resBody = { success: true, source: 'localStorage' };
   } else {
     resBody = {};
   }
@@ -136,6 +151,9 @@ let playlist = lukasMusic.getFullPlaylist().map(t => ({ ...t, icon: 'fa-music' }
 // ═══ LUKAS Planner & Task Runner ═══
 const lukasPlan = new LukasPlannerAgent();
 const lukasTask = new LukasTaskRunner();
+
+// ═══ LUKAS Supervisor Agent (AI Governor) ═══
+const lukasSupervisor = new LukasSupervisor();
 let currentTrackIndex = 0;
 let isPlaying = false;
 let isPassiveListenEnabled = true;
@@ -5860,6 +5878,11 @@ async function processCommand(rawCommand, source) {
   try {
     isProcessingCommand = true;
     lastCommandSource = source || 'user';
+
+    // ── SUPERVISOR: Begin command audit ──
+    lukasSupervisor.beginCommandAudit(rawCommand, source || 'user');
+    lukasSupervisor.trackAgent('master', 'running', `Processing: "${rawCommand.slice(0, 60)}"`);
+    diag.logToTerminal(`[SUPERVISOR] Audit started [${(source || 'user').toUpperCase()}]: "${rawCommand.slice(0, 80)}"`, 'info');
     
     // Record STT latency timestamp
     if (source === 'voice') {
@@ -6952,11 +6975,15 @@ async function processCommand(rawCommand, source) {
 
     // ── STAGE 5: AUTONOMOUS EXECUTION ──
     diag.logToTerminal("[STAGE 5: EXECUTE] Initiating background execution...", "info");
+    lukasSupervisor.auditPhase('EXECUTE', { intent: routing.intent });
+    lukasSupervisor.trackAgent('master', 'running', 'Stage 5: Autonomous Execution');
     voice.recognitionManager.transitionTo('executing');
     
     await executionTracker.trackExecution(rawCommand, async () => {
       if (isPlanExecution) {
         diag.logToTerminal("[PLANNER AGENT] Generating structured executive plan...", "info");
+        lukasSupervisor.trackAgent('planner', 'running', `Creating plan for: "${rawCommand.slice(0, 60)}"`);
+        lukasSupervisor.auditPhase('PLAN', { command: rawCommand });
         
         const plan = await lukasPlan.createPlan(rawCommand, lukasMemory, activeKey, activeProvider);
         
@@ -7005,8 +7032,17 @@ async function processCommand(rawCommand, source) {
           research: lukasResearch
         };
         
+        lukasSupervisor.trackAgent('planner', 'completed', `Plan created: "${plan.title || plan.objective}"`);
         const results = await lukasTask.executePlan(plan, context);
         const summary = lukasTask.summarizeResults(plan, results);
+
+        // ── SUPERVISOR: Verify all subtasks completed ──
+        const taskVerification = lukasSupervisor.verifyMultiTaskCompletion(plan, results);
+        diag.logToTerminal(
+          `[SUPERVISOR] Task verification: ${taskVerification.completedCount}/${(plan.steps||[]).length} completed` +
+          (taskVerification.failedCount > 0 ? ` | ${taskVerification.failedCount} FAILED` : ''),
+          taskVerification.allCompleted ? 'info' : 'warn'
+        );
         
         // Synthesize cohesive Jarvis response
         const compiledText = results.map((r, idx) => `Step ${idx+1} (${r.title}): ${r.status === 'completed' ? r.output : 'Failed - ' + r.error}`).join('\n');
@@ -7034,14 +7070,47 @@ async function processCommand(rawCommand, source) {
         if (coreBtn) coreBtn.classList.remove('processing');
         
         if (finalResponse) {
-          const validation = lukasReasoning.validate(rawCommand, finalResponse, lukasMemory);
-          appendChatBubble(finalResponse, 'assistant', null, validation.score);
+          // ── SUPERVISOR: Validate final synthesized response ──
+          const supScore = lukasSupervisor.validateResponse(rawCommand, finalResponse, results);
+          diag.logToTerminal(
+            `[SUPERVISOR] Response score: Overall=${supScore.overall}% | Accuracy=${supScore.accuracy}% | ` +
+            `Exec=${supScore.execution}% | HallucinationRisk=${supScore.hallucination_risk}% | Verdict=${supScore.verdict}`,
+            supScore.verdict === 'PASS' ? 'info' : supScore.verdict === 'WARN' ? 'warn' : 'error'
+          );
+
+          // If hallucination detected — regenerate with corrective prompt
+          let finalOutput = finalResponse;
+          if (supScore.verdict === 'FAIL' && supScore.hallucination_risk >= 30) {
+            diag.logToTerminal('[SUPERVISOR] Hallucination detected — triggering response refinement...', 'error');
+            const refinementPrompt = lukasSupervisor.buildRefinementPrompt(rawCommand, finalResponse, results, supScore);
+            try {
+              const refined = await callLukasAI({
+                systemPrompt: refinementPrompt,
+                userMessage: rawCommand,
+                memory: lukasMemory,
+                apiKey: activeKey,
+                apiProvider: activeProvider,
+                temperature: 0.5,
+                maxTokens: 800
+              });
+              if (refined && refined.length > 8) {
+                finalOutput = refined;
+                diag.logToTerminal('[SUPERVISOR] Refinement response generated successfully.', 'info');
+              }
+            } catch (refErr) {
+              diag.logToTerminal(`[SUPERVISOR] Refinement failed: ${refErr.message}`, 'warn');
+            }
+          }
+
+          const validation = lukasReasoning.validate(rawCommand, finalOutput, lukasMemory);
+          appendChatBubble(finalOutput, 'assistant', null, supScore.overall);
           
           voice.stopWakeWordListener();
-          const cleanResponse = parseExecutiveAnalysis(finalResponse).responseText;
+          const cleanResponse = parseExecutiveAnalysis(finalOutput).responseText;
           voice.speak(cleanResponse);
           
-          lukasMemory.addMessage('assistant', finalResponse, 'planning');
+          lukasMemory.addMessage('assistant', finalOutput, 'planning');
+          lukasSupervisor.trackAgent('master', 'completed', 'Plan response delivered.');
         } else {
           appendChatBubble(summary, 'assistant');
           voice.speak("Plan execution complete.");
@@ -7118,8 +7187,13 @@ async function processCommand(rawCommand, source) {
     
     // Auto-update memory drawer
     updateMemoryPanel();
+    lukasSupervisor.trackAgent('master', 'idle', 'Command cycle complete.');
+    lukasSupervisor.auditPhase('RESPOND', { status: 'success' });
   } catch (err) {
     console.error("Error in processCommand:", err);
+    lukasSupervisor.trackAgent('master', 'failed', `Error: ${err.message}`);
+    lukasSupervisor.auditPhase('RESPOND', { status: 'error', error: err.message });
+    lukasSupervisor.logAgentAction('supervisor', `[CRITICAL] processCommand failed: ${err.message}`, 'error', { stack: err.stack?.slice(0, 500) });
     isProcessingCommand = false;
     const coreBtn = document.getElementById('lukasCoreBtn');
     if (coreBtn) {

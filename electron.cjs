@@ -982,6 +982,25 @@ const handleRequest = async (req, res) => {
       } catch(e) { json(res, { success: false, error: e.message }, 500); }
     }
     
+    else if (urlPath === '/api/write-agent-log' && req.method === 'POST') {
+      const body = await readBody(req);
+      try {
+        const { agent, entry } = JSON.parse(body);
+        if (!agent || !entry) return json(res, { error: 'Missing agent or entry.' }, 400);
+
+        // Sanitize agent name to prevent path traversal
+        const safeName = String(agent).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'unknown';
+        const logsDir  = path.join(getConfigDir(), 'logs');
+        if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+
+        const logFile = path.join(logsDir, `${safeName}-agent.log`);
+        fs.appendFileSync(logFile, JSON.stringify(entry) + '\n', 'utf8');
+        json(res, { success: true, file: `${safeName}-agent.log` });
+      } catch (e) {
+        json(res, { success: false, error: e.message }, 500);
+      }
+    }
+
     else {
       res.statusCode = 404;
       res.end('API Not Found');

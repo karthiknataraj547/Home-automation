@@ -110,8 +110,17 @@ class LukasDiagnosticsHub {
     const filterSelect = document.getElementById('terminalFilter');
     const filter = filterSelect ? filterSelect.value : 'all';
 
-    // Filter the logs
-    const filteredLogs = filter === 'all' ? this.logs : this.logs.filter(log => log.type === filter);
+    // Filter the logs — supports severity filters ('info', 'warn', 'error')
+    // and agent-namespace filters ('agent:supervisor', 'agent:master', etc.)
+    let filteredLogs;
+    if (filter === 'all') {
+      filteredLogs = this.logs;
+    } else if (filter.startsWith('agent:')) {
+      const agentTag = filter.slice(6); // e.g. 'supervisor'
+      filteredLogs = this.logs.filter(log => log.agent === agentTag);
+    } else {
+      filteredLogs = this.logs.filter(log => log.type === filter);
+    }
 
     const totalHeight = filteredLogs.length * this.lineHeight;
     this.scrollSpacer.style.height = `${totalHeight}px`;
@@ -162,12 +171,12 @@ class LukasDiagnosticsHub {
   exportLogsToCSV() {
     try {
       const csvRows = [
-        ['Timestamp', 'Severity', 'Log Message']
+        ['Timestamp', 'Severity', 'Agent', 'Log Message']
       ];
       
       this.logs.forEach(log => {
         const timestamp = new Date().toISOString();
-        csvRows.push([timestamp, log.type.toUpperCase(), log.text]);
+        csvRows.push([timestamp, log.type.toUpperCase(), log.agent || '', log.text]);
       });
       
       const csvContent = "data:text/csv;charset=utf-8," 
@@ -239,12 +248,15 @@ class LukasDiagnosticsHub {
   }
 
   // Terminal Console Logging Subsystem
-  logToTerminal(text, type = 'normal') {
+  // @param {string} text - Log message
+  // @param {string} type - 'normal' | 'info' | 'warn' | 'error'
+  // @param {string} agent - Optional agent tag, e.g. 'supervisor', 'master', 'planner'
+  logToTerminal(text, type = 'normal', agent = '') {
     const container = document.getElementById('terminalLogContainer');
     if (!container) return;
 
     // Create a new log entry
-    const newEntry = { text: "", type, targetText: text, isTyping: true };
+    const newEntry = { text: "", type, agent, targetText: text, isTyping: true };
     this.logs.push(newEntry);
 
     if (this.logs.length > this.maxLogs) {
