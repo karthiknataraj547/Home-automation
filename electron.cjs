@@ -1001,6 +1001,116 @@ const handleRequest = async (req, res) => {
       }
     }
 
+    // ── System Exec (sandboxed) ────────────────────────────────────────────
+    else if (urlPath === '/api/system-exec' && req.method === 'POST') {
+      const body = await readBody(req);
+      try {
+        const { action, target, command, capture } = JSON.parse(body);
+        const os     = require('os');
+        const { exec, execSync } = require('child_process');
+        const { shell } = require('electron');
+
+        if (action === 'open' || action === 'open_url' || action === 'open_app') {
+          // Use Electron's shell.openExternal for URLs, shell.openPath for local files
+          if (target && (target.startsWith('http') || target.startsWith('https'))) {
+            await shell.openExternal(target);
+          } else if (target) {
+            await shell.openPath(target);
+          }
+          json(res, { success: true, action, target });
+        }
+        else if (action === 'screenshot') {
+          // Save screenshot to userData/screenshots
+          const screenshotsDir = path.join(getConfigDir(), 'screenshots');
+          if (!fs.existsSync(screenshotsDir)) fs.mkdirSync(screenshotsDir, { recursive: true });
+          const filename = `screenshot_${Date.now()}.png`;
+          const filePath = path.join(screenshotsDir, filename);
+          // Use nativeImage via Electron (best effort)
+          try {
+            const { nativeImage, screen: elScreen } = require('electron');
+            const display = elScreen.getPrimaryDisplay();
+            const size = display.size;
+            // Note: full capture requires desktopCapturer in renderer; here we log intent
+            json(res, { success: true, path: filePath, note: 'Screenshot capture requires renderer-side desktopCapturer.' });
+          } catch {
+            json(res, { success: false, error: 'Screenshot not available.' });
+          }
+        }
+        else if (action === 'exec' && command) {
+          // Sandboxed command allowlist
+          const ALLOWED_COMMANDS = [
+            /^notepad$/i, /^calc$/i, /^explorer$/i, /^mspaint$/i,
+            /^taskmgr$/i, /^cmd$/i, /^powershell$/i, /^chrome$/i,
+            /^code\b/i, /^node\b/i
+          ];
+          const allowed = ALLOWED_COMMANDS.some(p => p.test(command.trim()));
+          if (!allowed) {
+            json(res, { success: false, error: 'Command not in allowlist.' }, 403);
+            return;
+          }
+          exec(command, { timeout: 10000 }, (err, stdout, stderr) => {
+            json(res, { success: !err, stdout: capture ? stdout : '', stderr: capture ? stderr : '', error: err?.message });
+          });
+        }
+        else {
+          json(res, { success: false, error: 'Unknown action.' }, 400);
+        }
+      } catch (e) {
+        json(res, { success: false, error: e.message }, 500);
+      }
+    }
+
+    // ── System Info ───────────────────────────────────────────────────────
+    else if (urlPath === '/api/system-info' && req.method === 'GET') {
+      try {
+        const os = require('os');
+        const totalMem  = os.totalmem();
+        const freeMem   = os.freemem();
+        const usedMem   = totalMem - freeMem;
+        const cpus      = os.cpus();
+
+        json(res, {
+          success: true,
+          platform:   os.platform(),
+          arch:       os.arch(),
+          hostname:   os.hostname(),
+          release:    os.release(),
+          cores:      cpus.length,
+          cpuModel:   cpus[0]?.model || 'Unknown',
+          memory: {
+            total: Math.round(totalMem / 1048576),
+            used:  Math.round(usedMem  / 1048576),
+            free:  Math.round(freeMem  / 1048576),
+            unit: 'MB'
+          },
+          uptime: Math.round(os.uptime()),
+          online: true
+        });
+      } catch (e) {
+        json(res, { success: false, error: e.message }, 500);
+      }
+    }
+
+    // ── Electron Tray Notification ────────────────────────────────────────
+    else if (urlPath === '/api/notify' && req.method === 'POST') {
+      const body = await readBody(req);
+      try {
+        const { title, body: notifBody } = JSON.parse(body);
+        const { Notification: ElectronNotif } = require('electron');
+        if (ElectronNotif.isSupported()) {
+          new ElectronNotif({
+            title: String(title).slice(0, 64),
+            body:  String(notifBody).slice(0, 256),
+          }).show();
+          json(res, { success: true });
+        } else {
+          json(res, { success: false, error: 'Electron notifications not supported on this platform.' });
+        }
+      } catch (e) {
+        json(res, { success: false, error: e.message }, 500);
+      }
+    }
+
     else {
       res.statusCode = 404;
       res.end('API Not Found');

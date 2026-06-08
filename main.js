@@ -20,6 +20,18 @@ import LukasTaskRunner from './src/ai/taskrunner.js';
 import { LukasExecutionTracker } from './src/ai/execution.js';
 import LukasSupervisor from './src/ai/supervisor.js';
 
+// ═══════ LUKAS Extended Agent Layer ═══════
+import lukasDB from './src/ai/database.js';
+import LukasVerificationAgent from './src/ai/verification.js';
+import LukasRecoveryAgent from './src/ai/recovery.js';
+import LukasSchedulerAgent from './src/ai/scheduler.js';
+import LukasRulesAgent from './src/ai/rules.js';
+import LukasConversationAgent from './src/ai/conversation.js';
+import LukasSecurityAgent from './src/ai/security.js';
+import LukasAnalyticsAgent from './src/ai/analytics.js';
+import LukasNotificationAgent from './src/ai/notification.js';
+import LukasSystemAgent from './src/ai/system.js';
+
 // ── Puter Quiet Mode (Silence WebSocket warnings in console) ───────────
 if (window.puter) {
   window.puter.quiet = true;
@@ -154,6 +166,20 @@ const lukasTask = new LukasTaskRunner();
 
 // ═══ LUKAS Supervisor Agent (AI Governor) ═══
 const lukasSupervisor = new LukasSupervisor();
+
+// ═══ LUKAS Extended Agent Layer ═══
+const lukasVerify       = new LukasVerificationAgent();
+const lukasRecovery     = new LukasRecoveryAgent();
+const lukasScheduler    = new LukasSchedulerAgent();
+const lukasRules        = new LukasRulesAgent();
+const lukasConversation = new LukasConversationAgent();
+const lukasSecurity     = new LukasSecurityAgent();
+const lukasAnalytics    = new LukasAnalyticsAgent();
+const lukasNotify       = new LukasNotificationAgent();
+const lukasSystem       = new LukasSystemAgent();
+
+// Expose diag globally so automation.js can reference it
+window.diag = null; // set after diag is initialized below
 let currentTrackIndex = 0;
 let isPlaying = false;
 let isPassiveListenEnabled = true;
@@ -807,6 +833,51 @@ function initializeDashboard() {
   setInterval(() => {
     diag.drawEnergyChart();
   }, 4000);
+
+  // ── LUKAS Extended Agent Layer Boot Sequence ──────────────────────────
+  // Set global diag reference for automation hub
+  window.diag = diag;
+
+  // 1. Recovery Agent — attach and start health monitor
+  lukasRecovery.attach({ voice, supervisor: lukasSupervisor, diag });
+  lukasRecovery.onHealthChange = (component, status, detail) => {
+    diag.logToTerminal(`[RECOVERY] ${component.toUpperCase()} → ${status.toUpperCase()}: ${detail}`, 
+      status === 'healthy' ? 'info' : status === 'recovering' ? 'warn' : 'error');
+  };
+  lukasRecovery.start(30000);
+
+  // 2. Scheduler Agent — start and wire fire-command hook
+  lukasNotify.voiceController = voice;
+  lukasNotify.diag = diag;
+  lukasNotify.supervisor = lukasSupervisor;
+
+  lukasScheduler.diag = diag;
+  lukasScheduler.supervisor = lukasSupervisor;
+  lukasScheduler.onFireCommand = (command, schedule) => {
+    diag.logToTerminal(`[SCHEDULER] Firing: "${schedule.label}"`, 'info');
+    lukasNotify.notifyScheduledCommand(schedule.label, command);
+    processCommand(command, 'scheduler');
+  };
+  lukasScheduler.start().catch(e => diag.logToTerminal(`[SCHEDULER] Start failed: ${e.message}`, 'warn'));
+
+  // 3. Rules Agent — load and wire
+  lukasRules.diag = diag;
+  lukasRules.supervisor = lukasSupervisor;
+  lukasRules.onFireCommand = (command, rule) => {
+    diag.logToTerminal(`[RULES] Auto-executing rule "${rule.name}": "${command}"`, 'info');
+    processCommand(command, 'rules');
+  };
+  const ruleUser = getSessionUser()?.username || 'Guest';
+  lukasRules.loadFromDB(ruleUser).then(() => lukasRules.installDefaultRules(ruleUser));
+
+  // 4. DB Migration — one-time migrate LocalStorage → IndexedDB
+  lukasDB.migrateFromLocalStorage().then(count => {
+    if (count > 0) {
+      diag.logToTerminal(`[DATABASE] Migrated ${count} LocalStorage entries → IndexedDB.`, 'info');
+    }
+  }).catch(() => {});
+
+  diag.logToTerminal('[LUKAS OS] Extended Agent Layer online: Database, Verification, Recovery, Scheduler, Rules, Security, Analytics, Notifications.', 'info');
 
   // Bind CCTV cameras
   cctv.initCameras(['cctvCam1', 'cctvCam2', 'cctvCam3', 'cctvCam4']);
@@ -5903,6 +5974,33 @@ async function processCommand(rawCommand, source) {
     appendChatBubble(rawCommand, 'user');
     diag.spikeCPU();
 
+    // ── SECURITY: Sanitize input + rate limit ──
+    const user = getSessionUser()?.username || 'Guest';
+    const rlCheck = lukasSecurity.rateLimit(user, 'command');
+    if (!rlCheck.allowed) {
+      handleAssistantResponse(`Request rate limit reached. Please wait a moment.`);
+      isProcessingCommand = false;
+      return;
+    }
+    const { sanitized: sanitizedCommand, isInjection } = lukasSecurity.sanitizeInput(rawCommand);
+    if (isInjection) {
+      diag.logToTerminal(`[SECURITY] Prompt injection attempt blocked from "${user}"`, 'error');
+      handleAssistantResponse("I detected an attempt to manipulate my instructions. That command has been blocked.");
+      isProcessingCommand = false;
+      return;
+    }
+    const effectiveCommand = sanitizedCommand;
+
+    // ── CONVERSATION: Resolve references + record turn ──
+    const { resolved: resolvedCommand, isFollowUp } = lukasConversation.resolveReferences(effectiveCommand);
+    if (isFollowUp && resolvedCommand !== effectiveCommand) {
+      diag.logToTerminal(`[CONVERSATION] Reference resolved: "${effectiveCommand}" → "${resolvedCommand}"`, 'info');
+    }
+    lukasConversation.recordTurn('user', resolvedCommand);
+
+    // ── ANALYTICS: Record command attempt ──
+    lukasAnalytics.record('command', { command: resolvedCommand.slice(0, 100), source }, user);
+
     // ── PRE-FLIGHT BIOMETRICS IDENTIFICATION & PROFILE SWITCHING ──
     if (source === 'voice') {
       const print = voice.lastSpokenVoiceprint;
@@ -7164,6 +7262,24 @@ async function processCommand(rawCommand, source) {
           await handleAutomationIntent(cmd, rawCommand);
           break;
 
+        case INTENT.SCHEDULE:
+          diag.logToTerminal("[STAGE 5: EXECUTE] Dispatching to LukasSchedulerAgent...", "info");
+          {
+            const user = getSessionUser()?.username || 'Guest';
+            const parsed = lukasScheduler.parseScheduleFromText(rawCommand, user);
+            if (parsed) {
+              const schedId = await lukasScheduler.scheduleCommand(parsed);
+              const timeStr = new Date(parsed.triggerAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+              const repeatStr = parsed.repeat !== 'none' ? `, repeating ${parsed.repeat}` : '';
+              handleAssistantResponse(`Scheduled. I'll execute "${parsed.command}" at ${timeStr}${repeatStr}. Schedule ID: ${schedId.slice(-6)}.`);
+              await lukasAnalytics.record('schedule_created', { command: parsed.command, repeat: parsed.repeat }, user);
+            } else {
+              // Couldn't parse — fall back to conversational
+              await handleConversationalIntent(rawCommand, INTENT.SCHEDULE, activeKey, activeProvider, source);
+            }
+          }
+          break;
+
         case INTENT.MATH:
           diag.logToTerminal("[STAGE 5: EXECUTE] Running numerical calculation subroutines...", "info");
           await handleMathIntent(rawCommand, activeKey, activeProvider);
@@ -7171,7 +7287,25 @@ async function processCommand(rawCommand, source) {
 
         case INTENT.SYSTEM:
           diag.logToTerminal("[STAGE 5: EXECUTE] Accessing local system hardware layer...", "info");
-          await handleSystemIntent(cmd);
+          {
+            const sysParsed = lukasSystem.parseSystemCommand(rawCommand);
+            if (sysParsed) {
+              const sysResult = await lukasSystem.executeSystemCommand(sysParsed);
+              if (sysResult?.success !== false) {
+                if (sysParsed.action === 'system_info') {
+                  const info = sysResult;
+                  const memStr = info.memory ? ` Memory: ${info.memory.used}/${info.memory.limit}MB.` : '';
+                  handleAssistantResponse(`System online. Platform: ${info.platform}. Cores: ${info.cores}. Online: ${info.online}.${memStr}`);
+                } else {
+                  handleAssistantResponse(`Executed: ${sysParsed.action.replace(/_/g, ' ')}${sysParsed.target ? ` → ${sysParsed.target}` : ''}.`);
+                }
+              } else {
+                await handleSystemIntent(cmd);
+              }
+            } else {
+              await handleSystemIntent(cmd);
+            }
+          }
           break;
 
         case INTENT.CONVERSATION:

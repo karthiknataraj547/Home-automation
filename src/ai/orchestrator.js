@@ -7,19 +7,20 @@
  * Intent categories LUKAS can classify
  */
 export const INTENT = {
-  HOME_CONTROL:    'home_control',    // Device/light/climate/security commands
-  RESEARCH:        'research',        // Web search, Wikipedia, fact-lookup
-  TASK_EXECUTION:  'task_execution',  // Write, generate, code, analyze
-  AUTOMATION:      'automation',      // Schedule, remind, workflow, routine
-  WEATHER:         'weather',         // Weather queries
-  MEDIA:           'media',           // Music, volume, playback
-  MEMORY_QUERY:    'memory_query',    // "What did I say?", "Do you remember?"
-  PLANNING:        'planning',        // Multi-step project planning
-  ANALYSIS:        'analysis',        // Data analysis, comparisons
-  MATH:            'math',            // Calculations
-  CONVERSATION:    'conversation',    // General chat, questions, discussions
-  SYSTEM:          'system',          // LUKAS settings, diagnostics
-  GAME:            'game',            // Interactive games portal
+  HOME_CONTROL:    'home_control',
+  RESEARCH:        'research',
+  TASK_EXECUTION:  'task_execution',
+  AUTOMATION:      'automation',
+  SCHEDULE:        'schedule',        // Reminders, timed tasks, recurring commands
+  WEATHER:         'weather',
+  MEDIA:           'media',
+  MEMORY_QUERY:    'memory_query',
+  PLANNING:        'planning',
+  ANALYSIS:        'analysis',
+  MATH:            'math',
+  CONVERSATION:    'conversation',
+  SYSTEM:          'system',
+  GAME:            'game',
   UNKNOWN:         'unknown',
 };
 
@@ -121,9 +122,14 @@ class LukasOrchestrator {
       return { intent: INTENT.MEDIA, confidence: 0.90, subtasks: ['media_control'] };
     }
 
-    // Reminders & Automation
-    if (/\b(remind me|set (a )?reminder|schedule|alarm at|add (a )?task|don't (let me) forget|notify me|automate|workflow|trigger)\b/i.test(text)) {
-      return { intent: INTENT.AUTOMATION, confidence: 0.91, subtasks: ['create_reminder'] };
+    // Scheduling & Reminders (routed to LukasSchedulerAgent)
+    if (/\b(remind me|set (a )?reminder|schedule|alarm at|in \d+ (minutes?|hours?|seconds?)|at \d+(am|pm)|every (morning|night|day|hour|week)|wake me up|don't (let me) forget|notify me at|timer for)\b/i.test(text)) {
+      return { intent: INTENT.SCHEDULE, confidence: 0.93, subtasks: ['create_schedule'] };
+    }
+
+    // Automation rules (IF/WHEN conditions)
+    if (/\b(automate|workflow|trigger|if temperature|when (the |)temperature|if (the |)humidity|when (the |)light|set (a )?rule)\b/i.test(text)) {
+      return { intent: INTENT.AUTOMATION, confidence: 0.91, subtasks: ['create_rule'] };
     }
 
     // Research

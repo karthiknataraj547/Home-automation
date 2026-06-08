@@ -282,6 +282,48 @@ class LukasAutomationHub {
     return true;
   }
 
+  // ─── Device Lookup (required by Verification & Supervisor agents) ─────────
+
+  /**
+   * Get a single device by ID.
+   * @param {string} id  e.g. 'livingRoomLight', 'bedroomLight', 'device_1234'
+   * @returns {object|null}
+   */
+  getDeviceById(id) {
+    // Resolve legacy DEVICES.* constant aliases
+    const aliasMap = {
+      livingRoom: 'livingRoomLight',
+      bedroom:    'bedroomLight',
+      kitchen:    'kitchenLight',
+      outdoor:    'outdoorLock',
+    };
+    const resolvedId = aliasMap[id] || id;
+    return this.dynamicDevices.find(d => d.id === resolvedId) || null;
+  }
+
+  /**
+   * Return a flat map of all device states for supervisor / verification querying.
+   * @returns {object}  e.g. { livingRoomLight: { on: true, brightness: 80, ... }, ... }
+   */
+  getDeviceStates() {
+    const states = {};
+    for (const dev of this.dynamicDevices) {
+      states[dev.id] = { ...dev };
+    }
+    // Also expose climate state
+    states._climate = { ...this.state.climate };
+    return states;
+  }
+
+  /**
+   * Get all devices with their current state (alias for dynamicDevices).
+   * @returns {Array}
+   */
+  getAllDevices() {
+    return [...this.dynamicDevices];
+  }
+
+
   // Adjust Climate Controller Target
   setTargetTemperature(temp) {
     const constrainedTemp = Math.max(16, Math.min(30, temp));
