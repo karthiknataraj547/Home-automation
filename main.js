@@ -4246,12 +4246,26 @@ function bindUIEvents() {
       const resp = await fetch('/api/openai-config');
       if (resp.ok) {
         const data = await resp.json();
-        if (data && data.openai_api_key) {
-          localStorage.setItem('openai_api_key', data.openai_api_key);
-          if (openaiInput) {
-            openaiInput.value = data.openai_api_key;
+        if (data) {
+          if (data.openai_api_key) {
+            localStorage.setItem('openai_api_key', data.openai_api_key);
+            if (typeof lukasMemory !== 'undefined') {
+              lukasMemory.setPreference('openai_api_key', data.openai_api_key);
+            }
+            if (openaiInput) {
+              openaiInput.value = data.openai_api_key;
+            }
+            diag.logToTerminal('[SETTINGS] OpenAI API Key synced from local config.', 'info');
+          } else {
+            localStorage.removeItem('openai_api_key');
+            if (typeof lukasMemory !== 'undefined') {
+              lukasMemory.setPreference('openai_api_key', '');
+            }
+            if (openaiInput) {
+              openaiInput.value = '';
+            }
+            diag.logToTerminal('[SETTINGS] OpenAI API Key cleared (disabled on server).', 'info');
           }
-          diag.logToTerminal('[SETTINGS] OpenAI API Key synced from local config.', 'info');
         }
       }
     } catch (err) {
