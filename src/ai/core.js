@@ -673,6 +673,29 @@ function scoreResponse(userInput, response) {
     score -= 15;
   }
 
+  // 8. Check for unresolved bracketed placeholders
+  const allBrackets = response.match(/\[[^\]]+\]/g) || [];
+  const allowedPatterns = [
+    /^\[EXECUTIVE ANALYSIS\]$/i,
+    /^\[RESPONSE\]$/i,
+    /^\[EMOTION:\s*[A-Za-z]+\]$/i,
+    /^\[PAUSE:\s*\d+\]$/i,
+    /^\[STAGE\s*\d+[^\]]*\]$/i,
+    /^\[(DEVICE VERIFY|TASK VERIFY|GOVERNOR ALERT|GOVERNOR WARNING|GOVERNOR OK|AUDIT REPORT|AUDIT SUCCESS|AUDIT WARN|REPORTED|UNDERSTOOD|DECOMPOSED|VALIDATE SUCCESS|VALIDATE FAILED|ASSIGNED|RUNNING|START|SUCCESS|FAILED|COMPLETED|AMBIGUOUS|ROLLBACK|TRANSACTION|RETRY|RETRY ERROR|CLOUD FALLBACK)\]$/i
+  ];
+  
+  let hasPlaceholder = false;
+  for (const br of allBrackets) {
+    const isAllowed = allowedPatterns.some(pat => pat.test(br));
+    if (!isAllowed) {
+      hasPlaceholder = true;
+      issues.push(`Contains unresolved placeholder or unapproved bracket tag: "${br}"`);
+    }
+  }
+  if (hasPlaceholder) {
+    score -= 35;
+  }
+
   return { score: Math.max(0, score), issues };
 }
 
