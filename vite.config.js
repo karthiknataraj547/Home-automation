@@ -619,6 +619,30 @@ export default defineConfig({
           }
         }
 
+        // ── POST /api/write-agent-log ── write structured agent logs ─────
+        if (url === '/api/write-agent-log' && req.method === 'POST') {
+          try {
+            const bodyStr = await readBody(req);
+            const { agent, entry } = JSON.parse(bodyStr);
+            if (!agent || !entry) {
+              return json(res, { success: false, error: 'Missing agent or entry.' }, 400);
+            }
+
+            // Sanitize agent name to prevent path traversal
+            const safeName = String(agent).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'unknown';
+            const logsDir  = path.resolve(process.cwd(), 'logs');
+            if (!fs.existsSync(logsDir)) {
+              fs.mkdirSync(logsDir, { recursive: true });
+            }
+
+            const logFile = path.join(logsDir, `${safeName}.log`);
+            fs.appendFileSync(logFile, JSON.stringify(entry) + '\n', 'utf8');
+            return json(res, { success: true, file: `${safeName}.log` });
+          } catch (err) {
+            return json(res, { success: false, error: err.message }, 500);
+          }
+        }
+
         // ── GET /api/scan-tuya ── scan Tuya developer platform devices ─────
         if (url === '/api/scan-tuya' && req.method === 'GET') {
           try {

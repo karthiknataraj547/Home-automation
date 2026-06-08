@@ -993,9 +993,9 @@ const handleRequest = async (req, res) => {
         const logsDir  = path.join(getConfigDir(), 'logs');
         if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
 
-        const logFile = path.join(logsDir, `${safeName}-agent.log`);
+        const logFile = path.join(logsDir, `${safeName}.log`);
         fs.appendFileSync(logFile, JSON.stringify(entry) + '\n', 'utf8');
-        json(res, { success: true, file: `${safeName}-agent.log` });
+        json(res, { success: true, file: `${safeName}.log` });
       } catch (e) {
         json(res, { success: false, error: e.message }, 500);
       }

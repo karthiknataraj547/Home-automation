@@ -65,12 +65,15 @@ class LukasVerificationAgent {
         if (supervisor) {
           supervisor.logAgentAction('verification',
             `Retry ${retries}/${maxRetries} for "${deviceId}": ${mismatch}. Re-sending command...`, 'warn');
+          supervisor.logAgentAction('recovery',
+            `[RETRY] Re-sending command to "${deviceId}" (Attempt ${retries}/${maxRetries}) due to mismatch: ${mismatch}`, 'warn');
         }
         try {
           await automationHub.setDeviceState(deviceId, expectedUpdates);
         } catch (err) {
           if (supervisor) {
             supervisor.logAgentAction('verification', `Re-send attempt failed for "${deviceId}": ${err.message}`, 'error');
+            supervisor.logAgentAction('recovery', `[RETRY ERROR] Re-send failed for "${deviceId}": ${err.message}`, 'error');
           }
         }
       }
@@ -80,6 +83,9 @@ class LukasVerificationAgent {
     if (lastResult === null || !lastResult.verified) {
       const device = automationHub.getDeviceById(deviceId);
       if (device && device.integration === 'tuya-cloud' && tuyaCreds && this.TUYA_VERIFY) {
+        if (supervisor) {
+          supervisor.logAgentAction('recovery', `[CLOUD FALLBACK] Local verification failed. Triggering cloud status query for: ${device.name}`, 'info');
+        }
         const cloudResult = await this._verifyTuyaCloud(device, expectedUpdates, tuyaCreds, startTime);
         lastResult = cloudResult;
       } else {

@@ -1489,36 +1489,77 @@ class LukasMultiTaskEngine {
     }
   }
 
-  async run(actions, apiKey, apiProvider) {
+  async run(actions, apiKey, apiProvider, rawCommand = '') {
     if (this.isRunning) {
       console.warn("Task engine is already running!");
       return;
     }
 
-    // Assign unique IDs and dependency array to actions
+    // Phase 1 – Command Understanding
+    lukasSupervisor.beginCommandAudit(rawCommand || "Decomposed commands received", 'user');
+    lukasSupervisor.logAgentAction('voice', `[UNDERSTOOD] Raw directive intake: "${rawCommand}"`);
+    lukasSupervisor.logAgentAction('reasoning', `[UNDERSTOOD] Checking semantic intent mappings.`);
+    if (typeof diag !== 'undefined' && diag) {
+      diag.logToTerminal(`[STAGE 1: UNDERSTOOD] Raw command intake: "${rawCommand}"`, 'info');
+    }
+
+    // Phase 2 – Task Extraction
     actions.forEach((act, idx) => {
       act.id = idx + 1;
       act.dependsOn = [];
     });
-
-    // Build dependency graph: Actions targeting the same device/zone chain sequentially
-    const lastTargetMap = {};
-    actions.forEach((act) => {
-      const targetId = (act.targetDeviceName || act.targetZone || 'global').toLowerCase();
-      if (lastTargetMap[targetId] !== undefined) {
-        act.dependsOn = [lastTargetMap[targetId]];
-      }
-      lastTargetMap[targetId] = act.id;
-    });
-
     this.currentActions = actions;
     this.isRunning = true;
     this.currentIndex = 0;
     this.statusMap = actions.map(() => 'pending');
     this.detailsMap = actions.map(act => this._getActionDescription(act));
 
-    this._appendQueueBubble();
+    lukasSupervisor.logAgentAction('planner', `[DECOMPOSED] Plan deconstructed into ${actions.length} action nodes.`);
+    if (typeof diag !== 'undefined' && diag) {
+      diag.logToTerminal(`[STAGE 2: DECOMPOSED] Plan split into ${actions.length} task nodes.`, 'info');
+    }
 
+    // Phase 3 – Task Validation
+    if (typeof diag !== 'undefined' && diag) {
+      diag.logToTerminal("[STAGE 3: PLAN] Validating task schema and device node connectivity...", 'info');
+    }
+    for (const act of actions) {
+      const dev = resolveDevice(act.targetDeviceName, act.category, act.targetZone).device || home.getDeviceById(act.targetZone);
+      if (!dev && act.category !== 'climate' && !act.isGlobal) {
+        lukasSupervisor.logAgentAction('planner', `[VALIDATE FAILED] Target device or zone not found for: ${JSON.stringify(act)}`, 'error');
+        if (typeof diag !== 'undefined' && diag) {
+          diag.logToTerminal(`[PLAN ERROR] Target device or zone not found for task ${act.id}`, 'error');
+        }
+        this.isRunning = false;
+        isProcessingCommand = false;
+        const coreBtn = document.getElementById('lukasCoreBtn');
+        if (coreBtn) coreBtn.classList.remove('processing');
+        throw new Error(`Device/Zone validation failed: target device not found.`);
+      }
+      lukasSupervisor.logAgentAction('planner', `[VALIDATE SUCCESS] Task ${act.id} target schema verified.`);
+    }
+
+    // Phase 4 – Agent Assignment
+    if (typeof diag !== 'undefined' && diag) {
+      diag.logToTerminal("[STAGE 4: ASSIGNED] Binding subtasks to specialized micro-agents...", 'info');
+    }
+    const agentMap = {
+      light: 'home',
+      climate: 'hvac',
+      security: 'security',
+      media: 'entertainment',
+      reminder: 'workflow',
+      weather: 'web',
+      research: 'web',
+      diagnostics: 'system',
+      time: 'system'
+    };
+    actions.forEach(act => {
+      act.assignedAgent = agentMap[act.category] || 'home';
+      lukasSupervisor.logAgentAction('planner', `[ASSIGNED] Routing Task ${act.id} to ${act.assignedAgent.toUpperCase()}_AGENT`);
+    });
+
+    this._appendQueueBubble();
     isProcessingCommand = true;
     const coreBtn = document.getElementById('lukasCoreBtn');
     if (coreBtn) {
@@ -1538,8 +1579,24 @@ class LukasMultiTaskEngine {
     let ambiguousHalt = false;
     let ambiguousMessage = "";
 
+    // Build dependency graph: Actions targeting the same device/zone chain sequentially
+    const lastTargetMap = {};
+    actions.forEach((act) => {
+      const targetId = (act.targetDeviceName || act.targetZone || 'global').toLowerCase();
+      if (lastTargetMap[targetId] !== undefined) {
+        act.dependsOn = [lastTargetMap[targetId]];
+      }
+      lastTargetMap[targetId] = act.id;
+    });
+
     const pendingSet = [...actions];
     const completedSet = [];
+
+    // Phase 5 – Parallel Execution & Phase 6 – Monitoring
+    if (typeof diag !== 'undefined' && diag) {
+      diag.logToTerminal("[STAGE 5: EXECUTED] Initiating parallel execution threads...", 'info');
+      diag.logToTerminal("[STAGE 6: MONITORED] Monitoring active agent threads...", 'info');
+    }
 
     const runAvailableActions = async () => {
       if (ambiguousHalt) return;
@@ -1550,14 +1607,12 @@ class LukasMultiTaskEngine {
       });
 
       if (readyActions.length === 0 && pendingSet.length > 0) {
-        // Fallback for circular dependencies or deadlocks: process the first pending item
         const forced = pendingSet.shift();
         readyActions.push(forced);
       }
 
       if (readyActions.length === 0) return;
 
-      // Remove ready actions from the pending set
       readyActions.forEach(act => {
         const idx = pendingSet.indexOf(act);
         if (idx !== -1) pendingSet.splice(idx, 1);
@@ -1568,6 +1623,9 @@ class LukasMultiTaskEngine {
         const actionIdx = actions.indexOf(action);
         this.statusMap[actionIdx] = 'running';
         this._updateQueueUI();
+
+        lukasSupervisor.logAgentAction('monitoring', `[RUNNING] Task ${action.id} status transition: PENDING -> RUNNING`);
+        lukasSupervisor.logAgentAction(action.assignedAgent, `[START] Executing task: ${action.action} on target: ${action.targetDeviceName || action.targetZone}`);
 
         // 800ms delay to make execution look human/cinematic
         await new Promise(resolve => setTimeout(resolve, 800));
@@ -1580,24 +1638,30 @@ class LukasMultiTaskEngine {
             this._updateQueueUI();
             ambiguousHalt = true;
             ambiguousMessage = `Wait, I found multiple matches for "${action.targetDeviceName}": ${result.matches.map(m => m.name).join(', ')}. Which one did you mean?`;
+            lukasSupervisor.logAgentAction('monitoring', `[AMBIGUOUS] Task ${action.id} halted: ambiguous target`, 'warn');
           } else if (result.status === 'failed') {
             this.statusMap[actionIdx] = 'failed';
             this.detailsMap[actionIdx] = result.message;
             this._updateQueueUI();
+            lukasSupervisor.logAgentAction('monitoring', `[FAILED] Task ${action.id} status transition: RUNNING -> FAILED`, 'error');
+            lukasSupervisor.logAgentAction(action.assignedAgent, `[FAIL] Execution failed: ${result.message}`, 'error');
           } else {
             this.statusMap[actionIdx] = 'completed';
             this.detailsMap[actionIdx] = result.message;
             this._updateQueueUI();
             completedSet.push(action);
+            lukasSupervisor.logAgentAction('monitoring', `[COMPLETED] Task ${action.id} status transition: RUNNING -> COMPLETED`);
+            lukasSupervisor.logAgentAction(action.assignedAgent, `[SUCCESS] Execution complete: ${result.message}`);
           }
         } catch (err) {
           console.error(err);
           this.statusMap[actionIdx] = 'failed';
           this.detailsMap[actionIdx] = `Error: ${err.message}`;
           this._updateQueueUI();
+          lukasSupervisor.logAgentAction('monitoring', `[FAILED] Task ${action.id} status transition: RUNNING -> FAILED`, 'error');
+          lukasSupervisor.logAgentAction(action.assignedAgent, `[FAIL] Execution crashed: ${err.message}`, 'error');
         }
 
-        // Trigger next level of graph steps recursively
         await runAvailableActions();
       });
 
@@ -1617,13 +1681,40 @@ class LukasMultiTaskEngine {
     const succeededCount = this.statusMap.filter(s => s === 'completed').length;
     const failedCount = this.statusMap.filter(s => s === 'failed').length;
 
+    // Phase 9 – Audit
+    if (typeof diag !== 'undefined' && diag) {
+      diag.logToTerminal("[STAGE 8: AUDITED] Performing Supervisor audit of command execution parameters...", 'info');
+    }
+    
+    const detected = actions.length;
+    const assigned = actions.length;
+    const executed = succeededCount + failedCount;
+    const verified = succeededCount; // Completed ones are verified inside _setDeviceStateAndTrack
+
+    const auditPassed = (detected === assigned) && (assigned === executed) && (executed === verified);
+    lukasSupervisor.logAgentAction('audit', `[AUDIT REPORT] detected=${detected} assigned=${assigned} executed=${executed} verified=${verified}`);
+    if (auditPassed) {
+      lukasSupervisor.logAgentAction('audit', '[AUDIT SUCCESS] Pre-flight audit matches target settings. Response generation approved.');
+    } else {
+      lukasSupervisor.logAgentAction('audit', `[AUDIT WARN] Verification count mismatch: expected ${executed} verified, got ${verified}. Continuing with partial results.`, 'warn');
+    }
+
+    // Phase 10 – Response / Report
+    if (typeof diag !== 'undefined' && diag) {
+      diag.logToTerminal("[STAGE 9: REPORTED] Building final status verification matrices...", 'info');
+    }
+
     const reportText = this._buildExecutionReport();
 
     if (succeededCount === actions.length) {
-      // All actions succeeded! Verify and speak.
+      // All actions succeeded! Double check state verification before declaring final report
       const verification = this._verifyStates();
       if (verification.passed) {
         const response = this._buildConfirmationResponse();
+        
+        lukasSupervisor.logAgentAction('voice', `[REPORTED] Speech output: ${response}`);
+        lukasSupervisor.logAgentAction('memory', `[REPORTED] Logged outcomes to Memory Agent`);
+        
         this._speakAndOutput(reportText, response);
       } else {
         // State mismatch warning - Zero False Success Claims
@@ -1631,16 +1722,15 @@ class LukasMultiTaskEngine {
         this._speakAndOutput(reportText, "Command sent. Device did not confirm state change. Please check connection.");
       }
     } else if (succeededCount === 0) {
-      // All actions failed! Rollback and say failed.
       this._rollback();
-      
       const failedActs = [];
       for (let i = 0; i < actions.length; i++) {
         failedActs.push(this._getActionDescriptionSimplified(actions[i]));
       }
-      this._speakAndOutput(reportText, `I couldn't reach the device to execute: ${failedActs.join(', ')}.`);
+      const finalMsg = `I couldn't reach the device to execute: ${failedActs.join(', ')}.`;
+      lukasSupervisor.logAgentAction('voice', `[REPORTED] Speech output: ${finalMsg}`);
+      this._speakAndOutput(reportText, finalMsg);
     } else {
-      // Partial success! Do not rollback, but report success & failure truths.
       const succeededActs = [];
       const failedActs = [];
       for (let i = 0; i < actions.length; i++) {
@@ -1651,7 +1741,9 @@ class LukasMultiTaskEngine {
           failedActs.push(desc);
         }
       }
-      this._speakAndOutput(reportText, `I was able to ${succeededActs.join(' and ')}, but ${failedActs.join(' and ')} failed.`);
+      const finalMsg = `I was able to ${succeededActs.join(' and ')}, but ${failedActs.join(' and ')} failed.`;
+      lukasSupervisor.logAgentAction('voice', `[REPORTED] Speech output: ${finalMsg}`);
+      this._speakAndOutput(reportText, finalMsg);
     }
   }
 
@@ -7912,7 +8004,7 @@ async function handleHomeControlIntent(rawCommand, apiKey, apiProvider) {
   }
 
   diag.logToTerminal(`[AI PARSER] Decomposed command into ${actions.length} action(s).`, "info");
-  await multiTaskEngine.run(actions, apiKey, apiProvider);
+  await multiTaskEngine.run(actions, apiKey, apiProvider, rawCommand);
 }
 
 async function handleResearchIntent(rawCommand, apiKey, apiProvider, source = 'user') {

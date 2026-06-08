@@ -102,6 +102,13 @@ class LukasTaskRunner {
         if (this.onProgress) this.onProgress(percent, `Executing: ${step.title}`);
         if (this.onStepStarted) this.onStepStarted(stepIdx, step);
 
+        const supervisor = typeof window !== 'undefined' ? window.lukasSupervisor : null;
+        if (supervisor) {
+          supervisor.logAgentAction('monitoring', `[RUNNING] Plan Step ${step.id} status transition: PENDING -> RUNNING`);
+          const agentName = step.type === 'research' ? 'web' : step.type === 'test' ? 'verification' : 'planner';
+          supervisor.logAgentAction(agentName, `[START] Executing plan step: ${step.title} (${step.description})`);
+        }
+
         let attempt = 0;
         const maxRetries = 3;
         let result = null;
@@ -124,6 +131,9 @@ class LukasTaskRunner {
           } catch (e) {
             lastError = e;
             console.warn(`[GRAPH ENGINE] Attempt ${attempt} failed for "${step.title}":`, e.message);
+            if (supervisor) {
+              supervisor.logAgentAction('recovery', `[RETRY] Step ${step.id} (Attempt ${attempt}/${maxRetries}) failed: ${e.message}`, 'warn');
+            }
             await new Promise(r => setTimeout(r, 1000));
           }
         }
@@ -138,9 +148,18 @@ class LukasTaskRunner {
           this.completedTasks.push(step);
 
           if (this.onStepCompleted) this.onStepCompleted(stepIdx, stepResult);
+
+          if (supervisor) {
+            supervisor.logAgentAction('monitoring', `[COMPLETED] Plan Step ${step.id} status transition: RUNNING -> COMPLETED`);
+            const agentName = step.type === 'research' ? 'web' : step.type === 'test' ? 'verification' : 'planner';
+            supervisor.logAgentAction(agentName, `[SUCCESS] Plan step completed and verified: ${step.title}`);
+          }
         } else {
           if (typeof window !== 'undefined' && window.__lukasDiag) {
             window.__lukasDiag.logToTerminal(`[RECOVERY AGENT] Attempting failure recovery for: "${step.title}"...`, 'warn');
+          }
+          if (supervisor) {
+            supervisor.logAgentAction('recovery', `[TRIGGER] Attempting recovery strategies for failed step: ${step.title}`, 'warn');
           }
           const recoverySuccessful = await this._attemptFailureRecovery(step, lastError, context);
           if (recoverySuccessful) {
@@ -150,12 +169,22 @@ class LukasTaskRunner {
             this._results.push(stepResult);
             this.completedTasks.push(step);
             if (this.onStepCompleted) this.onStepCompleted(stepIdx, stepResult);
+
+            if (supervisor) {
+              supervisor.logAgentAction('monitoring', `[COMPLETED] Plan Step ${step.id} status transition: RUNNING -> COMPLETED (via recovery)`);
+              supervisor.logAgentAction('recovery', `[RECOVERY SUCCESS] Step ${step.id} recovered successfully via fallback.`, 'info');
+            }
           } else {
             step.status = 'failed';
             const stepResult = { id: step.id, title: step.title, status: 'failed', error: lastError?.message || 'Unknown error' };
             this._results.push(stepResult);
             this.failedTasks.push(step);
             if (this.onStepFailed) this.onStepFailed(stepIdx, stepResult);
+
+            if (supervisor) {
+              supervisor.logAgentAction('monitoring', `[FAILED] Plan Step ${step.id} status transition: RUNNING -> FAILED`, 'error');
+              supervisor.logAgentAction('recovery', `[RECOVERY FAILED] Recovery options exhausted for step ${step.id}: ${lastError?.message || 'Unknown error'}`, 'error');
+            }
           }
         }
 
@@ -180,6 +209,11 @@ class LukasTaskRunner {
   }
 
   async _verifyStepOutcome(step, result) {
+    const supervisor = typeof window !== 'undefined' ? window.lukasSupervisor : null;
+    if (supervisor) {
+      supervisor.logAgentAction('verification', `[VERIFY] Initiating state readback check for step: ${step.title}`);
+    }
+
     if (typeof home === 'undefined' || !home.dynamicDevices) return true;
     const desc = (step.description || '').toLowerCase();
     const title = (step.title || '').toLowerCase();
@@ -195,10 +229,25 @@ class LukasTaskRunner {
       const expectsLocked = desc.includes('lock');
       const expectsUnlocked = desc.includes('unlock');
 
-      if (expectsOn && !dev.on) return false;
-      if (expectsOff && dev.on) return false;
-      if (expectsLocked && dev.category === 'security' && !dev.locked) return false;
-      if (expectsUnlocked && dev.category === 'security' && dev.locked) return false;
+      if (expectsOn && !dev.on) {
+        if (supervisor) supervisor.logAgentAction('verification', `[VERIFY FAILED] "${dev.name}" expected ON, actual OFF`, 'error');
+        return false;
+      }
+      if (expectsOff && dev.on) {
+        if (supervisor) supervisor.logAgentAction('verification', `[VERIFY FAILED] "${dev.name}" expected OFF, actual ON`, 'error');
+        return false;
+      }
+      if (expectsLocked && dev.category === 'security' && !dev.locked) {
+        if (supervisor) supervisor.logAgentAction('verification', `[VERIFY FAILED] "${dev.name}" expected LOCKED, actual UNLOCKED`, 'error');
+        return false;
+      }
+      if (expectsUnlocked && dev.category === 'security' && dev.locked) {
+        if (supervisor) supervisor.logAgentAction('verification', `[VERIFY FAILED] "${dev.name}" expected UNLOCKED, actual LOCKED`, 'error');
+        return false;
+      }
+      if (supervisor) {
+        supervisor.logAgentAction('verification', `[VERIFY SUCCESS] "${dev.name}" state matches expected values.`);
+      }
     }
     return true;
   }
