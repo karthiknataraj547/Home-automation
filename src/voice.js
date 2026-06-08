@@ -415,6 +415,9 @@ class LukasVoiceController {
     
     this.preferredVoice = null;
     this.dummyStream = null; // Keeps browser microphone hardware warm on mobile
+    this.elevenlabsApiKey = '';
+    this.elevenlabsVoiceId = 'm7GHBtY0UEqljrKQw2JH';
+    this.activeAudio = null;
     
     this.wakeWords = [
       'hey lukas', 'train lukas', 'tren lukas', 'turn lukas', 'then lukas', 
@@ -532,7 +535,7 @@ class LukasVoiceController {
     const cmd = fullTranscript.toLowerCase().trim();
 
     // ── INTERRUPTION CHECK ──
-    if (state === 'RESPONDING' || (this.synth && this.synth.speaking)) {
+    if (state === 'RESPONDING' || (this.synth && this.synth.speaking) || (this.activeAudio && !this.activeAudio.paused)) {
       const userSpeech = fullTranscript.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
       
       const stopWords = ['stop', 'cancel', 'shut up', 'quiet', 'stop talking', 'stop listening', 'stand down', 'go to sleep'];
@@ -787,6 +790,14 @@ class LukasVoiceController {
       this.speechWatchdogInterval = null;
     }
     this._hideSpeechProgressBar();
+    if (this.activeAudio) {
+      try {
+        this.activeAudio.pause();
+      } catch (e) {}
+      this.activeAudio.onended = null;
+      this.activeAudio.onerror = null;
+      this.activeAudio = null;
+    }
     if (this.activeUtterance) {
       this.activeUtterance.onstart = null;
       this.activeUtterance.onend = null;
@@ -816,7 +827,7 @@ class LukasVoiceController {
     if (container && bar) {
       bar.style.width = '100%';
       setTimeout(() => {
-        if (!this.synth.speaking && this.currentSegmentIndex >= this.speechQueue.length) {
+        if (!this.synth.speaking && !(this.activeAudio && !this.activeAudio.paused) && this.currentSegmentIndex >= this.speechQueue.length) {
           container.style.display = 'none';
           bar.style.width = '0%';
         }
@@ -839,13 +850,17 @@ class LukasVoiceController {
       const now = Date.now();
       
       // If we are actively playing a segment
-      if (this.synth.speaking) {
+      if (this.synth.speaking || (this.activeAudio && !this.activeAudio.paused)) {
         if (this.currentSegmentIndex !== this.lastSpeechSegmentIndex) {
           this.lastSpeechSegmentIndex = this.currentSegmentIndex;
           this.lastSpeechActivityTime = now;
         } else if (now - this.lastSpeechActivityTime > 12000) {
           // Stuck on the same segment for more than 12s
           console.warn("[Voice Watchdog] Speech segment stuck. Canceling and resuming next segment...");
+          if (this.activeAudio) {
+            try { this.activeAudio.pause(); } catch (e) {}
+            this.activeAudio = null;
+          }
           this.synth.cancel();
           this.lastSpeechActivityTime = now;
           this._processNextSpeechSegment();
@@ -1157,11 +1172,116 @@ class LukasVoiceController {
 
     // Apply phonetic substitution dictionary to spoken text, keeping cleanedText intact for tracking
     const spokenText = this._applyIndianPronunciations(cleanedText);
+
+    if (this.preferredAccent === 'elevenlabs_premium' && this.elevenlabsApiKey) {
+      this._speakElevenLabs(spokenText);
+    } else {
+      this._speakLocalTTS(spokenText);
+    }
+  }
+
+  async _speakElevenLabs(spokenText) {
+    let objectURL = null;
+    try {
+      const apiKey = this.elevenlabsApiKey;
+      const voiceId = this.elevenlabsVoiceId || 'm7GHBtY0UEqljrKQw2JH';
+      const emotion = this.currentSpeechEmotion || 'normal';
+      
+      // Determine dynamic speaking rate
+      let baseRate = 1.0;
+      if (this.speakingRateProfile === 'slow') {
+        baseRate = 0.82;
+      } else if (this.speakingRateProfile === 'fast') {
+        baseRate = 1.25;
+      } else {
+        baseRate = this.vocalRate || 1.0;
+      }
+      
+      let stability = 0.71;
+      let similarityBoost = 0.55;
+      
+      if (emotion === 'excited' || emotion === 'enthusiastic') {
+        stability = 0.5;
+        similarityBoost = 0.75;
+      } else if (emotion === 'calm' || emotion === 'empathy' || emotion === 'empathetic') {
+        stability = 0.8;
+        similarityBoost = 0.7;
+      } else if (emotion === 'confident' || emotion === 'professional') {
+        stability = 0.75;
+        similarityBoost = 0.75;
+      }
+      
+      const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
+        method: 'POST',
+        headers: {
+          'xi-api-key': apiKey,
+          'Content-Type': 'application/json',
+          'accept': 'audio/mpeg'
+        },
+        body: JSON.stringify({
+          text: spokenText,
+          model_id: 'eleven_multilingual_v2',
+          voice_settings: {
+            stability: stability,
+            similarity_boost: similarityBoost,
+            use_speaker_boost: true
+          }
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`ElevenLabs API error status: ${response.status}`);
+      }
+      
+      const blob = await response.blob();
+      objectURL = URL.createObjectURL(blob);
+      
+      // Guard against concurrent interruption / cancel during fetch
+      if (this.speechQueue.length === 0 || this.currentSegmentIndex === 0) {
+        URL.revokeObjectURL(objectURL);
+        return;
+      }
+      
+      const audio = new Audio(objectURL);
+      this.activeAudio = audio;
+      
+      audio.volume = this.vocalVolume;
+      audio.playbackRate = baseRate;
+      
+      audio.onended = () => {
+        if (objectURL) URL.revokeObjectURL(objectURL);
+        if (this.activeAudio === audio) this.activeAudio = null;
+        this._processNextSpeechSegment();
+      };
+      
+      audio.onerror = (e) => {
+        console.error("[ElevenLabs] Playback error:", e);
+        if (objectURL) URL.revokeObjectURL(objectURL);
+        if (this.activeAudio === audio) this.activeAudio = null;
+        // Fallback to local SpeechSynthesis
+        this._speakLocalTTS(spokenText);
+      };
+      
+      this.speakingText = spokenText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+      
+      if (this.recognitionManager) {
+        this.recognitionManager.transitionTo('RESPONDING');
+      }
+      
+      await audio.play();
+    } catch (err) {
+      console.warn("[ElevenLabs] Synthesis failed, falling back to local TTS:", err.message);
+      if (objectURL) URL.revokeObjectURL(objectURL);
+      this._speakLocalTTS(spokenText);
+    }
+  }
+
+  _speakLocalTTS(spokenText) {
     const utterance = new SpeechSynthesisUtterance(spokenText);
     this.activeUtterance = utterance;
 
     // Dynamic language detection
-    const detectedLang = this.detectLanguageOfText(cleanedText);
+    const detectedLang = this.detectLanguageOfText(spokenText);
     const speechLang = detectedLang || this.speechLang || 'en-IN';
     const activeVoice = this.getVoiceForLanguage(speechLang);
     if (activeVoice) {
@@ -1213,7 +1333,7 @@ class LukasVoiceController {
     utterance.rate = baseRate * rateMultiplier;
     utterance.volume = this.vocalVolume;
 
-    this.speakingText = cleanedText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
+    this.speakingText = spokenText.toLowerCase().trim().replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"");
 
     if (this.recognitionManager) {
       this.recognitionManager.transitionTo('RESPONDING');

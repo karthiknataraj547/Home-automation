@@ -30,6 +30,8 @@ function buildSystemPrompt(memory, homeContext = '', intent = 'conversation', is
     accentGuide = `\n[ACCENT INSTRUCTION: KANNADA NATIVE]\nSpeak completely in native Kannada (ಕನ್ನಡ). Use correct vowel lengths, natural stress patterns, and professional Kannada sentence structures. Avoid direct literal translations from English.`;
   } else if (voiceAccent === 'indian_english') {
     accentGuide = `\n[ACCENT INSTRUCTION: INDIAN ENGLISH]\nSpeak in natural Indian English, utilizing familiar cadence, flow, and proper pronunciation of Indian nouns. Avoid foreign speech patterns.`;
+  } else if (voiceAccent === 'elevenlabs_premium') {
+    accentGuide = `\n[ACCENT INSTRUCTION: PREMIUM VOICE]\nSpeak in a highly natural, clear, warm, and engaging human-like tone, maintaining a highly conversational flow.`;
   }
 
   const responseStyle = prefs.responseStyle || 'balanced';

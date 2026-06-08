@@ -648,6 +648,8 @@ function applyUserPreferencesToVoiceAndUI(username) {
   
   const geminiKey = lukasMemory.getPreference('gemini_api_key', '');
   const openaiKey = lukasMemory.getPreference('openai_api_key', '');
+  const elevenlabsKey = lukasMemory.getPreference('elevenlabs_api_key', '');
+  const elevenlabsVoiceId = lukasMemory.getPreference('elevenlabs_voice_id', 'm7GHBtY0UEqljrKQw2JH');
 
   // Apply to voice controller
   voice.isMuted = isMuted;
@@ -656,6 +658,8 @@ function applyUserPreferencesToVoiceAndUI(username) {
   voice.preferredAccent = accent;
   voice.speakingRateProfile = speedProfile;
   voice.emotionalToneMode = tone;
+  voice.elevenlabsApiKey = elevenlabsKey;
+  voice.elevenlabsVoiceId = elevenlabsVoiceId || 'm7GHBtY0UEqljrKQw2JH';
   if (voice.setLanguage) voice.setLanguage(speechLang);
   voice.setAccent(accent);
   voice.setSpeakingRateProfile(speedProfile);
@@ -733,6 +737,16 @@ function applyUserPreferencesToVoiceAndUI(username) {
   if (openaiInput) {
     openaiInput.value = openaiKey;
   }
+
+  const elevenlabsApiKeyInput = document.getElementById('elevenlabsApiKeyInput');
+  if (elevenlabsApiKeyInput) {
+    elevenlabsApiKeyInput.value = elevenlabsKey;
+  }
+
+  const elevenlabsVoiceIdInput = document.getElementById('elevenlabsVoiceIdInput');
+  if (elevenlabsVoiceIdInput) {
+    elevenlabsVoiceIdInput.value = elevenlabsVoiceId;
+  }
   
   // Reload reminders
   loadUserReminders();
@@ -766,6 +780,7 @@ function applyUserPreferencesToVoiceAndUI(username) {
   const rawAccent = lukasMemory.getPreference('voiceAccent', 'indian_english');
   const accentLabels = {
     indian_english: 'Indian English',
+    elevenlabs_premium: 'ElevenLabs Premium',
     bengaluru_professional: 'Bengaluru Professional',
     neutral_corporate: 'Neutral Corporate India',
     kannada_native: 'Kannada Native',
@@ -4287,6 +4302,39 @@ function bindUIEvents() {
       openaiSaveBtn.innerHTML = '<i class="fa-solid fa-check"></i> SAVED';
       setTimeout(() => {
         openaiSaveBtn.innerHTML = origText;
+      }, 1500);
+    });
+  }
+
+  // ── ElevenLabs API Key & Voice ID ───────────────────────────────────
+  const elevenlabsKeyInput = document.getElementById('elevenlabsApiKeyInput');
+  const elevenlabsKeySaveBtn = document.getElementById('saveElevenlabsApiKeyBtn');
+  if (elevenlabsKeySaveBtn && elevenlabsKeyInput) {
+    elevenlabsKeySaveBtn.addEventListener('click', () => {
+      const keyVal = elevenlabsKeyInput.value.trim();
+      lukasMemory.setPreference('elevenlabs_api_key', keyVal);
+      voice.elevenlabsApiKey = keyVal;
+      diag.logToTerminal(`[SETTINGS] ElevenLabs API Key updated.`, 'info');
+      const origText = elevenlabsKeySaveBtn.innerHTML;
+      elevenlabsKeySaveBtn.innerHTML = '<i class="fa-solid fa-check"></i> SAVED';
+      setTimeout(() => {
+        elevenlabsKeySaveBtn.innerHTML = origText;
+      }, 1500);
+    });
+  }
+
+  const elevenlabsVoiceIdInputForSave = document.getElementById('elevenlabsVoiceIdInput');
+  const elevenlabsVoiceIdSaveBtn = document.getElementById('saveElevenlabsVoiceIdBtn');
+  if (elevenlabsVoiceIdSaveBtn && elevenlabsVoiceIdInputForSave) {
+    elevenlabsVoiceIdSaveBtn.addEventListener('click', () => {
+      const idVal = elevenlabsVoiceIdInputForSave.value.trim() || 'm7GHBtY0UEqljrKQw2JH';
+      lukasMemory.setPreference('elevenlabs_voice_id', idVal);
+      voice.elevenlabsVoiceId = idVal;
+      diag.logToTerminal(`[SETTINGS] ElevenLabs Voice ID updated: ${idVal}`, 'info');
+      const origText = elevenlabsVoiceIdSaveBtn.innerHTML;
+      elevenlabsVoiceIdSaveBtn.innerHTML = '<i class="fa-solid fa-check"></i> SAVED';
+      setTimeout(() => {
+        elevenlabsVoiceIdSaveBtn.innerHTML = origText;
       }, 1500);
     });
   }

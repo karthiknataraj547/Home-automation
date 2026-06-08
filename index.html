@@ -841,6 +841,7 @@
                 <label for="voiceAccentSelect" style="font-size:0.58rem; color:#64748b; margin-bottom:0.25rem; display:block;">English Accent Profile</label>
                 <select id="voiceAccentSelect" class="node-select-custom" style="width:100%; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08); color:#fff; border-radius:4px; padding:0.3rem 0.5rem; font-size:0.65rem; height:28px; font-family:var(--font-sans);">
                   <option value="indian_english">Indian English (Default)</option>
+                  <option value="elevenlabs_premium">ElevenLabs Premium (Custom)</option>
                   <option value="bengaluru_professional">Bengaluru Professional</option>
                   <option value="neutral_corporate">Neutral Corporate India</option>
                   <option value="kannada_native">Kannada Native (Conversational)</option>
@@ -890,6 +891,26 @@
                 </div>
                 <div style="font-size:0.52rem; color:#64748b; margin-top:0.15rem; line-height:1.2;">
                   Optional. Enables premium GPT-4o-mini command intent parsing and conversational response.
+                </div>
+              </div>
+              <div class="form-group" style="margin-bottom:0; margin-top:0.4rem;">
+                <label for="elevenlabsApiKeyInput" style="font-size:0.58rem; color:#64748b; margin-bottom:0.25rem; display:block;">ElevenLabs API Key (Premium Voice synthesis)</label>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                  <input type="password" id="elevenlabsApiKeyInput" placeholder="Paste your ElevenLabs API Key here..." class="node-input-custom" style="flex:1; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08); color:#fff; border-radius:4px; padding:0.3rem 0.5rem; font-size:0.65rem; height:28px; font-family:var(--font-sans);" />
+                  <button id="saveElevenlabsApiKeyBtn" class="btn-routine" style="padding:0 0.5rem; font-size:0.55rem; background:rgba(0,240,255,0.08); border-color:var(--cyan-neon); color:var(--cyan-neon); font-weight:bold; cursor:pointer; height:28px; display:flex; align-items:center; justify-content:center;">SAVE</button>
+                </div>
+                <div style="font-size:0.52rem; color:#64748b; margin-top:0.15rem; line-height:1.2;">
+                  Optional. Enables premium synthetic human voice engine.
+                </div>
+              </div>
+              <div class="form-group" style="margin-bottom:0; margin-top:0.4rem;">
+                <label for="elevenlabsVoiceIdInput" style="font-size:0.58rem; color:#64748b; margin-bottom:0.25rem; display:block;">ElevenLabs Voice ID</label>
+                <div style="display:flex; gap:0.5rem; align-items:center;">
+                  <input type="text" id="elevenlabsVoiceIdInput" placeholder="m7GHBtY0UEqljrKQw2JH" class="node-input-custom" style="flex:1; background:rgba(0,0,0,0.5); border:1px solid rgba(255,255,255,0.08); color:#fff; border-radius:4px; padding:0.3rem 0.5rem; font-size:0.65rem; height:28px; font-family:var(--font-sans);" />
+                  <button id="saveElevenlabsVoiceIdBtn" class="btn-routine" style="padding:0 0.5rem; font-size:0.55rem; background:rgba(0,240,255,0.08); border-color:var(--cyan-neon); color:var(--cyan-neon); font-weight:bold; cursor:pointer; height:28px; display:flex; align-items:center; justify-content:center;">SAVE</button>
+                </div>
+                <div style="font-size:0.52rem; color:#64748b; margin-top:0.15rem; line-height:1.2;">
+                  Voice ID to use for synthesis. Default: m7GHBtY0UEqljrKQw2JH.
                 </div>
               </div>
             </div>
