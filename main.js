@@ -7665,8 +7665,28 @@ Output strictly the raw JSON array (e.g. [{"category": "light", ...}]) without a
     if (!result) return [];
     
     let cleaned = result.trim();
+    
+    // Robust JSON array/object extraction
+    const arrayStart = cleaned.indexOf('[');
+    const arrayEnd = cleaned.lastIndexOf(']');
+    if (arrayStart !== -1 && arrayEnd !== -1 && arrayEnd > arrayStart) {
+      try {
+        const parsed = JSON.parse(cleaned.slice(arrayStart, arrayEnd + 1));
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {}
+    }
+    
+    const objStart = cleaned.indexOf('{');
+    const objEnd = cleaned.lastIndexOf('}');
+    if (objStart !== -1 && objEnd !== -1 && objEnd > objStart) {
+      try {
+        const parsed = JSON.parse(cleaned.slice(objStart, objEnd + 1));
+        return [parsed];
+      } catch (e) {}
+    }
+
     if (cleaned.startsWith('```')) {
-      cleaned = cleaned.replace(/^```json\s*/, '').replace(/```$/, '').trim();
+      cleaned = cleaned.replace(/^```json\s*/i, '').replace(/```$/, '').trim();
     }
     
     const parsed = JSON.parse(cleaned);
@@ -7677,12 +7697,189 @@ Output strictly the raw JSON array (e.g. [{"category": "light", ...}]) without a
   }
 }
 
+function parseMultiHomeCommandLocally(rawCommand) {
+  const actions = [];
+  const parts = rawCommand.split(/\band\s+then\b|\bthen\b|\band\b|,/i);
+  
+  const colorMap = {
+    'red': '#ff0000', 'green': '#10b981', 'blue': '#3b82f6', 'purple': '#a855f7',
+    'cyan': '#00f0ff', 'orange': '#ff9f3b', 'white': '#ffffff', 'yellow': '#eab308',
+    'pink': '#ec4899', 'magenta': '#d946ef', 'lime': '#84cc16', 'teal': '#14b8a6',
+    'gold': '#f59e0b', 'crimson': '#e11d48'
+  };
+  
+  for (let part of parts) {
+    part = part.toLowerCase().trim();
+    if (!part) continue;
+    
+    const act = {
+      category: "unknown",
+      action: null,
+      targetZone: null,
+      targetDeviceName: null,
+      isGlobal: false,
+      value: null,
+      timeExpression: null,
+      reminderText: null
+    };
+    
+    // 1. CLIMATE
+    if (part.includes('temp') || part.includes('temperature') || part.includes('thermostat') || part.includes('climate') || part.includes('ac ') || part === 'ac' || part.includes('hvac')) {
+      act.category = 'climate';
+      const tempMatch = part.match(/\d+/);
+      if (tempMatch) {
+        act.action = 'set';
+        act.value = tempMatch[0];
+      } else if (part.includes('cool')) {
+        act.action = 'mode';
+        act.value = 'cool';
+      } else if (part.includes('heat') || part.includes('warm')) {
+        act.action = 'mode';
+        act.value = 'heat';
+      } else if (part.includes('eco') || part.includes('save')) {
+        act.action = 'mode';
+        act.value = 'eco';
+      }
+    }
+    // 2. LIGHTS
+    else if (part.includes('light') || part.includes('lamp') || part.includes('bulb') || part.includes('led') || part.includes('brightness') || part.includes('dim') || part.includes('color') || part.includes('colour') || Object.keys(colorMap).some(c => part.includes(c)) ||
+             ((part.includes('living') || part.includes('bedroom') || part.includes('kitchen')) && (part.includes('on') || part.includes('off') || part.includes('toggle') || part.includes('switch'))) ||
+             ((part.includes('all') || part.includes('every') || part.includes('entire') || part.includes('house')) && (part.includes('on') || part.includes('off') || part.includes('toggle') || part.includes('switch') || part.includes('light')))) {
+      act.category = 'light';
+      
+      if (part.includes('living') || part.includes('salon')) {
+        act.targetZone = 'Living Room';
+      } else if (part.includes('bedroom') || part.includes('sleep')) {
+        act.targetZone = 'Bedroom';
+      } else if (part.includes('kitchen') || part.includes('cook')) {
+        act.targetZone = 'Kitchen';
+      } else if (part.includes('all') || part.includes('every') || part.includes('entire') || part.includes('house')) {
+        act.isGlobal = true;
+        act.targetZone = 'All';
+      }
+      
+      if (part.includes('on') || part.includes('activate') || part.includes('enable')) {
+        act.action = 'on';
+      } else if (part.includes('off') || part.includes('deactivate') || part.includes('disable')) {
+        act.action = 'off';
+      } else if (part.includes('brightness') || part.includes('dim') || part.includes('percent') || part.includes('%')) {
+        act.action = 'brightness';
+        const brMatch = part.match(/\d+/);
+        act.value = brMatch ? brMatch[0] : '50';
+      } else {
+        let foundColor = null;
+        for (const c of Object.keys(colorMap)) {
+          if (part.includes(c)) {
+            foundColor = c;
+            break;
+          }
+        }
+        if (foundColor) {
+          act.action = 'color';
+          act.value = foundColor;
+        } else if (part.includes('toggle') || part.includes('switch')) {
+          act.action = 'toggle';
+        }
+      }
+      
+      // Fallback
+      if (!act.action) {
+        let foundColor = null;
+        for (const c of Object.keys(colorMap)) {
+          if (part.includes(c)) {
+            foundColor = c;
+            break;
+          }
+        }
+        if (foundColor) {
+          act.action = 'color';
+          act.value = foundColor;
+        } else if (part.includes('on') || part.includes('turn')) {
+          act.action = 'on';
+        }
+      }
+    }
+    // 3. SECURITY
+    else if (part.includes('lock') || part.includes('door') || part.includes('gate') || part.includes('entrance') || part.includes('perimeter')) {
+      act.category = 'security';
+      if (part.includes('unlock') || part.includes('open') || part.includes('release')) {
+        act.action = 'unlock';
+      } else {
+        act.action = 'lock';
+      }
+    }
+    // 4. ROUTINES
+    else if (part.includes('routine') || part.includes('mode') || part.includes('sequence')) {
+      act.category = 'routine';
+      if (part.includes('morning')) {
+        act.action = 'morning';
+        act.value = 'morning';
+      } else if (part.includes('cinema') || part.includes('movie')) {
+        act.action = 'cinema';
+        act.value = 'cinema';
+      } else if (part.includes('eco') || part.includes('green')) {
+        act.action = 'eco';
+        act.value = 'eco';
+      } else if (part.includes('lockdown') || part.includes('emergency')) {
+        act.action = 'lockdown';
+        act.value = 'lockdown';
+      }
+    }
+    // 5. MEDIA
+    else if (part.includes('music') || part.includes('song') || part.includes('audio') || part.includes('play') || part.includes('pause') || part.includes('media') || part.includes('spotify') || part.includes('youtube')) {
+      act.category = 'media';
+      if (part.includes('pause') || part.includes('stop')) {
+        act.action = 'pause';
+      } else if (part.includes('next')) {
+        act.action = 'next';
+      } else if (part.includes('prev') || part.includes('back')) {
+        act.action = 'prev';
+      } else {
+        act.action = 'play';
+        let q = part.replace(/\b(play|song|music|spotify|youtube|audio|media)\b/gi, '').trim();
+        if (q) act.value = q;
+      }
+    }
+    // 6. CCTV
+    else if (part.includes('cctv') || part.includes('camera') || part.includes('surveillance') || part.includes('feed') || part.includes('video') || part.includes('cam')) {
+      act.category = 'cctv';
+      act.action = 'probe';
+    }
+    // 7. TIME
+    else if (part.includes('time') || part.includes('clock') || part.includes('hour')) {
+      act.category = 'time';
+      act.action = 'status';
+    }
+    // 8. DIAGNOSTICS
+    else if (part.includes('status') || part.includes('diagnostic') || part.includes('health') || part.includes('report') || part.includes('system')) {
+      act.category = 'diagnostics';
+      act.action = 'status';
+    }
+    
+    if (act.category !== 'unknown') {
+      actions.push(act);
+    }
+  }
+  
+  return actions;
+}
+
 async function handleHomeControlIntent(rawCommand, apiKey, apiProvider) {
   diag.logToTerminal("[AI PARSER] Extracting smart home directives...", "info");
-  const actions = await parseMultiHomeCommand(rawCommand, apiKey, apiProvider);
+  let actions = await parseMultiHomeCommand(rawCommand, apiKey, apiProvider);
   
-  if (!actions || actions.length === 0 || (actions.length === 1 && actions[0].category === 'unknown')) {
-    diag.logToTerminal("[AI PARSER] Structured parse returned unknown/empty. Falling back to local pattern matching.", "warn");
+  // Clean empty/unknown items
+  if (actions && actions.length > 0) {
+    actions = actions.filter(act => act && act.category && act.category !== 'unknown');
+  }
+  
+  if (!actions || actions.length === 0) {
+    diag.logToTerminal("[AI PARSER] Structured AI parse returned empty. Attempting local rule-based multi-parser...", "info");
+    actions = parseMultiHomeCommandLocally(rawCommand);
+  }
+  
+  if (!actions || actions.length === 0) {
+    diag.logToTerminal("[AI PARSER] Local multi-parser also returned empty. Falling back to single local pattern matching.", "warn");
     await executeLocalHomeControlFallback(rawCommand);
     return;
   }
