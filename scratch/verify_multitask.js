@@ -23,6 +23,17 @@ class MockElement {
     this.checked = false;
   }
 
+  get className() {
+    return Array.from(this.classList.classes).join(' ');
+  }
+
+  set className(val) {
+    this.classList.classes.clear();
+    val.split(/\s+/).forEach(c => {
+      if (c) this.classList.classes.add(c);
+    });
+  }
+
   addEventListener(event, callback) {
     if (!this.listeners[event]) this.listeners[event] = [];
     this.listeners[event].push(callback);
@@ -38,6 +49,24 @@ class MockElement {
       return new MockElement('', 'div');
     }
     return null;
+  }
+
+  querySelectorAll(selector) {
+    if (selector.startsWith('.')) {
+      const cls = selector.slice(1);
+      const results = [];
+      const traverse = (node) => {
+        if (node.classList && node.classList.contains && node.classList.contains(cls)) {
+          results.push(node);
+        }
+        if (node.children) {
+          node.children.forEach(traverse);
+        }
+      };
+      traverse(this);
+      return results;
+    }
+    return [];
   }
 }
 
@@ -118,9 +147,68 @@ global.voice = {
   }
 };
 
+const memoryStore = {};
 global.lukasMemory = {
   addMessage(role, text, category) {
     console.log(`[MEMORY addMessage] role=${role} category=${category} text="${text}"`);
+  },
+  getPreference(key, defaultValue) {
+    console.log(`[MEMORY getPreference] key=${key}`);
+    return memoryStore[key] !== undefined ? memoryStore[key] : defaultValue;
+  },
+  setPreference(key, value) {
+    console.log(`[MEMORY setPreference] key=${key} value=${value}`);
+    memoryStore[key] = value;
+  }
+};
+
+global.getSessionUser = () => {
+  return { username: 'TestUser' };
+};
+
+global.lukasReminders = [];
+global.addReminder = (text, fireAt) => {
+  console.log(`[Mock addReminder] text=${text} fireAt=${fireAt}`);
+  const rem = { text, fireAt: fireAt.toISOString(), fired: false, createdAt: new Date().toISOString() };
+  global.lukasReminders.push(rem);
+  
+  // Render to DOM
+  const reminderList = global.document.getElementById('reminderList');
+  if (reminderList) {
+    const item = global.document.createElement('div');
+    item.className = 'reminder-item';
+    const label = global.document.createElement('span');
+    label.className = 'ri-label';
+    label.textContent = text;
+    item.appendChild(label);
+    reminderList.appendChild(item);
+  }
+  
+  // Also update preference store to simulate IndexedDB persistence layer syncing
+  const list = JSON.parse(global.lukasMemory.getPreference('user_reminders', '[]'));
+  list.push(rem);
+  global.lukasMemory.setPreference('user_reminders', JSON.stringify(list));
+  
+  return rem;
+};
+
+global.parseReminderTime = (cmd) => {
+  const now = new Date();
+  if (cmd.includes('5 pm') || cmd.includes('17:00') || cmd.includes('at 5 pm')) {
+    const target = new Date(now);
+    target.setHours(17, 0, 0, 0);
+    if (target <= now) target.setDate(target.getDate() + 1);
+    return target;
+  }
+  return new Date(now.getTime() + 5 * 60000); // 5 mins
+};
+
+global.lukasScheduler = {
+  scheduled: [],
+  async scheduleCommand(obj) {
+    console.log(`[MockScheduler.scheduleCommand] scheduled: ${JSON.stringify(obj)}`);
+    this.scheduled.push(obj);
+    return 'sched-123456';
   }
 };
 
@@ -423,6 +511,67 @@ async function runTests() {
   } else {
     console.error(`[FAIL] Expected log file "recovery.log" was not created.`);
     process.exit(1);
+  }
+
+  // Test Case 4: Reminder action execution and verification
+  // Directive: "remind me to call John at 5 pm"
+  console.log("\n--- Executing Test Case 4: Execute reminder creation with multi-agent pipeline ---");
+  
+
+
+  // Clear mock scheduler and reminders list
+  lukasScheduler.scheduled = [];
+  global.lukasReminders = [];
+  
+  // Empty mock DOM reminderList
+  const rList = document.getElementById('reminderList');
+  if (rList) {
+    rList.children = [];
+  }
+
+  const reminderActions = [
+    {
+      id: 5,
+      category: 'reminder',
+      action: 'create',
+      targetZone: null,
+      targetDeviceName: null,
+      isGlobal: false,
+      value: 'call John',
+      timeExpression: '5 pm',
+      dependsOn: []
+    }
+  ];
+
+  await engine.run(reminderActions, 'mock-key', 'openai', 'remind me to call John at 5 pm');
+
+  // Verify that the reminder is registered in lukasScheduler
+  if (lukasScheduler.scheduled.length === 1) {
+    console.log("[PASS] Test Case 4: Reminder registered in Scheduler Agent.");
+  } else {
+    console.error("[FAIL] Test Case 4: Reminder NOT registered in Scheduler Agent.");
+    process.exit(1);
+  }
+
+  // Verify that the reminder is inserted in IndexedDB memory via preference layer
+  const savedReminders = JSON.parse(lukasMemory.getPreference('user_reminders', '[]'));
+  if (savedReminders.length === 1 && savedReminders[0].text === 'call John') {
+    console.log("[PASS] Test Case 4: Reminder saved to lukasMemory preference layer.");
+  } else {
+    console.error("[FAIL] Test Case 4: Reminder NOT found in preference layer.");
+    process.exit(1);
+  }
+
+  // Verify that lukasVerify successfully checked the visual DOM state
+  const verificationLogPath = path.resolve(process.cwd(), 'logs', 'verification.log');
+  if (fs.existsSync(verificationLogPath)) {
+    const content = fs.readFileSync(verificationLogPath, 'utf8');
+    if (content.includes('reminder')) {
+      console.log("[PASS] Test Case 4: Verification agent logged reminder visual DOM checks.");
+    } else {
+      console.error("[FAIL] Test Case 4: Verification agent did not log reminder visual checks.");
+      process.exit(1);
+    }
   }
 
   console.log("\n==========================================================");

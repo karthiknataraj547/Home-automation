@@ -293,17 +293,20 @@ let lukasReminders = [];
 let reminderTimers = new Map();
 
 function loadUserReminders() {
-  const prefix = `lukas_user_${(typeof lukasMemory !== 'undefined' ? lukasMemory.currentUsername : 'Guest').toLowerCase()}_`;
   try {
-    lukasReminders = JSON.parse(localStorage.getItem(prefix + 'reminders') || '[]');
+    const key = `user_reminders`;
+    const data = typeof lukasMemory !== 'undefined' ? lukasMemory.getPreference(key, '[]') : '[]';
+    lukasReminders = JSON.parse(data || '[]');
   } catch (e) {
     lukasReminders = [];
   }
 }
 
 function saveReminders() {
-  const prefix = `lukas_user_${(typeof lukasMemory !== 'undefined' ? lukasMemory.currentUsername : 'Guest').toLowerCase()}_`;
-  localStorage.setItem(prefix + 'reminders', JSON.stringify(lukasReminders));
+  const key = `user_reminders`;
+  if (typeof lukasMemory !== 'undefined') {
+    lukasMemory.setPreference(key, JSON.stringify(lukasReminders));
+  }
   renderReminders();
 }
 
@@ -1525,7 +1528,7 @@ class LukasMultiTaskEngine {
     }
     for (const act of actions) {
       const dev = resolveDevice(act.targetDeviceName, act.category, act.targetZone).device || home.getDeviceById(act.targetZone);
-      if (!dev && act.category !== 'climate' && !act.isGlobal) {
+      if (!dev && act.category !== 'climate' && act.category !== 'reminder' && !act.isGlobal) {
         lukasSupervisor.logAgentAction('planner', `[VALIDATE FAILED] Target device or zone not found for: ${JSON.stringify(act)}`, 'error');
         if (typeof diag !== 'undefined' && diag) {
           diag.logToTerminal(`[PLAN ERROR] Target device or zone not found for task ${act.id}`, 'error');
@@ -2028,6 +2031,50 @@ class LukasMultiTaskEngine {
         }
       }
       
+      // REMINDERS
+      else if (parsed.category === 'reminder') {
+        const text = parsed.reminderText || parsed.value || 'Reminder';
+        const timeExpr = parsed.timeExpression || '';
+        
+        let fireAt = null;
+        if (timeExpr) {
+          fireAt = parseReminderTime(`in ${timeExpr}`) || parseReminderTime(`at ${timeExpr}`) || parseReminderTime(timeExpr);
+        }
+        if (!fireAt) {
+          fireAt = new Date(Date.now() + 3600000);
+        }
+
+        const user = (typeof getSessionUser === 'function' && getSessionUser()) ? getSessionUser().username : 'Guest';
+
+        if (!this.expectedDeviceStates['reminder']) {
+          this.expectedDeviceStates['reminder'] = { text: text };
+        }
+
+        // 1. Insert into UI Reminders list
+        const rem = addReminder(text, fireAt);
+
+        // 2. Register in LukasSchedulerAgent
+        if (typeof lukasScheduler !== 'undefined' && lukasScheduler) {
+          await lukasScheduler.scheduleCommand({
+            command: `Reminder: ${text}`,
+            username: user,
+            triggerAt: fireAt.getTime(),
+            label: text,
+            repeat: 'none'
+          });
+        }
+
+        // 3. Call Verification Agent to check if reminder is visible in UI DOM
+        if (typeof lukasVerify !== 'undefined' && lukasVerify) {
+          const verifyRes = await lukasVerify.verifyDeviceCommand(home, 'reminder', { text }, { supervisor: lukasSupervisor });
+          if (!verifyRes.verified) {
+            throw new Error(`Reminder verification failed: not visible in UI panel.`);
+          }
+        }
+
+        return { status: 'success', message: `Reminder created successfully: "${text}".` };
+      }
+
       // SECURITY
       else if (parsed.category === 'security') {
         const lock = parsed.action === 'off' || parsed.action === 'stop' || parsed.action === 'close' || parsed.action === 'lock';
@@ -7662,16 +7709,62 @@ async function processCommand(rawCommand, source) {
           diag.logToTerminal("[STAGE 5: EXECUTE] Dispatching to LukasSchedulerAgent...", "info");
           {
             const user = getSessionUser()?.username || 'Guest';
-            const parsed = lukasScheduler.parseScheduleFromText(rawCommand, user);
-            if (parsed) {
-              const schedId = await lukasScheduler.scheduleCommand(parsed);
-              const timeStr = new Date(parsed.triggerAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-              const repeatStr = parsed.repeat !== 'none' ? `, repeating ${parsed.repeat}` : '';
-              handleAssistantResponse(`Scheduled. I'll execute "${parsed.command}" at ${timeStr}${repeatStr}. Schedule ID: ${schedId.slice(-6)}.`);
-              await lukasAnalytics.record('schedule_created', { command: parsed.command, repeat: parsed.repeat }, user);
+            const isReminderQuery = /remind\s+me|don't\s+forget|reminder/i.test(rawCommand);
+            if (isReminderQuery) {
+              const inlineTime = parseReminderTime(rawCommand.toLowerCase());
+              const inlineText = extractReminderText(rawCommand);
+              if (inlineTime && inlineText && inlineText !== 'Reminder') {
+                addReminder(inlineText, inlineTime);
+                const timeStr = inlineTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                if (typeof lukasScheduler !== 'undefined' && lukasScheduler) {
+                  await lukasScheduler.scheduleCommand({
+                    command: `Reminder: ${inlineText}`,
+                    username: user,
+                    triggerAt: inlineTime.getTime(),
+                    label: inlineText,
+                    repeat: 'none'
+                  });
+                }
+                if (typeof lukasVerify !== 'undefined' && lukasVerify) {
+                  await lukasVerify.verifyDeviceCommand(home, 'reminder', { text: inlineText }, { supervisor: lukasSupervisor });
+                }
+                handleAssistantResponse(`Reminder set: "${inlineText}" — I'll alert you at ${timeStr}, Commander.`);
+              } else if (inlineTime && (!inlineText || inlineText === 'Reminder')) {
+                activeFollowUp = { type: 'reminder_input', time: inlineTime };
+                handleAssistantResponse("What should I remind you about, Commander?");
+              } else if (!inlineTime && inlineText && inlineText !== 'Reminder') {
+                const defaultTime = new Date(Date.now() + 5 * 60000);
+                addReminder(inlineText, defaultTime);
+                const timeStr = defaultTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                if (typeof lukasScheduler !== 'undefined' && lukasScheduler) {
+                  await lukasScheduler.scheduleCommand({
+                    command: `Reminder: ${inlineText}`,
+                    username: user,
+                    triggerAt: defaultTime.getTime(),
+                    label: inlineText,
+                    repeat: 'none'
+                  });
+                }
+                if (typeof lukasVerify !== 'undefined' && lukasVerify) {
+                  await lukasVerify.verifyDeviceCommand(home, 'reminder', { text: inlineText }, { supervisor: lukasSupervisor });
+                }
+                handleAssistantResponse(`Reminder set: "${inlineText}" — defaulting to 5 minutes from now at ${timeStr}, Commander.`);
+              } else {
+                activeFollowUp = { type: 'reminder_input' };
+                handleAssistantResponse("What would you like to be reminded about, Commander?");
+              }
             } else {
-              // Couldn't parse — fall back to conversational
-              await handleConversationalIntent(rawCommand, INTENT.SCHEDULE, activeKey, activeProvider, source);
+              const parsed = lukasScheduler.parseScheduleFromText(rawCommand, user);
+              if (parsed) {
+                const schedId = await lukasScheduler.scheduleCommand(parsed);
+                const timeStr = new Date(parsed.triggerAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const repeatStr = parsed.repeat !== 'none' ? `, repeating ${parsed.repeat}` : '';
+                handleAssistantResponse(`Scheduled. I'll execute "${parsed.command}" at ${timeStr}${repeatStr}. Schedule ID: ${schedId.slice(-6)}.`);
+                await lukasAnalytics.record('schedule_created', { command: parsed.command, repeat: parsed.repeat }, user);
+              } else {
+                // Couldn't parse — fall back to conversational
+                await handleConversationalIntent(rawCommand, INTENT.SCHEDULE, activeKey, activeProvider, source);
+              }
             }
           }
           break;

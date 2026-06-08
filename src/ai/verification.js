@@ -45,7 +45,10 @@ class LukasVerificationAgent {
       await this._sleep(this.POLL_INTERVAL);
 
       // Read current device state
-      const device = automationHub.getDeviceById(deviceId);
+      let device = automationHub.getDeviceById(deviceId);
+      if (!device && deviceId === 'reminder') {
+        device = { id: 'reminder', name: 'Reminder System', category: 'reminder' };
+      }
       if (!device) {
         lastResult = this._buildResult(deviceId, expectedUpdates, null, startTime, 'device_not_found');
         break;
@@ -170,6 +173,22 @@ class LukasVerificationAgent {
   // ─── State Comparison ────────────────────────────────────────────────────
 
   _findMismatch(actual, expected, deviceId) {
+    if (deviceId === 'reminder') {
+      if (typeof document !== 'undefined') {
+        const list = document.getElementById('reminderList');
+        if (list) {
+          const labels = Array.from(list.querySelectorAll('.ri-label')).map(el => el.textContent.toLowerCase().trim());
+          const expectedLabel = String(expected.text).toLowerCase().trim();
+          if (!labels.includes(expectedLabel)) {
+            return `DOM reminderList does not contain visible reminder label: "${expected.text}"`;
+          }
+        } else {
+          return `DOM element "#reminderList" not found in document.`;
+        }
+      }
+      return null;
+    }
+
     for (const [key, val] of Object.entries(expected)) {
       const actualVal = actual[key];
       if (actualVal === undefined) return `field "${key}" missing`;
