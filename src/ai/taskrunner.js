@@ -258,6 +258,77 @@ class LukasTaskRunner {
   async _executeStep(step, context) {
     const { memory, apiKey, apiProvider, research } = context;
 
+    // Detect if this is a smart home action step (lights, locks, climate)
+    if (typeof home !== 'undefined' && home.dynamicDevices) {
+      const desc = (step.description || '').toLowerCase();
+      const title = (step.title || '').toLowerCase();
+      
+      const dev = home.dynamicDevices.find(d => {
+        const name = d.name.toLowerCase();
+        return desc.includes(name) || title.includes(name);
+      });
+
+      if (dev) {
+        // Run home control action
+        try {
+          const expectsOn = desc.includes('on') || desc.includes('activate') || desc.includes('enable');
+          const expectsOff = desc.includes('off') || desc.includes('deactivate') || desc.includes('disable');
+          const expectsLocked = desc.includes('lock');
+          const expectsUnlocked = desc.includes('unlock');
+
+          const updates = {};
+          if (expectsOn) updates.on = true;
+          if (expectsOff) updates.on = false;
+          if (expectsLocked && dev.category === 'security') updates.locked = true;
+          if (expectsUnlocked && dev.category === 'security') updates.locked = false;
+
+          // Check for brightness / dimmer
+          const brightnessMatch = desc.match(/(\d+)\s*%/);
+          if (brightnessMatch) {
+            updates.brightness = parseInt(brightnessMatch[1]);
+          }
+
+          if (Object.keys(updates).length > 0) {
+            console.log(`[Task Runner] Executing smart home step for "${dev.name}":`, updates);
+            await home.setDeviceState(dev.id, updates);
+            
+            // Verify using lukasVerify if available
+            if (typeof window !== 'undefined' && window.lukasVerify) {
+              const verifyRes = await window.lukasVerify.verifyDeviceCommand(home, dev.id, updates, { 
+                supervisor: typeof window !== 'undefined' ? window.lukasSupervisor : null 
+              });
+              if (!verifyRes.verified) {
+                throw new Error(`Device verification failed for "${dev.name}": ${verifyRes.method} mismatch.`);
+              }
+            } else {
+              const updatedDev = home.dynamicDevices.find(d => d.id === dev.id);
+              const isMatch = expectsOn ? updatedDev.on : expectsOff ? !updatedDev.on : true;
+              if (!isMatch) throw new Error("Local state verification failed.");
+            }
+            return `Device "${dev.name}" set and verified successfully.`;
+          }
+        } catch (e) {
+          console.error('[Task Runner] Smart home step execution failed:', e);
+          throw e;
+        }
+      }
+
+      // Check for climate step
+      const isClimateStep = desc.includes('temp') || desc.includes('temperature') || desc.includes('thermostat') || desc.includes('ac') || desc.includes('climate');
+      const tempMatch = desc.match(/(\d{2})\s*(?:c|degrees?|celsius)?/i);
+      if (isClimateStep && tempMatch) {
+        const temp = parseInt(tempMatch[1]);
+        if (temp >= 16 && temp <= 35) {
+          console.log(`[Task Runner] Executing climate step to target: ${temp}°C`);
+          await home.setTargetTemperature(temp);
+          if (home.state.climate.targetTemp !== temp) {
+            throw new Error(`Climate temperature verification failed. Expected ${temp}, got ${home.state.climate.targetTemp}`);
+          }
+          return `Eco-Thermostat target set to ${temp}°C and verified successfully.`;
+        }
+      }
+    }
+
     switch (step.type) {
       case 'research':
         return await this._doResearch(step, context);

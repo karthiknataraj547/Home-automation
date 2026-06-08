@@ -64,7 +64,14 @@ class LukasVerificationAgent {
       if (retries < maxRetries) {
         if (supervisor) {
           supervisor.logAgentAction('verification',
-            `Retry ${retries}/${maxRetries} for "${deviceId}": ${mismatch}`, 'warn');
+            `Retry ${retries}/${maxRetries} for "${deviceId}": ${mismatch}. Re-sending command...`, 'warn');
+        }
+        try {
+          await automationHub.setDeviceState(deviceId, expectedUpdates);
+        } catch (err) {
+          if (supervisor) {
+            supervisor.logAgentAction('verification', `Re-send attempt failed for "${deviceId}": ${err.message}`, 'error');
+          }
         }
       }
     }
@@ -93,6 +100,23 @@ class LukasVerificationAgent {
         lastResult.verified ? 'info' : 'warn',
         lastResult
       );
+    }
+
+    // Escalation if verification failed
+    if (!lastResult.verified) {
+      if (supervisor) {
+        supervisor.logAgentAction(
+          'supervisor',
+          `[GOVERNOR ALERT] Escalation: "${deviceId}" failed verification. Details: expected=${JSON.stringify(expectedUpdates)} actual=${JSON.stringify(lastResult.actual)}`,
+          'error',
+          lastResult
+        );
+      }
+      if (typeof window !== 'undefined' && window.lukasNotify) {
+        const dev = automationHub.getDeviceById(deviceId);
+        const name = dev ? dev.name : deviceId;
+        window.lukasNotify.notifyDeviceFailure(name, `Verification failed (${lastResult.method})`);
+      }
     }
 
     return lastResult;

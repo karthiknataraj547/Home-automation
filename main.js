@@ -178,6 +178,10 @@ const lukasAnalytics    = new LukasAnalyticsAgent();
 const lukasNotify       = new LukasNotificationAgent();
 const lukasSystem       = new LukasSystemAgent();
 
+window.lukasVerify = lukasVerify;
+window.lukasNotify = lukasNotify;
+window.lukasSupervisor = lukasSupervisor;
+
 // Expose diag globally so automation.js can reference it
 window.diag = null; // set after diag is initialized below
 let currentTrackIndex = 0;
@@ -1150,6 +1154,14 @@ class LukasMultiTaskEngine {
     }
 
     await setDeviceStateWithFeedback(devId, updates);
+
+    // Call Verification Agent for live status feedback & retry loop
+    if (typeof lukasVerify !== 'undefined' && lukasVerify) {
+      const verifyRes = await lukasVerify.verifyDeviceCommand(home, devId, updates, { supervisor: lukasSupervisor });
+      if (!verifyRes.verified) {
+        throw new Error(`Device verification failed for "${currentDev.name}": state mismatch.`);
+      }
+    }
   }
 
   _setTargetTemperatureAndTrack(val) {
