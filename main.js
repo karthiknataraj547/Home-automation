@@ -1309,11 +1309,14 @@ class LukasMultiTaskEngine {
         }
       } else if (act.category === 'climate') {
         attemptDesc = `* **${checkMark}** Request to configure thermostat`;
-        if (act.action === 'temp') {
+        const isTemp = ['temp', 'set', 'temperature', 'set_temperature', 'adjust', 'change'].includes(act.action) && act.value && !['cool', 'heat', 'eco'].includes(String(act.value).toLowerCase());
+        const isMode = act.action === 'mode' || ['cool', 'heat', 'eco'].includes(String(act.value).toLowerCase());
+        
+        if (isTemp) {
           attemptDesc += ` target temperature to ${act.value}°C`;
           const actualTemp = home.state.climate.targetTemp;
           verDesc = `* **${checkMark}** Thermostat target = **${actualTemp}°C**`;
-        } else if (act.action === 'mode') {
+        } else if (isMode) {
           attemptDesc += ` mode to ${String(act.value).toUpperCase()}`;
           const actualMode = home.state.climate.mode;
           verDesc = `* **${checkMark}** Thermostat mode = **${actualMode.toUpperCase()}**`;
@@ -1875,13 +1878,15 @@ class LukasMultiTaskEngine {
       
       // CLIMATE
       else if (parsed.category === 'climate') {
-        if (parsed.action === 'temp' && parsed.value) {
+        const isTempAction = ['temp', 'set', 'temperature', 'set_temperature', 'adjust', 'change'].includes(parsed.action) || (parsed.value && !isNaN(parseInt(parsed.value)));
+        
+        if (isTempAction && parsed.value && !['cool', 'heat', 'eco'].includes(String(parsed.value).toLowerCase())) {
           const val = parseInt(parsed.value);
           if (!isNaN(val)) {
             this._setTargetTemperatureAndTrack(val);
             return { status: 'success', message: `Eco-Thermostat target set to ${val} degrees Celsius.` };
           }
-        } else if (parsed.action === 'mode' && parsed.value) {
+        } else if ((parsed.action === 'mode' || ['cool', 'heat', 'eco'].includes(String(parsed.value).toLowerCase())) && parsed.value) {
           const mode = parsed.value.toLowerCase();
           if (['cool', 'heat', 'eco'].includes(mode)) {
             this._setClimateModeAndTrack(mode);
