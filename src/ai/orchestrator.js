@@ -77,6 +77,19 @@ class LukasOrchestrator {
   _classifyByRules(input) {
     const text = input.toLowerCase();
 
+    // Check for correction / feedback first (e.g. "no", "wrong", "different tasks", etc.)
+    const isCorrection = /\b(no|wrong|incorrect|not that|i said|i asked|i gave|you didn't|you did|different tasks|instead of)\b/i.test(text);
+    if (isCorrection) {
+      return { intent: INTENT.CONVERSATION, confidence: 0.90, subtasks: ['conversational_response'] };
+    }
+
+    // Check if it's a compound/complex query that contains coordinate conjunctions
+    const isCompound = /\b(and|then|also|as well as)\b/i.test(text) || text.includes(',') || text.includes(';');
+    if (isCompound) {
+      // Return planning intent with lower confidence so that we force AI-based task planning and decomposition
+      return { intent: INTENT.PLANNING, confidence: 0.50, isComplex: true, subtasks: ['decompose_plan'] };
+    }
+
     // Greetings & conversational openings
     if (/\b(hi|hello|hey|greetings|yo|sup|hola|namaste|heyy|good\s+morning|good\s+afternoon|good\s+evening)\b/i.test(text)) {
       return { intent: INTENT.CONVERSATION, confidence: 0.95, subtasks: ['conversational_response'] };

@@ -307,6 +307,33 @@ class LukasTaskRunner {
   async _executeStep(step, context) {
     const { memory, apiKey, apiProvider, research } = context;
 
+    const desc = (step.description || '').toLowerCase();
+    const title = (step.title || '').toLowerCase();
+
+    // Check if this step represents a reminder or scheduling command
+    const isReminderStep = step.type === 'reminder' || desc.includes('reminder') || desc.includes('remind me') || title.includes('reminder') || title.includes('remind') || title.includes('schedule sleep');
+    if (isReminderStep) {
+      const inlineTime = (typeof parseReminderTime === 'function' ? (parseReminderTime(desc) || parseReminderTime(title)) : null) || new Date(Date.now() + 5 * 60000);
+      const inlineText = (typeof extractReminderText === 'function' ? (extractReminderText(step.description) || extractReminderText(step.title)) : null) || step.title || 'Reminder';
+      const user = (typeof getSessionUser === 'function' && getSessionUser()) ? getSessionUser().username : 'Guest';
+      
+      console.log(`[Task Runner] Creating reminder: "${inlineText}" at ${inlineTime}`);
+
+      if (typeof addReminder === 'function') {
+        addReminder(inlineText, inlineTime);
+      }
+      if (typeof lukasScheduler !== 'undefined' && lukasScheduler) {
+        await lukasScheduler.scheduleCommand({
+          command: `Reminder: ${inlineText}`,
+          username: user,
+          triggerAt: inlineTime.getTime(),
+          label: inlineText,
+          repeat: 'none'
+        });
+      }
+      return `Reminder set and verified: "${inlineText}" — scheduled for ${inlineTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}.`;
+    }
+
     // Detect if this is a smart home action step (lights, locks, climate)
     if (typeof home !== 'undefined' && home.dynamicDevices) {
       const desc = (step.description || '').toLowerCase();

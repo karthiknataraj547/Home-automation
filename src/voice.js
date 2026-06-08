@@ -168,6 +168,10 @@ class SpeechRecognitionManager {
       }
 
       this.controller.consecutiveErrors++;
+      if (this.controller.consecutiveErrors > 8) {
+        console.warn(`[SpeechRecognitionManager] Too many consecutive errors (${this.controller.consecutiveErrors}). Force resetting native speech engine...`);
+        this.forceReset();
+      }
     };
 
     this.recognition.onresult = (event) => {
@@ -729,31 +733,37 @@ class LukasVoiceController {
   _detectWakeWord(text, rawText) {
     const rawLower = (rawText || '').toLowerCase();
     
-    // Ignore alexa, lucky, or other explicit rejections
-    if (rawLower.includes('alexa') || rawLower.includes('lucky')) {
+    // Ignore alexa, lucky, or other explicit rejections (unless alexa is in the configured wakeWords)
+    if (!this.controller?.wakeWords?.includes('alexa') && rawLower.includes('alexa')) {
+      return null;
+    }
+    if (rawLower.includes('lucky')) {
       return null;
     }
 
     const words = text.split(/\s+/).filter(Boolean);
-    const wakePhrases = [
-      'lukas', 'lucas', 'lukus', 'locus', 'luke-us',
-      'hey lukas', 'hey lucas', 'hey lukus', 'hey locus',
+    const configuredWakeWords = this.controller?.wakeWords || [];
+    const baseWakePhrases = [
+      'lukas', 'lucas', 'lukus', 'locus', 'luke-us', 'luka', 'luca', 'lucus', 'lookas',
+      'hey lukas', 'hey lucas', 'hey lukus', 'hey locus', 'hey luka', 'hey luca',
       'ok lukas', 'ok lucas', 'ok lukus', 'ok locus',
       'hi lukas', 'hi lucas', 'hi lukus', 'hi locus',
       'hello lukas', 'hello lucas', 'hello lukus', 'hello locus',
       'wake up lukas', 'wake up lucas', 'wake up lukus', 'wake up locus',
       'wake up'
     ];
+    
+    const wakePhrases = Array.from(new Set([...baseWakePhrases, ...configuredWakeWords]));
 
     let bestMatch = null;
     let maxSim = 0;
 
-    for (let size = 1; size <= 3; size++) {
+    for (let size = 1; size <= 4; size++) {
       for (let i = 0; i <= words.length - size; i++) {
         const subStr = words.slice(i, i + size).join(' ');
         for (const wp of wakePhrases) {
           const sim = this.getSimilarity(subStr, wp);
-          if (sim >= 0.9 && sim > maxSim) {
+          if (sim >= 0.78 && sim > maxSim) { // Lowered similarity threshold for phonetic robustness
             maxSim = sim;
             bestMatch = subStr;
           }
@@ -1339,13 +1349,28 @@ class LukasVoiceController {
       this.recognitionManager.transitionTo('RESPONDING');
     }
 
+    // Workaround for Chrome/Electron SpeechSynthesisUtterance garbage collection bug:
+    // Store reference in a global/class array so it's not GC'd while playing
+    if (typeof window !== 'undefined') {
+      window._activeUtterances = window._activeUtterances || [];
+      window._activeUtterances.push(utterance);
+    }
+
     utterance.onend = () => {
+      if (typeof window !== 'undefined' && window._activeUtterances) {
+        const idx = window._activeUtterances.indexOf(utterance);
+        if (idx !== -1) window._activeUtterances.splice(idx, 1);
+      }
       this.activeUtterance = null;
       this._processNextSpeechSegment();
     };
 
     utterance.onerror = (err) => {
       console.error("Speech Synthesis Utterance Error:", err);
+      if (typeof window !== 'undefined' && window._activeUtterances) {
+        const idx = window._activeUtterances.indexOf(utterance);
+        if (idx !== -1) window._activeUtterances.splice(idx, 1);
+      }
       this.activeUtterance = null;
       this._processNextSpeechSegment();
     };
@@ -1362,7 +1387,7 @@ class LukasVoiceController {
   _splitIntoSentences(text) {
     const clean = text.replace(/[*_`]/g, '').replace(/\[.*?\]/g, '').trim();
     const parts = clean.match(/[^.!?]+[.!?](?:\s|$)|[^.!?]+$/g) || [clean];
-    return parts.map(s => s.trim()).filter(s => s.length > 1);
+    return parts.map(s => s.trim()).filter(s => /[a-zA-Z0-9]/.test(s));
   }
 
   // Detect language based on unicode script blocks and signature words
