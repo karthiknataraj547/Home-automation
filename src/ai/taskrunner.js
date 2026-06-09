@@ -218,10 +218,7 @@ class LukasTaskRunner {
     const desc = (step.description || '').toLowerCase();
     const title = (step.title || '').toLowerCase();
     
-    const dev = home.dynamicDevices.find(d => {
-      const name = d.name.toLowerCase();
-      return desc.includes(name) || title.includes(name);
-    });
+    const dev = this._resolveDeviceFromStep(step);
 
     if (dev) {
       const expectsOn = desc.includes('on') || desc.includes('activate') || desc.includes('enable');
@@ -339,10 +336,7 @@ class LukasTaskRunner {
       const desc = (step.description || '').toLowerCase();
       const title = (step.title || '').toLowerCase();
       
-      const dev = home.dynamicDevices.find(d => {
-        const name = d.name.toLowerCase();
-        return desc.includes(name) || title.includes(name);
-      });
+      const dev = this._resolveDeviceFromStep(step);
 
       if (dev) {
         // Run home control action
@@ -484,6 +478,71 @@ class LukasTaskRunner {
   /**
    * Summarize the results of a completed plan as text.
    */
+  _resolveDeviceFromStep(step) {
+    if (typeof home === 'undefined' || !home.dynamicDevices) return null;
+    
+    const desc = (step.description || '').toLowerCase();
+    const title = (step.title || '').toLowerCase();
+    const text = (title + " " + desc).toLowerCase();
+    
+    const aliasMap = {
+      livingRoom: 'livingRoomLight',
+      bedroom:    'bedroomLight',
+      kitchen:    'kitchenLight',
+      outdoor:    'outdoorLock',
+    };
+
+    if (typeof resolveDevice === 'function') {
+      let targetName = null;
+      let category = null;
+      let targetZone = null;
+      
+      if (text.includes('living room') || text.includes('livingroom')) {
+        targetZone = 'Living Room';
+        targetName = 'living room';
+      } else if (text.includes('bedroom')) {
+        targetZone = 'Bedroom';
+        targetName = 'bedroom';
+      } else if (text.includes('kitchen')) {
+        targetZone = 'Kitchen';
+        targetName = 'kitchen';
+      } else if (text.includes('outdoor')) {
+        targetZone = 'Outdoor';
+        targetName = 'outdoor';
+      }
+      
+      if (text.includes('light')) {
+        category = 'light';
+        if (targetName) targetName += ' light';
+      } else if (text.includes('lock')) {
+        category = 'lock';
+        if (targetName) targetName += ' lock';
+      }
+      
+      if (targetName) {
+        const res = resolveDevice(targetName, category, targetZone);
+        if (res.device) return res.device;
+      }
+    }
+    
+    for (const d of home.dynamicDevices) {
+      const name = d.name.toLowerCase();
+      const zone = d.zone.toLowerCase();
+      const id = d.id.toLowerCase();
+      const canonicalId = aliasMap[d.id] || d.id;
+      
+      if (text.includes(name) || text.includes(id) || text.includes(canonicalId.toLowerCase()) || (text.includes(zone) && text.includes(d.category))) {
+        return d;
+      }
+    }
+    
+    return home.dynamicDevices.find(d => {
+      const name = d.name.toLowerCase();
+      const firstWord = name.split(' ')[0];
+      return text.includes(firstWord) && text.includes(d.category);
+    }) || null;
+  }
+
   summarizeResults(plan, results) {
     const completed = results.filter(r => r.status === 'completed').length;
     const failed = results.filter(r => r.status === 'failed').length;

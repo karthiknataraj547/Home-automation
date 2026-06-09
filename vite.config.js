@@ -15,6 +15,7 @@ const execAsync = promisify(exec);
 let go2rtcProcess    = null;
 let ffmpegHlsProcess = null;
 let activeRtspUrl    = null;
+let pythonProcess    = null;
 
 let cachedInvidiousInstances = null;
 let lastInvidiousFetchTime = 0;
@@ -267,10 +268,66 @@ function startFfmpegHls(rtspUrl) {
   activeRtspUrl = rtspUrl;
 }
 
+// ── Python FastAPI Backend Manager ──────────────────────────────────────────
+function findPythonExecutable() {
+  const candidates = ['python', 'python3', 'py'];
+  for (const c of candidates) {
+    try {
+      const result = require('child_process').execSync(`${c} --version`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+      if (result && result.toString().toLowerCase().includes('python')) return c;
+    } catch {}
+  }
+  // Try known Windows paths
+  const winPaths = [
+    // Confirmed install location (Python 3.11 via winget)
+    path.join(process.env.LOCALAPPDATA || 'C:\\Users\\Asus\\AppData\\Local', 'Programs', 'Python', 'Python311', 'python.exe'),
+    path.join(process.env.LOCALAPPDATA || 'C:\\Users\\Asus\\AppData\\Local', 'Programs', 'Python', 'Python312', 'python.exe'),
+    path.join(process.env.LOCALAPPDATA || 'C:\\Users\\Asus\\AppData\\Local', 'Programs', 'Python', 'Python310', 'python.exe'),
+    'C:\\Python311\\python.exe',
+    'C:\\Python312\\python.exe',
+    'C:\\Python310\\python.exe',
+  ];
+  for (const p of winPaths) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+function startPythonBackend() {
+  if (pythonProcess) { try { pythonProcess.kill(); } catch {} pythonProcess = null; }
+  const serverScript = path.resolve(process.cwd(), 'api', 'server.py');
+  if (!fs.existsSync(serverScript)) {
+    console.warn('[Python] api/server.py not found. Skipping Python backend.');
+    return;
+  }
+  const pythonExe = findPythonExecutable();
+  if (!pythonExe) {
+    console.warn('[Python] No Python executable found. Python backend will not start.');
+    console.warn('[Python] Install Python 3.10+ and ensure it is on PATH.');
+    return;
+  }
+  console.log(`[Python] Starting FastAPI backend with: ${pythonExe}`);
+  pythonProcess = spawn(pythonExe, [serverScript], {
+    cwd: process.cwd(),
+    stdio: 'inherit',
+    env: { ...process.env }
+  });
+  pythonProcess.on('close', c => {
+    console.log(`[Python] Backend exited with code ${c}`);
+    pythonProcess = null;
+  });
+  pythonProcess.on('error', e => {
+    console.error('[Python] Failed to start:', e.message);
+    pythonProcess = null;
+  });
+  console.log('[Python] FastAPI backend starting on http://127.0.0.1:8000');
+}
+
 // ── Clean shutdown ───────────────────────────────────────────────────────────
 ['exit','SIGINT','SIGTERM'].forEach(sig => process.on(sig, () => {
   if (go2rtcProcess)    try { go2rtcProcess.kill(); }    catch {}
   if (ffmpegHlsProcess) try { ffmpegHlsProcess.kill(); } catch {}
+  if (pythonProcess)    try { pythonProcess.kill(); }    catch {}
   if (sig !== 'exit') process.exit();
 }));
 
@@ -540,6 +597,7 @@ export default defineConfig({
     name: 'lukas-backend',
     configureServer(server) {
       startGo2RTC();
+      startPythonBackend();
 
       // Auto-probe HLS on startup (background)
       const savedIp = getSavedCameraIp();
