@@ -204,7 +204,7 @@ def probe_ports(ip: str, ports: List[int]) -> List[int]:
 
 def fingerprint_device(ip: str, open_ports: List[int]) -> dict:
     # Mirror JS deviceKnowledgeBase.js mapping logic
-    known_ips = {
+    known_ips: Dict[str, Dict[str, Any]] = {
         '192.168.1.1': {'name': 'Primary Gateway Router', 'category': 'appliance', 'protocol': 'WiFi', 'icon': 'fa-network-wired', 'color': '#94a3b8', 'brand': 'Router'},
         '192.168.1.2': {'name': 'Secondary Gateway', 'category': 'appliance', 'protocol': 'WiFi', 'icon': 'fa-network-wired', 'color': '#94a3b8', 'brand': 'Router'},
         '192.168.1.3': {'name': 'EseeCloud IP Camera', 'category': 'camera', 'protocol': 'P2P', 'icon': 'fa-video', 'color': '#a78bfa', 'brand': 'EseeCloud'},

@@ -242,6 +242,40 @@ class LukasTaskRunner {
         if (supervisor) supervisor.logAgentAction('verification', `[VERIFY FAILED] "${dev.name}" expected UNLOCKED, actual LOCKED`, 'error');
         return false;
       }
+
+      // Check brightness verification
+      const brightnessMatch = desc.match(/(\d+)\s*%/);
+      if (brightnessMatch) {
+        const expectedBrightness = parseInt(brightnessMatch[1]);
+        if (dev.brightness !== expectedBrightness) {
+          if (supervisor) supervisor.logAgentAction('verification', `[VERIFY FAILED] "${dev.name}" expected brightness ${expectedBrightness}%, actual ${dev.brightness}%`, 'error');
+          return false;
+        }
+      }
+
+      // Check color verification
+      const colorMap = {
+        'red': '#ff0000', 'green': '#10b981', 'blue': '#3b82f6', 'purple': '#a855f7',
+        'cyan': '#00f0ff', 'orange': '#ff9f3b', 'white': '#ffffff', 'yellow': '#eab308',
+        'pink': '#ec4899', 'magenta': '#d946ef', 'lime': '#84cc16', 'teal': '#14b8a6',
+        'gold': '#f59e0b', 'crimson': '#e11d48'
+      };
+      let expectedColor = null;
+      for (const [colorName, colorHex] of Object.entries(colorMap)) {
+        if (desc.includes(colorName) || title.includes(colorName)) {
+          expectedColor = colorHex;
+          break;
+        }
+      }
+      const hexMatch = desc.match(/#([0-9a-fA-F]{6})\b/) || title.match(/#([0-9a-fA-F]{6})\b/);
+      if (hexMatch) {
+        expectedColor = hexMatch[0];
+      }
+      if (expectedColor && dev.color && dev.color.toLowerCase() !== expectedColor.toLowerCase()) {
+        if (supervisor) supervisor.logAgentAction('verification', `[VERIFY FAILED] "${dev.name}" expected color ${expectedColor}, actual ${dev.color}`, 'error');
+        return false;
+      }
+
       if (supervisor) {
         supervisor.logAgentAction('verification', `[VERIFY SUCCESS] "${dev.name}" state matches expected values.`);
       }
@@ -358,6 +392,27 @@ class LukasTaskRunner {
             updates.brightness = parseInt(brightnessMatch[1]);
           }
 
+          // Check for color adjustment
+          const colorMap = {
+            'red': '#ff0000', 'green': '#10b981', 'blue': '#3b82f6', 'purple': '#a855f7',
+            'cyan': '#00f0ff', 'orange': '#ff9f3b', 'white': '#ffffff', 'yellow': '#eab308',
+            'pink': '#ec4899', 'magenta': '#d946ef', 'lime': '#84cc16', 'teal': '#14b8a6',
+            'gold': '#f59e0b', 'crimson': '#e11d48'
+          };
+          for (const [colorName, colorHex] of Object.entries(colorMap)) {
+            if (desc.includes(colorName) || title.includes(colorName)) {
+              updates.color = colorHex;
+              updates.on = true;
+              break;
+            }
+          }
+
+          const hexMatch = desc.match(/#([0-9a-fA-F]{6})\b/) || title.match(/#([0-9a-fA-F]{6})\b/);
+          if (hexMatch) {
+            updates.color = hexMatch[0];
+            updates.on = true;
+          }
+
           if (Object.keys(updates).length > 0) {
             console.log(`[Task Runner] Executing smart home step for "${dev.name}":`, updates);
             await home.setDeviceState(dev.id, updates);
@@ -372,7 +427,11 @@ class LukasTaskRunner {
               }
             } else {
               const updatedDev = home.dynamicDevices.find(d => d.id === dev.id);
-              const isMatch = expectsOn ? updatedDev.on : expectsOff ? !updatedDev.on : true;
+              let isMatch = true;
+              if (expectsOn && !updatedDev.on) isMatch = false;
+              if (expectsOff && updatedDev.on) isMatch = false;
+              if (updates.brightness !== undefined && updatedDev.brightness !== updates.brightness) isMatch = false;
+              if (updates.color !== undefined && (!updatedDev.color || updatedDev.color.toLowerCase() !== updates.color.toLowerCase())) isMatch = false;
               if (!isMatch) throw new Error("Local state verification failed.");
             }
             return `Device "${dev.name}" set and verified successfully.`;

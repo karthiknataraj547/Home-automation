@@ -7421,7 +7421,7 @@ async function processCommand(rawCommand, source) {
 
     // ── STAGE 3: TASK PLANNING ──
     diag.logToTerminal("[STAGE 3: PLAN] Checking if directive requires task planning or decomposition...", "info");
-    const isPlanExecution = precheckResult.requiresPlanning || routing.intent === INTENT.PLANNING || routing.isComplex;
+    const isPlanExecution = precheckResult.requiresPlanning || routing.intent === INTENT.PLANNING || (routing.isComplex && routing.intent !== INTENT.HOME_CONTROL);
 
     // ── STAGE 4: REASONING LOGS ──
     diag.logToTerminal("[STAGE 4: REASONING] Running structured Voice Intelligence cycles...", "info");

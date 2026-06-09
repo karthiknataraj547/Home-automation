@@ -198,7 +198,10 @@ class SpeechRecognitionManager {
       this.controller.isCommandListeningActive = false;
       this.controller.isLongConversation = false;
       if (oldState === 'RESPONDING') {
-        console.log("[SpeechRecognitionManager] Transitioned from RESPONDING to PASSIVE_LISTENING. Restarting recognition engine for a clean session.");
+        // Clear accumulated spoken text so old TTS words can't suppress the NEXT wake word
+        this.controller.spokenTextAccumulated = '';
+        this.controller.speakingText = '';
+        console.log("[SpeechRecognitionManager] Transitioned from RESPONDING to PASSIVE_LISTENING. Clearing echo buffers and restarting recognition.");
         this.restart();
       } else {
         this.start();
@@ -529,13 +532,17 @@ class LukasVoiceController {
       return;
     }
 
+    const state = this.recognitionManager ? this.recognitionManager.state : 'IDLE';
     const timeSinceSpeechEnd = Date.now() - (this.lastSpeechEndTime || 0);
-    if (timeSinceSpeechEnd < 800) {
-      console.log(`[SpeechRecognition] Ignoring result "${fullTranscript}" during post-speech cooldown (${timeSinceSpeechEnd}ms).`);
+
+    // Only apply the post-speech cooldown in ACTIVE_LISTENING (command) mode.
+    // In PASSIVE_LISTENING we MUST check for wake words immediately after TTS ends —
+    // blocking wake words here is the root cause of the 'stops listening' bug.
+    if (state === 'ACTIVE_LISTENING' && timeSinceSpeechEnd < 800) {
+      console.log(`[SpeechRecognition] Ignoring command result "${fullTranscript}" during post-speech cooldown (${timeSinceSpeechEnd}ms).`);
       return;
     }
 
-    const state = this.recognitionManager.state;
     const cmd = fullTranscript.toLowerCase().trim();
 
     // ── INTERRUPTION CHECK ──
@@ -1384,10 +1391,45 @@ class LukasVoiceController {
   }
 
   // Split text on sentence boundaries for progressive TTS
+  // Handles: sentences with punctuation, punctuation-free prose, and mixed content
   _splitIntoSentences(text) {
     const clean = text.replace(/[*_`]/g, '').replace(/\[.*?\]/g, '').trim();
-    const parts = clean.match(/[^.!?]+[.!?](?:\s|$)|[^.!?]+$/g) || [clean];
-    return parts.map(s => s.trim()).filter(s => /[a-zA-Z0-9]/.test(s));
+    if (!clean) return [];
+
+    // Match complete sentences (ending with .!?) OR the leftover tail with no punctuation
+    const rawParts = clean.match(/[^.!?]+[.!?]+(?:\s|$)|[^.!?]+$/g) || [];
+
+    const sentences = rawParts.map(s => s.trim()).filter(s => /[a-zA-Z0-9]/.test(s));
+
+    // Safety: if nothing matched (e.g. fully numeric or special chars stripped everything),
+    // fall back to the whole cleaned text so we never silently drop content.
+    if (sentences.length === 0 && clean.length > 0) {
+      return [clean];
+    }
+
+    // Break very long segments (>220 chars) on commas or semicolons to avoid
+    // Chrome/Electron SpeechSynthesis cutting off at ~250 characters.
+    const MAX_CHUNK = 220;
+    const result = [];
+    for (const s of sentences) {
+      if (s.length <= MAX_CHUNK) {
+        result.push(s);
+      } else {
+        // Try splitting on commas or semicolons first
+        const subParts = s.split(/(?<=[,;])\s+/);
+        let current = '';
+        for (const sub of subParts) {
+          if ((current + ' ' + sub).trim().length <= MAX_CHUNK) {
+            current = (current + ' ' + sub).trim();
+          } else {
+            if (current) result.push(current);
+            current = sub;
+          }
+        }
+        if (current) result.push(current);
+      }
+    }
+    return result;
   }
 
   // Detect language based on unicode script blocks and signature words

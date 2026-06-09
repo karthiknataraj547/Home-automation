@@ -86,6 +86,15 @@ class LukasOrchestrator {
     // Check if it's a compound/complex query that contains coordinate conjunctions
     const isCompound = /\b(and|then|also|as well as)\b/i.test(text) || text.includes(',') || text.includes(';');
     if (isCompound) {
+      // Check if it's purely a compound smart home command (e.g. lights, locks, thermostat, routines)
+      const homePatterns = /\b(turn (on|off)|switch (on|off)|set (the )?light|dim|brightness|color|temperature|thermostat|lock|unlock|arm|disarm|routine|scene|mode|fan|ac|aircon|heater|sprinkler|water the|living room|bedroom|kitchen|outdoor|garage)\b/i;
+      const hasHomeKeywords = homePatterns.test(text);
+      const hasOtherAgentKeywords = /\b(search|look up|find out|calculate|compute|solve|game|play|quiz|trivia|reminder|remind me|schedule|alarm|timer)\b/i.test(text);
+
+      if (hasHomeKeywords && !hasOtherAgentKeywords) {
+        return { intent: INTENT.HOME_CONTROL, confidence: 0.90, isComplex: true, subtasks: ['parse_device_command'] };
+      }
+
       // Return planning intent with lower confidence so that we force AI-based task planning and decomposition
       return { intent: INTENT.PLANNING, confidence: 0.50, isComplex: true, subtasks: ['decompose_plan'] };
     }
