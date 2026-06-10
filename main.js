@@ -2383,6 +2383,150 @@ function initParticleCanvas() {
     'FPS: 60', 'RESOL_CORE: 4K', 'AUDIO: ACTIVE', 'CMD: IDLE', 'LOCKS: SECURE'
   ];
 
+  function traceRoundedRect(x, y, w, h, r) {
+    const radius = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + w - radius, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+    ctx.lineTo(x + w, y + h - radius);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+    ctx.lineTo(x + radius, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+    ctx.closePath();
+  }
+
+  function drawHologramPlane(coreX, coreY, timeSec, projectionBrightness, speedMultiplier, isSpeaking, projectionSource) {
+    const availableWidth = Math.max(260, canvas.width - coreX - 80);
+    const panelW = Math.min(430, Math.max(260, availableWidth * 0.58));
+    const panelH = Math.min(230, Math.max(154, canvas.height * 0.24));
+    let holoX = coreX + Math.max(170, (canvas.width - coreX) * 0.34);
+    if (holoX + panelW > canvas.width - 28) holoX = canvas.width - panelW - 28;
+    if (holoX < 24) holoX = 24;
+
+    const drift = Math.sin(timeSec * 1.5) * 7;
+    const holoY = Math.max(72, Math.min(canvas.height - panelH - 70, coreY - panelH * 0.48 + drift));
+    const pulse = 0.5 + Math.sin(timeSec * 3.2) * 0.5;
+    const scanY = holoY + ((timeSec * 62 * speedMultiplier) % panelH);
+    const title = projectionSource === 'Hologram' ? '4D HOLOGRAM' : projectionSource.toUpperCase();
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    const beamGradient = ctx.createLinearGradient(coreX, coreY, holoX + panelW, holoY + panelH / 2);
+    beamGradient.addColorStop(0, `rgba(168, 85, 247, ${0.08 * projectionBrightness})`);
+    beamGradient.addColorStop(0.42, `rgba(6, 182, 212, ${0.055 * projectionBrightness})`);
+    beamGradient.addColorStop(1, 'rgba(6, 182, 212, 0)');
+    ctx.beginPath();
+    ctx.moveTo(coreX, coreY);
+    ctx.lineTo(holoX + panelW * 0.08, holoY + panelH * 0.14);
+    ctx.lineTo(holoX + panelW * 0.96, holoY + panelH * 0.50);
+    ctx.lineTo(holoX + panelW * 0.08, holoY + panelH * 0.86);
+    ctx.closePath();
+    ctx.fillStyle = beamGradient;
+    ctx.fill();
+
+    ctx.shadowBlur = 28;
+    ctx.shadowColor = `rgba(6, 182, 212, ${0.45 * projectionBrightness})`;
+    traceRoundedRect(holoX, holoY, panelW, panelH, 14);
+    const panelGradient = ctx.createLinearGradient(holoX, holoY, holoX + panelW, holoY + panelH);
+    panelGradient.addColorStop(0, `rgba(8, 30, 48, ${0.12 * projectionBrightness})`);
+    panelGradient.addColorStop(0.5, `rgba(6, 182, 212, ${0.08 * projectionBrightness})`);
+    panelGradient.addColorStop(1, `rgba(168, 85, 247, ${0.10 * projectionBrightness})`);
+    ctx.fillStyle = panelGradient;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(103, 232, 249, ${0.62 * projectionBrightness})`;
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    ctx.save();
+    traceRoundedRect(holoX, holoY, panelW, panelH, 14);
+    ctx.clip();
+
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 0.6;
+    for (let x = holoX + 18; x < holoX + panelW; x += 26) {
+      const sway = Math.sin(timeSec * 1.1 + x * 0.015) * 4;
+      ctx.strokeStyle = `rgba(103, 232, 249, ${0.10 * projectionBrightness})`;
+      ctx.beginPath();
+      ctx.moveTo(x + sway, holoY);
+      ctx.lineTo(x - sway, holoY + panelH);
+      ctx.stroke();
+    }
+
+    for (let y = holoY + 14; y < holoY + panelH; y += 18) {
+      ctx.strokeStyle = `rgba(167, 139, 250, ${0.08 * projectionBrightness})`;
+      ctx.beginPath();
+      ctx.moveTo(holoX, y);
+      ctx.lineTo(holoX + panelW, y + Math.sin(timeSec + y * 0.02) * 3);
+      ctx.stroke();
+    }
+
+    const scanGradient = ctx.createLinearGradient(holoX, scanY - 18, holoX, scanY + 18);
+    scanGradient.addColorStop(0, 'rgba(6, 182, 212, 0)');
+    scanGradient.addColorStop(0.5, `rgba(103, 232, 249, ${(0.18 + pulse * 0.18) * projectionBrightness})`);
+    scanGradient.addColorStop(1, 'rgba(6, 182, 212, 0)');
+    ctx.fillStyle = scanGradient;
+    ctx.fillRect(holoX, scanY - 18, panelW, 36);
+
+    const corePulse = 18 + pulse * 9 + (isSpeaking ? 10 : 0);
+    const nodeX = holoX + panelW * 0.67;
+    const nodeY = holoY + panelH * 0.50;
+    const orb = ctx.createRadialGradient(nodeX, nodeY, 4, nodeX, nodeY, corePulse * 3.2);
+    orb.addColorStop(0, `rgba(255, 255, 255, ${0.35 * projectionBrightness})`);
+    orb.addColorStop(0.22, `rgba(103, 232, 249, ${0.30 * projectionBrightness})`);
+    orb.addColorStop(0.72, `rgba(168, 85, 247, ${0.13 * projectionBrightness})`);
+    orb.addColorStop(1, 'rgba(168, 85, 247, 0)');
+    ctx.fillStyle = orb;
+    ctx.beginPath();
+    ctx.arc(nodeX, nodeY, corePulse * 3.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = `rgba(226, 232, 240, ${0.30 * projectionBrightness})`;
+    ctx.lineWidth = 1;
+    for (let a = 0; a < Math.PI * 2; a += Math.PI / 3) {
+      ctx.beginPath();
+      ctx.moveTo(nodeX, nodeY);
+      ctx.lineTo(nodeX + Math.cos(a + timeSec * 0.35) * corePulse * 2.4, nodeY + Math.sin(a + timeSec * 0.35) * corePulse * 1.6);
+      ctx.stroke();
+    }
+
+    ctx.font = 'bold 0.72rem var(--font-mono)';
+    ctx.fillStyle = `rgba(226, 232, 240, ${0.82 * projectionBrightness})`;
+    ctx.fillText(title, holoX + 24, holoY + 34);
+    ctx.font = '0.55rem var(--font-mono)';
+    ctx.fillStyle = `rgba(103, 232, 249, ${0.64 * projectionBrightness})`;
+    ctx.fillText(`LUX ${Math.round(projectionBrightness * 100)}%`, holoX + 24, holoY + 58);
+    ctx.fillText(`PHASE ${(Math.sin(timeSec) * 12 + 88).toFixed(1)}%`, holoX + 24, holoY + 78);
+
+    for (let i = 0; i < 4; i++) {
+      const barW = panelW * (0.18 + i * 0.07) + Math.sin(timeSec * (1 + i * 0.2)) * 16;
+      ctx.fillStyle = `rgba(${i % 2 ? '168, 85, 247' : '6, 182, 212'}, ${0.18 * projectionBrightness})`;
+      ctx.fillRect(holoX + 24, holoY + panelH - 58 + i * 9, barW, 3);
+    }
+
+    ctx.restore();
+
+    ctx.strokeStyle = `rgba(226, 232, 240, ${0.48 * projectionBrightness})`;
+    ctx.lineWidth = 1.6;
+    const b = 22;
+    const corners = [
+      [holoX, holoY, 1, 1], [holoX + panelW, holoY, -1, 1],
+      [holoX, holoY + panelH, 1, -1], [holoX + panelW, holoY + panelH, -1, -1]
+    ];
+    corners.forEach(([x, y, sx, sy]) => {
+      ctx.beginPath();
+      ctx.moveTo(x, y + sy * b);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x + sx * b, y);
+      ctx.stroke();
+    });
+
+    ctx.restore();
+  }
+
   function draw() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
@@ -2411,8 +2555,10 @@ function initParticleCanvas() {
     // Check smart home projector state
     const projectorDev = home && home.dynamicDevices ? home.dynamicDevices.find(d => d.category === 'projector') : null;
     const projectorOn = projectorDev ? projectorDev.on : false;
+    const projectionSource = projectorDev ? (projectorDev.source || 'Hologram') : 'Hologram';
     const projectionMode = projectorDev ? (projectorDev.mode || 'Jarvis HUD') : (isAlexaMode ? 'Alexa Ripple' : 'Jarvis HUD');
     const projectionBrightness = projectorDev ? (projectorDev.brightness || 80) / 100 : 0.8;
+    const isHologramSource = projectionSource === 'Hologram';
 
     // We render the projector visual effects if the projector device is ON, OR if the assistant is actively interacting (listening/speaking/processing)
     const assistantActive = isWaking || isListening || isProcessing || isSpeaking;
@@ -2464,6 +2610,21 @@ function initParticleCanvas() {
       
       ctx.fillStyle = gradient;
       ctx.fill();
+
+      if (isHologramSource && !isLockdown) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.strokeStyle = `rgba(103, 232, 249, ${0.10 * beamIntensity * projectionBrightness})`;
+        ctx.lineWidth = 1;
+        for (let i = 0; i < 7; i++) {
+          const sweep = -0.24 + i * 0.08 + Math.sin(timeSec * 0.8 + i) * 0.015;
+          ctx.beginPath();
+          ctx.moveTo(coreX, coreY);
+          ctx.lineTo(canvas.width, coreY + Math.tan(sweep) * (canvas.width - coreX));
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
       ctx.restore();
     }
 
@@ -2587,6 +2748,10 @@ function initParticleCanvas() {
         ctx.strokeStyle = `rgba(6, 182, 212, ${0.14 * projectionBrightness})`;
         ctx.stroke();
         ctx.restore();
+      }
+
+      if (projectorActive && isHologramSource) {
+        drawHologramPlane(coreX, coreY, timeSec, projectionBrightness, speedMultiplier, isSpeaking, projectionSource);
       }
 
       // Draw drifting digital hex text values around the core
@@ -9880,6 +10045,7 @@ function renderDashboardCustomDevices() {
     // Create card node
     const card = document.createElement('div');
     card.className = 'zone-card custom-device-card';
+    if (dev.category === 'projector') card.classList.add('projector-device-card');
     card.dataset.id = dev.id;
 
     // Check if active
@@ -9977,27 +10143,39 @@ function renderDashboardCustomDevices() {
             <span class="slider-knob" style="--zone-color: var(--purple-neon)"></span>
           </label>
         </div>
-        <div class="projector-controls" style="display: ${dev.on ? 'block' : 'none'}; margin-top: 0.5rem;">
-          <div class="control-row" style="margin-bottom: 0.4rem; justify-content: space-between; display: flex; align-items: center;">
+        <div class="projector-controls" style="display: ${dev.on ? 'flex' : 'none'};">
+          <div class="projector-holo-preview" aria-hidden="true">
+            <span class="projector-holo-emitter"></span>
+            <span class="projector-holo-beam"></span>
+            <span class="projector-holo-plane">
+              <span class="projector-holo-fill" style="height: ${brightnessVal}%;"></span>
+            </span>
+          </div>
+          <div class="projector-status-strip">
+            <span>${sourceVal === 'Hologram' ? '4D HOLOGRAM' : sourceVal.toUpperCase()}</span>
+            <strong class="projector-intensity-value">${brightnessVal}%</strong>
+          </div>
+          <div class="control-row projector-control-row">
             <span class="control-label">Source Input</span>
-            <select class="node-select-custom custom-dash-select" data-prop="source" style="background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); color: #fff; border-radius: 4px; padding: 0.25rem; font-size: 0.65rem; outline: none; font-family: var(--font-mono); width: 100px;">
-              <option value="Hologram" ${sourceVal === 'Hologram' ? 'selected' : ''}>Hologram</option>
+            <select class="node-select-custom custom-dash-select projector-select" data-prop="source">
+              <option value="Hologram" ${sourceVal === 'Hologram' ? 'selected' : ''}>4D Hologram</option>
               <option value="HDMI 1" ${sourceVal === 'HDMI 1' ? 'selected' : ''}>HDMI 1</option>
               <option value="Apple TV" ${sourceVal === 'Apple TV' ? 'selected' : ''}>Apple TV</option>
               <option value="Chromecast" ${sourceVal === 'Chromecast' ? 'selected' : ''}>Chromecast</option>
             </select>
           </div>
-          <div class="control-row" style="margin-bottom: 0.4rem; justify-content: space-between; display: flex; align-items: center;">
+          <div class="control-row projector-control-row">
             <span class="control-label">Projection Mode</span>
-            <select class="node-select-custom custom-dash-select" data-prop="mode" style="background: rgba(0,0,0,0.5); border: 1px solid rgba(255,255,255,0.08); color: #fff; border-radius: 4px; padding: 0.25rem; font-size: 0.65rem; outline: none; font-family: var(--font-mono); width: 100px;">
+            <select class="node-select-custom custom-dash-select projector-select" data-prop="mode">
               <option value="Jarvis HUD" ${modeVal === 'Jarvis HUD' ? 'selected' : ''}>Jarvis HUD</option>
               <option value="Alexa Ripple" ${modeVal === 'Alexa Ripple' ? 'selected' : ''}>Alexa Ripple</option>
               <option value="Cinema Stream" ${modeVal === 'Cinema Stream' ? 'selected' : ''}>Cinema Stream</option>
             </select>
           </div>
-          <div class="control-row" style="display: flex; flex-direction: column; align-items: stretch; gap: 0.2rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div class="control-row projector-intensity-row">
+            <div class="projector-intensity-label">
               <span class="control-label">Projection Intensity</span>
+              <span class="projector-intensity-value">${brightnessVal}%</span>
             </div>
             <input type="range" class="range-slider custom-dash-dimmer" min="10" max="100" value="${brightnessVal}" />
           </div>
@@ -10118,7 +10296,7 @@ function renderDashboardCustomDevices() {
           if (colorRow) colorRow.style.display = checked ? 'flex' : 'none';
         } else if (dev.category === 'projector') {
           const projControls = card.querySelector('.projector-controls');
-          if (projControls) projControls.style.display = checked ? 'block' : 'none';
+          if (projControls) projControls.style.display = checked ? 'flex' : 'none';
         }
 
         // Update lock label
@@ -10138,6 +10316,11 @@ function renderDashboardCustomDevices() {
       dimmer.addEventListener('input', async (e) => {
         const val = parseInt(e.target.value);
         await setDeviceStateWithFeedback(dev.id, { brightness: val });
+        card.querySelectorAll('.projector-intensity-value').forEach(node => {
+          node.textContent = `${val}%`;
+        });
+        const holoFill = card.querySelector('.projector-holo-fill');
+        if (holoFill) holoFill.style.height = `${val}%`;
       });
     }
 
@@ -10163,6 +10346,10 @@ function renderDashboardCustomDevices() {
         const updates = {};
         updates[prop] = val;
         await setDeviceStateWithFeedback(dev.id, updates);
+        if (dev.category === 'projector' && prop === 'source') {
+          const status = card.querySelector('.projector-status-strip span');
+          if (status) status.textContent = val === 'Hologram' ? '4D HOLOGRAM' : val.toUpperCase();
+        }
         diag.logToTerminal(`[PROJECTOR] Changed ${prop} to: ${val}`, 'info');
       });
     });
@@ -10263,11 +10450,21 @@ function syncDashboardCustomDeviceStates() {
 
     if (dev.category === 'projector') {
       const projControls = card.querySelector('.projector-controls');
-      if (projControls) projControls.style.display = dev.on ? 'block' : 'none';
+      if (projControls) projControls.style.display = dev.on ? 'flex' : 'none';
 
       const dimmer = card.querySelector('.custom-dash-dimmer');
       if (dimmer && parseInt(dimmer.value) !== dev.brightness) {
         dimmer.value = dev.brightness;
+      }
+      card.querySelectorAll('.projector-intensity-value').forEach(node => {
+        node.textContent = `${dev.brightness || 80}%`;
+      });
+      const holoFill = card.querySelector('.projector-holo-fill');
+      if (holoFill) holoFill.style.height = `${dev.brightness || 80}%`;
+      const status = card.querySelector('.projector-status-strip span');
+      if (status) {
+        const source = dev.source || 'Hologram';
+        status.textContent = source === 'Hologram' ? '4D HOLOGRAM' : source.toUpperCase();
       }
 
       const selects = card.querySelectorAll('.custom-dash-select');
