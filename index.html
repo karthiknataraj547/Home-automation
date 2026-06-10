@@ -44,7 +44,42 @@
   <div class="hud-corner hud-corner-br"></div>
 
     <div id="appContainer" style="display: none;">
+    <nav class="modern-sidebar" aria-label="Lukas AI navigation">
+      <div class="modern-brand">
+        <span class="modern-brand-orb"></span>
+        <span>Lukas AI</span>
+      </div>
+      <div class="modern-nav-list">
+        <button type="button" class="modern-nav-item active"><i class="fa-solid fa-house"></i><span>Home</span></button>
+        <button type="button" class="modern-nav-item"><i class="fa-regular fa-comment-dots"></i><span>Chat</span></button>
+        <button type="button" class="modern-nav-item"><i class="fa-solid fa-list-check"></i><span>Tasks</span></button>
+        <button type="button" class="modern-nav-item"><i class="fa-regular fa-bell"></i><span>Reminders</span></button>
+        <button type="button" class="modern-nav-item"><i class="fa-regular fa-calendar-days"></i><span>Calendar</span></button>
+        <button type="button" class="modern-nav-item"><i class="fa-solid fa-house-signal"></i><span>Smart Home</span></button>
+        <button type="button" class="modern-nav-item"><i class="fa-regular fa-circle-play"></i><span>Media</span></button>
+        <button type="button" class="modern-nav-item"><i class="fa-solid fa-rotate"></i><span>Routines</span></button>
+        <button type="button" class="modern-nav-item" id="modernNavDevices"><i class="fa-solid fa-network-wired"></i><span>Devices</span></button>
+        <button type="button" class="modern-nav-item" id="modernNavMemory"><i class="fa-regular fa-square-plus"></i><span>Memory</span></button>
+        <button type="button" class="modern-nav-item"><i class="fa-solid fa-briefcase-medical"></i><span>Diagnostics</span></button>
+        <button type="button" class="modern-nav-item" id="modernNavSettings"><i class="fa-solid fa-gear"></i><span>Settings</span></button>
+      </div>
+      <div class="modern-voice-card">
+        <div class="modern-voice-title">Lukas AI</div>
+        <div class="modern-voice-state"><span></span> Active</div>
+        <div class="modern-mini-wave" aria-hidden="true">
+          <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+        </div>
+        <button type="button" class="modern-mic-button" id="sidebarMicShortcut" title="Tap to speak">
+          <i class="fa-solid fa-microphone"></i>
+        </button>
+        <span class="modern-mic-caption">Tap to speak</span>
+      </div>
+    </nav>
     <header>
+      <div class="modern-greeting">
+        <h2>Good morning, <span id="modernGreetingName">Commander</span>! <i class="fa-solid fa-sun"></i></h2>
+        <p>How can I help you today?</p>
+      </div>
       <div class="brand-section">
         <div class="pulse-indicator" id="statusPulse"></div>
         <h1>LUKAS</h1>
@@ -59,6 +94,11 @@
       </div>
       
       <div class="system-status">
+        <div class="modern-top-actions" aria-label="Quick actions">
+          <button type="button" title="Search"><i class="fa-solid fa-magnifying-glass"></i></button>
+          <button type="button" title="Notifications"><i class="fa-regular fa-bell"></i></button>
+          <button type="button" class="modern-profile-chip" id="modernProfileShortcut" title="Profile"><i class="fa-solid fa-user"></i></button>
+        </div>
         <div class="status-item">
           <span class="status-label">Local Time</span>
           <span class="status-value" id="systemClock">00:00:00</span>
@@ -183,6 +223,12 @@
             <div class="chat-bubble system">
               LUKAS System Initialize... Core subroutines online. Ready for command.
             </div>
+          </div>
+          <div class="modern-chat-actions" aria-label="Suggested actions">
+            <button type="button"><i class="fa-solid fa-wand-magic-sparkles"></i> Summary</button>
+            <button type="button"><i class="fa-regular fa-calendar-days"></i> What did I do today?</button>
+            <button type="button"><i class="fa-regular fa-calendar-plus"></i> Open Calendar</button>
+            <button type="button"><i class="fa-solid fa-music"></i> Play relaxing music</button>
           </div>
           <div class="chat-input-area">
             <input type="text" class="chat-input" id="chatInputField" placeholder="Initiate directive..." />
@@ -475,6 +521,76 @@
 
       <!-- Right Panel: CCTV Network & System Diagnostics -->
       <aside class="panel-column">
+        <section class="widget modern-tasks-widget">
+          <div class="widget-title">
+            <span>Active Tasks</span>
+            <a href="#remindersWidget" class="modern-view-all">View All</a>
+          </div>
+          <div class="modern-task-list">
+            <div class="modern-task-row">
+              <span class="modern-task-icon cyan"><i class="fa-regular fa-envelope"></i></span>
+              <strong>Send meeting email</strong>
+              <em>In Progress</em>
+            </div>
+            <div class="modern-task-row">
+              <span class="modern-task-icon amber"><i class="fa-solid fa-seedling"></i></span>
+              <strong>Water plants</strong>
+              <em class="pending">Pending</em>
+            </div>
+            <div class="modern-task-row">
+              <span class="modern-task-icon pink"><i class="fa-solid fa-capsules"></i></span>
+              <strong>Take medicine</strong>
+              <em>5:00 PM</em>
+            </div>
+            <div class="modern-task-row">
+              <span class="modern-task-icon purple"><i class="fa-solid fa-phone"></i></span>
+              <strong>Call John</strong>
+              <em>6:00 PM</em>
+            </div>
+          </div>
+        </section>
+
+        <section class="widget modern-smart-home-widget">
+          <div class="widget-title">
+            <span>Smart Home</span>
+          </div>
+          <div class="modern-device-grid">
+            <div class="modern-device-tile">
+              <i class="fa-regular fa-lightbulb"></i>
+              <strong>Living Room Light</strong>
+              <span>Off</span>
+            </div>
+            <div class="modern-device-tile active">
+              <i class="fa-solid fa-lightbulb"></i>
+              <strong>Kitchen Light</strong>
+              <span>On - Red</span>
+            </div>
+            <div class="modern-device-tile cooling">
+              <i class="fa-solid fa-wind"></i>
+              <strong>Bedroom AC</strong>
+              <span>24 C</span>
+            </div>
+            <div class="modern-device-tile cooling">
+              <i class="fa-solid fa-wind"></i>
+              <strong>Living Room AC</strong>
+              <span>25 C</span>
+            </div>
+          </div>
+          <a href="#automationWidget" class="modern-device-link">View All Devices <i class="fa-solid fa-chevron-right"></i></a>
+        </section>
+
+        <section class="widget modern-quick-actions-widget">
+          <div class="widget-title">
+            <span>Quick Actions</span>
+          </div>
+          <div class="modern-quick-grid">
+            <button type="button"><i class="fa-regular fa-clock"></i><span>New Reminder</span></button>
+            <button type="button"><i class="fa-solid fa-plus"></i><span>Create Routine</span></button>
+            <button type="button"><i class="fa-regular fa-note-sticky"></i><span>Add Note</span></button>
+            <button type="button"><i class="fa-solid fa-camera"></i><span>Open Camera</span></button>
+          </div>
+        </section>
+
         <!-- CCTV Surveillance feeds -->
         <section class="widget cctv-widget">
           <div class="widget-title">
@@ -1304,6 +1420,13 @@
       </div>
     </div>
 
+    <nav class="modern-mobile-nav" aria-label="Mobile navigation">
+      <button type="button" class="active"><i class="fa-solid fa-house"></i><span>Home</span></button>
+      <button type="button"><i class="fa-regular fa-comment-dots"></i><span>Chat</span></button>
+      <button type="button"><i class="fa-solid fa-list-check"></i><span>Tasks</span></button>
+      <button type="button" id="modernMobileDevices"><i class="fa-solid fa-network-wired"></i><span>Devices</span></button>
+      <button type="button" id="modernMobileSettings"><i class="fa-solid fa-gear"></i><span>Settings</span></button>
+    </nav>
     </div> <!-- end appContainer -->
 
     <!-- Holographic Auth Terminal Overlay -->

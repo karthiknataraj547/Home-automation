@@ -618,6 +618,10 @@ const mediaPlayIcon = document.getElementById('mediaPlayIcon');
 // Apply user profile preferences to speech synthesis, UI, and memories
 function applyUserPreferencesToVoiceAndUI(username) {
   if (!username) username = 'Guest';
+  const modernGreetingName = document.getElementById('modernGreetingName');
+  if (modernGreetingName) {
+    modernGreetingName.textContent = username === 'Guest' ? 'Commander' : username;
+  }
   
   // Switch memory namespace
   lukasMemory.switchUser(username);
@@ -807,7 +811,7 @@ function applyUserPreferencesToVoiceAndUI(username) {
 // Initialize dashboard core components (invoked upon verified clearance)
 function initializeDashboard() {
   const appContainer = document.getElementById('appContainer');
-  if (appContainer) appContainer.style.display = 'block';
+  if (appContainer) appContainer.style.display = 'grid';
 
   initClock();
   diag.initGauges();
@@ -2866,6 +2870,41 @@ function bindUIEvents() {
     diag.logToTerminal(`System vocalization: ${isMuted ? 'DISABLED' : 'ENABLED'}`, 'info');
   });
   updateMuteUI(voice.isMuted);
+
+  const sidebarMicShortcut = document.getElementById('sidebarMicShortcut');
+  if (sidebarMicShortcut) {
+    sidebarMicShortcut.addEventListener('click', () => micBtn.click());
+  }
+
+  const modernNavSettings = document.getElementById('modernNavSettings');
+  if (modernNavSettings) {
+    modernNavSettings.addEventListener('click', () => document.getElementById('openNodeManagerBtn')?.click());
+  }
+
+  const modernNavDevices = document.getElementById('modernNavDevices');
+  if (modernNavDevices) {
+    modernNavDevices.addEventListener('click', () => document.getElementById('openNodeManagerBtn')?.click());
+  }
+
+  const modernNavMemory = document.getElementById('modernNavMemory');
+  if (modernNavMemory) {
+    modernNavMemory.addEventListener('click', () => document.getElementById('openSidebarMemoryBtn')?.click());
+  }
+
+  const modernProfileShortcut = document.getElementById('modernProfileShortcut');
+  if (modernProfileShortcut) {
+    modernProfileShortcut.addEventListener('click', () => document.getElementById('openProfileBtn')?.click());
+  }
+
+  const modernMobileDevices = document.getElementById('modernMobileDevices');
+  if (modernMobileDevices) {
+    modernMobileDevices.addEventListener('click', () => document.getElementById('openNodeManagerBtn')?.click());
+  }
+
+  const modernMobileSettings = document.getElementById('modernMobileSettings');
+  if (modernMobileSettings) {
+    modernMobileSettings.addEventListener('click', () => document.getElementById('openNodeManagerBtn')?.click());
+  }
 
   // Mic Activation (Single-turn voice command listening)
   micBtn.addEventListener('click', () => {
